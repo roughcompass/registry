@@ -1,0 +1,32 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/acme/catalog-test-fixtures/releases?per_page=20&page=1",
+    "headers": {
+      "Authorization": "Bearer test-token",
+      "Accept": "application/vnd.github+json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": [
+      {
+        "id": 1001,
+        "tag_name": "v2.0.0",
+        "name": "v2.0.0 — Breaking changes to /pets",
+        "published_at": "2025-03-15T10:00:00Z",
+        "body": "## Breaking Changes\n- Removed `GET /pets/{petId}/owner` endpoint\n- `petId` path parameter is now UUID instead of integer\n\n## New Features\n- Added `POST /pets` for creating pets\n- Added pagination support via `X-Cursor` header"
+      },
+      {
+        "id": 1000,
+        "tag_name": "v1.0.0",
+        "name": "v1.0.0 — Initial release",
+        "published_at": "2024-06-01T09:00:00Z",
+        "body": "## Initial Release\n- `GET /pets` — list all pets\n- `GET /pets/{petId}` — get single pet\n- `GET /health` — health check"
+      }
+    ]
+  }
+}

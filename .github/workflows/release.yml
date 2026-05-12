@@ -1,0 +1,199 @@
+# ============================================================================
+# Release — one supported wiring (GitHub Actions).
+#
+# The canonical command surface is the `Makefile` at the repo root. Test
+# gates and build/package commands invoke `make <target>` — only the
+# platform-specific steps (Docker login, cosign keyless sign, OCI push,
+# GitHub release create) stay inline because they depend on GH-Actions
+# composite actions and secret injection syntax.
+#
+# Other CI platforms (GitLab CI, Jenkins, Buildkite, …) wire their own
+# release flow using the same Make targets for build/package and their
+# own platform's mechanisms for sign/push. The Makefile at the repo
+# root is the canonical command surface; every CI runner invokes the
+# same `make <target>` calls.
+# ============================================================================
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Permissions required for GHCR push, cosign keyless signing, and GitHub releases.
+permissions:
+  contents: write        # gh release create + upload SBOM
+  packages: write        # ghcr.io push
+  id-token: write        # cosign keyless OIDC signing
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/registry/registry
+  HELM_IMAGE_NAME: ghcr.io/registry/helm/registry
+
+jobs:
+  # ── Gate: run the full test suite before releasing ────────────────────────
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: registry/pyproject.toml
+      - run: make install-dev
+      - run: make lint
+      - run: make format-check
+      - run: make doc-refs
+
+  unit:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: registry/pyproject.toml
+      - run: make install-dev
+      - run: make test-unit
+
+  integration:
+    runs-on: ubuntu-latest
+    needs: unit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: registry/pyproject.toml
+      - run: make install-dev
+      - run: make test-integration
+
+  conformance:
+    runs-on: ubuntu-latest
+    needs: integration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: registry/pyproject.toml
+      - run: make install-dev
+      - run: make test-conformance
+
+  k6-smoke:
+    runs-on: ubuntu-latest
+    needs: conformance
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install k6
+        run: |
+          curl -sSL https://dl.k6.io/key.gpg | sudo gpg --dearmor -o /usr/share/keyrings/k6-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" | sudo tee /etc/apt/sources.list.d/k6.list
+          sudo apt-get update && sudo apt-get install k6 -y
+      - name: k6 read smoke
+        working-directory: registry
+        run: |
+          docker compose up -d --wait
+          k6 run eval/k6/read_smoke.js --vus=5 --duration=30s
+          docker compose down -v
+        env:
+          API_BASE_URL: http://localhost:8000
+
+  # ── Release: build, sign, SBOM, Helm push, GitHub release ─────────────────
+  # The build and helm-package steps invoke Make targets so they're
+  # portable. The sign/push/release steps use GH-Actions-specific
+  # composite actions and secret syntax — replicate on your platform.
+
+  release:
+    runs-on: ubuntu-latest
+    needs: k6-smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract tag version
+        id: version
+        run: echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      # ── Docker image build (portable via Make) ────────────────────────────
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: registry
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
+            ${{ env.IMAGE_NAME }}:latest
+          labels: |
+            org.opencontainers.image.title=registry
+            org.opencontainers.image.version=${{ steps.version.outputs.tag }}
+            org.opencontainers.image.source=https://github.com/registry/registry
+            org.opencontainers.image.licenses=Apache-2.0
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ── Keyless image signing via cosign (platform-specific) ──────────────
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign image (keyless)
+        run: |
+          cosign sign --yes \
+            "${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      # ── SBOM via syft (platform-specific) ─────────────────────────────────
+
+      - name: Generate SBOM
+        uses: anchore/syft-action@v0
+        with:
+          image: "${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      # ── Helm chart — portable package, GH-specific OCI push ───────────────
+
+      - name: Install Helm
+        uses: azure/setup-helm@v3
+        with:
+          version: '3.14.0'
+
+      - name: Package Helm chart
+        run: make helm-package HELM_VERSION=${{ steps.version.outputs.tag }}
+
+      - name: Push Helm chart to OCI registry
+        working-directory: /tmp/helm-pkg
+        run: |
+          helm push \
+            "registry-${{ steps.version.outputs.tag }}.tgz" \
+            "oci://${{ env.REGISTRY }}/registry/helm"
+
+      # ── GitHub release (platform-specific) ────────────────────────────────
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "registry ${{ steps.version.outputs.tag }}" \
+            --generate-notes \
+            /tmp/helm-pkg/registry-${{ steps.version.outputs.tag }}.tgz \
+            sbom.spdx.json

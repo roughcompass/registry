@@ -1,0 +1,91 @@
+# Phase 0 dev stack. Production hardening lands in Phase 5 (Helm chart, signed images).
+# Host ports avoid conflicts with sibling memory-system stack (which uses 5432).
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: registry
+    ports:
+      - "5544:5432"
+    volumes:
+      - cap_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d registry"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      DB_HOST: postgres
+      DB_USER: postgres
+      DB_PASSWORD: password
+      DB_NAME: registry
+      POOL_MODE: transaction
+      AUTH_TYPE: scram-sha-256
+      LISTEN_PORT: 6432
+    ports:
+      - "6432:6432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@pgbouncer:6432/registry
+      PGBOUNCER_URL: postgresql+asyncpg://postgres:password@pgbouncer:6432/registry
+      SCHEDULER_JOBSTORE_URL: postgresql+asyncpg://postgres:password@postgres:5432/registry
+      OTLP_ENDPOINT: http://jaeger:4318/v1/traces
+      SERVICE_NAME: registry
+      # Job kwargs (session_factory, embedder) aren't picklable, so SQLAlchemyJobStore
+      # cannot persist them. Use MemoryJobStore until persisted jobs are needed.
+      SCHEDULER_USE_MEMORY_JOBSTORE: "true"
+    ports:
+      - "8000:8000"
+    depends_on:
+      pgbouncer:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"  # UI
+      - "4318:4318"    # OTLP HTTP
+
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    ports:
+      - "3000:3000"
+    volumes:
+      # Datasource provisioning
+      - ./helm/grafana-dashboards/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
+      # Dashboard provisioning config
+      - ./helm/grafana-dashboards/dashboards.yml:/etc/grafana/provisioning/dashboards/dashboards.yml:ro
+      # Dashboard JSON files
+      - ./helm/grafana-dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  cap_postgres_data:

@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/package.json",
+    "headers": {
+      "Authorization": "Bearer test-token"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\n  \"name\": \"@acme/catalog-test-fixtures\",\n  \"version\": \"2.0.0\",\n  \"description\": \"Controlled fixture repo for capability-fabric connector tests\",\n  \"main\": \"index.js\",\n  \"scripts\": {\n    \"build\": \"tsc\",\n    \"test\": \"jest\"\n  },\n  \"dependencies\": {\n    \"express\": \"^4.18.2\",\n    \"zod\": \"^3.22.4\"\n  },\n  \"devDependencies\": {\n    \"typescript\": \"^5.3.3\",\n    \"jest\": \"^29.7.0\",\n    \"@types/node\": \"^20.11.0\"\n  },\n  \"engines\": {\n    \"node\": \">=18\"\n  },\n  \"license\": \"MIT\"\n}\n"
+  }
+}

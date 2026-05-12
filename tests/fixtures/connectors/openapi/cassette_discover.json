@@ -1,0 +1,39 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/acme/catalog-test-fixtures/contents/?ref=catalog-test-fixtures-v1",
+    "headers": {
+      "Authorization": "Bearer test-token",
+      "Accept": "application/vnd.github+json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": [
+      {
+        "name": "petstore.openapi.yaml",
+        "path": "petstore.openapi.yaml",
+        "type": "file",
+        "download_url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/petstore.openapi.yaml",
+        "sha": "aabbcc1122"
+      },
+      {
+        "name": "events.asyncapi.yaml",
+        "path": "events.asyncapi.yaml",
+        "type": "file",
+        "download_url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/events.asyncapi.yaml",
+        "sha": "ddeeff3344"
+      },
+      {
+        "name": "README.md",
+        "path": "README.md",
+        "type": "file",
+        "download_url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/README.md",
+        "sha": "001122"
+      }
+    ]
+  }
+}

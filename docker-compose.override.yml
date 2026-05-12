@@ -1,0 +1,18 @@
+# Dev overrides: hot-reload, debugger port, and skip pgbouncer so the API hits Postgres directly.
+# Auto-loaded by `docker compose up`; remove or rename to test a closer-to-prod stack.
+
+services:
+  api:
+    command: ["uvicorn", "--host", "0.0.0.0", "--port", "8000", "--reload", "--factory", "registry.main:create_app"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/registry
+      PGBOUNCER_URL: postgresql+asyncpg://postgres:password@postgres:5432/registry
+    volumes:
+      - ./registry:/app/registry
+      - ./sync:/app/sync
+      - ./scripts:/app/scripts
+    ports:
+      - "5678:5678"  # debugpy
+    depends_on:
+      postgres:
+        condition: service_healthy

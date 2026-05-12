@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "registry.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry.labels" . | nindent 4 }}
+data:
+  LOG_LEVEL: {{ .Values.env.LOG_LEVEL | quote }}
+  EMBED_MODEL: {{ .Values.env.EMBED_MODEL | quote }}
+  SYNC_INTERVAL_SECONDS: {{ .Values.env.SYNC_INTERVAL_SECONDS | quote }}
+  PGBOUNCER_HOST: "127.0.0.1"
+  PGBOUNCER_PORT: "5432"

@@ -1,0 +1,1 @@
+"""Registry async worker package."""

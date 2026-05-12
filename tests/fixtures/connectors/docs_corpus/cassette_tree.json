@@ -1,0 +1,40 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/trees/catalog-test-fixtures-v1?recursive=1",
+    "headers": {
+      "Authorization": "Bearer test-token",
+      "Accept": "application/vnd.github+json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "sha": "catalog-test-fixtures-v1",
+      "truncated": false,
+      "tree": [
+        {
+          "path": "AGENTS.md",
+          "type": "blob",
+          "sha": "agentsmdsha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/agentsmdsha"
+        },
+        {
+          "path": "docs/quickstart.md",
+          "type": "blob",
+          "sha": "quickstartsha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/quickstartsha"
+        },
+        {
+          "path": "docs/reference/api.md",
+          "type": "blob",
+          "sha": "apirefdocsha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/apirefdocsha"
+        }
+      ]
+    }
+  }
+}

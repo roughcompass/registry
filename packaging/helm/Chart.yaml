@@ -1,0 +1,24 @@
+apiVersion: v2
+name: registry
+description: Registry — semantic search, graph traversal, and temporal retrieval for AI capabilities.
+type: application
+version: 0.0.1
+appVersion: "0.0.1"
+keywords:
+  - registry
+  - ai
+  - semantic-search
+home: https://github.com/registry/registry
+sources:
+  - https://github.com/registry/registry
+maintainers:
+  - name: registry
+    email: noreply@registry.example.com
+annotations:
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/images: |
+    - name: registry
+      image: ghcr.io/registry/registry:0.0.1
+    - name: pgbouncer
+      image: bitnami/pgbouncer:1.22.1

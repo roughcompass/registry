@@ -1,0 +1,40 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/trees/catalog-test-fixtures-v1?recursive=1",
+    "headers": {
+      "Authorization": "Bearer test-token",
+      "Accept": "application/vnd.github+json"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": {
+      "sha": "catalog-test-fixtures-v1",
+      "truncated": false,
+      "tree": [
+        {
+          "path": "docs/adr/0001-use-postgres.md",
+          "type": "blob",
+          "sha": "adr001sha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/adr001sha"
+        },
+        {
+          "path": "docs/rfc/0001-catalog-sync-protocol.md",
+          "type": "blob",
+          "sha": "rfc001sha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/rfc001sha"
+        },
+        {
+          "path": "README.md",
+          "type": "blob",
+          "sha": "readmesha",
+          "url": "https://api.github.com/repos/acme/catalog-test-fixtures/git/blobs/readmesha"
+        }
+      ]
+    }
+  }
+}

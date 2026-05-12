@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/docs/adr/0001-use-postgres.md",
+    "headers": {
+      "Authorization": "Bearer test-token"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/plain; charset=utf-8"
+    },
+    "body": "# ADR-0001: Use PostgreSQL as the primary store\n\n**Status:** Accepted  \n**Date:** 2024-05-10  \n**Deciders:** platform-team\n\n## Context\n\nWe need a durable, queryable store for capability facts. Options evaluated: PostgreSQL, DynamoDB, MongoDB.\n\n## Decision\n\nUse PostgreSQL with pgvector for vector similarity search. Managed via Alembic migrations.\n\n## Consequences\n\n- Positive: ACID guarantees, full SQL expressiveness, pgvector for embeddings.\n- Negative: Requires running a Postgres instance; not serverless by default.\n"
+  }
+}

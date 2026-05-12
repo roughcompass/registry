@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "registry.fullname" . }}-sync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "registry.labels" . | nindent 4 }}
+    app.kubernetes.io/component: sync-worker
+spec:
+  replicas: {{ .Values.syncWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "registry.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: sync-worker
+  template:
+    metadata:
+      labels:
+        {{- include "registry.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: sync-worker
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "registry.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: sync-worker
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          # Run only the sync scheduler — no HTTP server.
+          command: ["python", "-m", "catalog.sync_worker"]
+          envFrom:
+            - configMapRef:
+                name: {{ include "registry.fullname" . }}
+            - secretRef:
+                name: {{ include "registry.fullname" . }}
+                optional: true
+          resources:
+            {{- toYaml .Values.syncWorker.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+
+      volumes:
+        - name: tmp
+          emptyDir: {}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

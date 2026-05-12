@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/petstore.openapi.yaml",
+    "headers": {
+      "Authorization": "Bearer test-token"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/plain; charset=utf-8"
+    },
+    "body": "openapi: \"3.0.3\"\ninfo:\n  title: Petstore API\n  version: \"1.0.0\"\n  description: A minimal petstore used for catalog tests.\npaths:\n  /pets:\n    get:\n      summary: List all pets\n      operationId: listPets\n      responses:\n        \"200\":\n          description: A list of pets\n  /pets/{petId}:\n    get:\n      summary: Info for a specific pet\n      operationId: showPetById\n      parameters:\n        - name: petId\n          in: path\n          required: true\n          schema:\n            type: string\n      responses:\n        \"200\":\n          description: Expected response to a valid request\n        \"404\":\n          description: Pet not found\n  /health:\n    get:\n      summary: Health check\n      operationId: healthCheck\n      responses:\n        \"200\":\n          description: OK\n"
+  }
+}

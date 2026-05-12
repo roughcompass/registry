@@ -1,0 +1,175 @@
+# Default values for registry.
+# Override in a values file or with --set.
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/registry/registry
+  pullPolicy: IfNotPresent
+  # Overridden by the release pipeline; default matches Chart appVersion.
+  tag: "0.0.1"
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8000"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
+  fsGroup: 999
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: catalog.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+# Application environment configuration.
+#
+# The CANONICAL inventory of env vars lives in `.env.example` at the
+# repo root. This block mirrors it for one supported deployment target
+# (Kubernetes via Helm). For AWS ECS / Lambda / EC2 / Cloud Run / etc.,
+# use `.env.example` directly when populating your task definition,
+# function environment, or systemd EnvironmentFile.
+#
+# Non-secret keys go here; secrets go in the `secrets:` block below
+# and are rendered into a separate Secret via templates/secret.yaml.
+env:
+  # --- Database (PGBOUNCER_URL + SCHEDULER_JOBSTORE_URL default to DATABASE_URL).
+  # DATABASE_URL is REQUIRED — provide via the `secrets:` block below.
+  SCHEDULER_USE_MEMORY_JOBSTORE: "false"
+
+  # --- Embedding.
+  EMBEDDING_MODEL: "all-MiniLM-L6-v2"
+  EMBEDDING_CHUNK_TOKENS: "400"
+  EMBEDDING_CACHE_MAXSIZE: "10000"
+
+  # --- Outbox + drain.
+  OUTBOX_POLL_INTERVAL_S: "5"
+  OUTBOX_BATCH_SIZE: "32"
+  OUTBOX_MAX_ATTEMPTS: "5"
+  BACKFILL_BATCH_SIZE: "64"
+
+  # --- Webhook delivery.
+  WEBHOOK_DRAIN_INTERVAL_S: "5"
+  WEBHOOK_REQUEST_TIMEOUT_S: "10.0"
+  WEBHOOK_BATCH_SIZE: "50"
+
+  # --- HTTP method routing.
+  # Default 'rest' = standard PATCH/DELETE only. Set 'both' if you are
+  # behind an enterprise proxy that strips non-GET/POST verbs.
+  REGISTRY_HTTP_METHODS_MODE: "rest"
+  REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR: "colon"
+
+  # --- Rate limiting.
+  DEFAULT_READS_PER_SECOND: "100"
+  DEFAULT_WRITES_PER_SECOND: "10"
+
+  # --- OpenTelemetry.
+  # Leave OTLP_ENDPOINT unset to disable trace export.
+  SERVICE_NAME: "registry"
+
+  # --- Sync connectors.
+  CONNECTOR_RUN_TIMEOUT_S: "300"
+
+  # --- Performance / SLO.
+  QUERY_LATENCY_WARN_MS: "500.0"
+  EMBEDDINGS_PARTITION_COUNT: "8"
+
+  # Operational LOG_LEVEL — read by the standard Python logging config.
+  LOG_LEVEL: "info"
+
+# Required secret values — provide these at install time.
+# Example: --set secrets.databaseUrl="postgresql://user:pass@host/db"
+#
+# All keys map 1:1 with env-var names; the Secret template uses kebab/snake
+# conversion identical to `.env.example`.
+secrets:
+  # databaseUrl: ""              # required — DATABASE_URL
+  # pgbouncerUrl: ""             # optional — PGBOUNCER_URL (defaults to databaseUrl)
+  # schedulerJobstoreUrl: ""     # optional — SCHEDULER_JOBSTORE_URL
+  # oidcDiscoveryUrl: ""         # optional — OIDC_DISCOVERY_URL
+  # githubWebhookSecret: ""      # optional — GITHUB_WEBHOOK_SECRET
+  # gitlabWebhookSecret: ""      # optional — GITLAB_WEBHOOK_SECRET
+  # otlpEndpoint: ""             # optional — OTLP_ENDPOINT
+
+pgbouncer:
+  enabled: true
+  image:
+    repository: bitnami/pgbouncer
+    tag: "1.22.1"
+    pullPolicy: IfNotPresent
+  poolMode: transaction
+  maxClientConn: 100
+  defaultPoolSize: 20
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+syncWorker:
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Grafana dashboard provisioning.
+# Set to true when deploying alongside kube-prometheus-stack or a Grafana operator.
+grafana:
+  dashboards:
+    enabled: false
+    namespace: ""  # defaults to Release.Namespace

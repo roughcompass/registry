@@ -1,0 +1,40 @@
+Registry has been deployed.
+
+=== Post-install steps ===
+
+1. PostgreSQL operator (required — not bundled):
+   This chart does NOT deploy Postgres. Install the CloudNativePG operator first:
+
+     helm repo add cnpg https://cloudnative-pg.github.io/charts
+     helm upgrade --install cnpg cnpg/cloudnative-pg \
+       --namespace cnpg-system --create-namespace
+
+   Then create a Cluster resource and set DATABASE_URL in the secret.
+
+2. Secrets (required if not pre-created):
+   The chart renders a Secret only if you pass secret values at install time:
+
+     helm upgrade --install registry \
+       oci://ghcr.io/registry/helm/registry \
+       --set secrets.databaseUrl="postgresql://user:pass@pgbouncer/catalog" \
+       --set secrets.apiToken="<random-256-bit-token>" \
+       --set secrets.oidcDiscoveryUrl="https://accounts.example.com/.well-known/openid-configuration"
+
+   For production, prefer External Secrets Operator or Vault Agent so secrets
+   never transit Helm release history.
+
+3. API endpoint:
+   {{- if .Values.ingress.enabled }}
+   Ingress is enabled. The API is reachable at:
+     https://{{ (index .Values.ingress.hosts 0).host }}/v1
+   {{- else }}
+   Ingress is disabled. Port-forward to test:
+     kubectl port-forward svc/{{ include "registry.fullname" . }} 8080:80
+   Then: curl http://localhost:8080/healthz
+   {{- end }}
+
+4. Grafana dashboards:
+   Copy helm/grafana-dashboards/ to your Grafana provisioning ConfigMap, or
+   set grafana.dashboards.enabled=true if using the Grafana operator.
+
+Docs: https://github.com/registry/registry/blob/main/helm/README.md

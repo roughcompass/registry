@@ -1,0 +1,16 @@
+{
+  "request": {
+    "method": "GET",
+    "url": "https://raw.githubusercontent.com/acme/catalog-test-fixtures/catalog-test-fixtures-v1/AGENTS.md",
+    "headers": {
+      "Authorization": "Bearer test-token"
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/plain; charset=utf-8"
+    },
+    "body": "# AGENTS.md\n\nThis repository is a controlled fixture set for capability-fabric connector tests.\n\n## Repo purpose\n\nPinned to tag `catalog-test-fixtures-v1`. Used by the `docs_corpus` connector to verify discovery and parsing of freeform documentation files.\n\n## Key capabilities\n\n- Exposes the Petstore API via OpenAPI spec.\n- Ships two ADRs and one RFC under `docs/`.\n- Includes a `package.json` for testing the package-json connector.\n- Release notes are tracked as GitHub releases.\n\n## Ownership\n\nOwned by `platform-team`. Reach out in `#platform-catalog` for changes.\n"
+  }
+}
