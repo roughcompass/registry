@@ -67,7 +67,7 @@ export DATABASE_URL=postgresql+asyncpg://postgres:password@localhost:5544/regist
 alembic upgrade head
 
 # 4. run the app
-uvicorn catalog.main:create_app --factory --reload --port 8000
+uvicorn registry.main:create_app --factory --reload --port 8000
 
 # 5. enable pre-commit hooks (one-time)
 pre-commit install
@@ -134,12 +134,12 @@ For the full auth model (OIDC, API tokens, local dev), see
 
 | Path | What lives there |
 |---|---|
-| `catalog/api/routers/` | HTTP surface — one router per concern (capabilities, adoptions, subscriptions, …) |
-| `catalog/api/middleware/` | Tenant resolution, rate-limit, HTTP-methods router factory |
-| `catalog/service/` | Business logic — every cross-tenant query goes through `service/visibility.py` |
-| `catalog/workers/` | Background jobs (webhook delivery, closure-cache refresh) |
-| `catalog/storage/` | SQLAlchemy models + Alembic migrations under `migrations/versions/` |
-| `catalog/security/` | PII scanner (patterns + policy resolver) |
+| `registry/api/routers/` | HTTP surface — one router per concern (capabilities, adoptions, subscriptions, …) |
+| `registry/api/middleware/` | Tenant resolution, rate-limit, HTTP-methods router factory |
+| `registry/service/` | Business logic — every cross-tenant query goes through `service/visibility.py` |
+| `registry/workers/` | Background jobs (webhook delivery, closure-cache refresh) |
+| `registry/storage/` | SQLAlchemy models + Alembic migrations under `migrations/versions/` |
+| `registry/security/` | PII scanner (patterns + policy resolver) |
 | `sync/` | External-source ingest (GitHub, GitLab, OpenAPI, …); per-connector credentials are env-var refs |
 | `scripts/` | Operational CLIs: `mint_token`, `backfill_embeddings`, `reindex_embeddings`, `partition_migrate`, `export_openapi`, `check_no_doc_refs` |
 | `tests/{unit,integration,conformance,perf}/` | Test pyramid; unit tests are fast and DB-free, integration uses testcontainers |
@@ -162,7 +162,7 @@ Kubernetes ConfigMap+Secret, AWS ECS task-definition, EC2 systemd
 EnvironmentFile, etc. all wire the same values, just through different
 mechanisms.
 
-`Settings` (in `catalog/config.py`) is the single env-var reader; the
+`Settings` (in `registry/config.py`) is the single env-var reader; the
 only documented bypasses are webhook secrets (per-instance override
 pattern) and per-connector credentials (resolved by dynamic ref string
 at runtime).
