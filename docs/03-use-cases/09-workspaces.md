@@ -1,23 +1,89 @@
 <!--
-  title: Use case — Workspaces: private context alongside the catalog
+  title: Use case — Workspaces: private scratchpad and agent memory
   audience: integrator (consumer), integrator (producer), end-user agent
   archetype: explanation (use-case scenario)
-  summary: How individuals and teams use workspaces to keep private notes, decisions, and queries anchored to catalog entities — without adding noise to the shared catalog.
+  summary: How humans use workspaces as a private scratchpad alongside the catalog, and how agents use the same primitive as persistent cross-session memory.
 -->
 
-# Use case: Workspaces — private context alongside the catalog
+# Use case: Workspaces — private scratchpad and agent memory
 
-Not every piece of thinking that surrounds a capability belongs in the shared catalog. An architect evaluating three candidates wants to capture her reasoning without publishing half-formed opinions. A platform team's on-call engineer wants to pin a saved query used during incidents. An AI agent wants to record a decision that shaped a build without making it visible to unrelated consumer tenants. The registry's workspace surface gives each actor a private or team-scoped scratchpad that lives alongside the catalog — anchored to the entities it references, queryable, and subject to the same PII policies as every other surface.
+The registry's workspace surface serves two kinds of actors doing the same essential thing: keeping context that belongs to them, not to the shared catalog.
 
-A workspace is a container for entries. Each entry is a typed, Markdown-bodied note — a `note`, `decision`, `open_question`, `saved_query`, `saved_view`, or `private_annotation` — with optional references to capability UUIDs. The entries are visible only to the actor or team that owns them, plus anyone explicitly granted a share. Nothing in a workspace flows into the catalog or becomes visible to other tenants through normal registry queries.
+For a human, that means a private scratchpad — evaluation notes, saved incident queries, half-formed decisions — anchored to the catalog entities they concern, invisible to other tenants and to producer teams.
+
+For an agent, it means persistent cross-session memory — decisions written at the end of one session and retrieved at the start of the next, so reasoning does not have to be reconstructed from scratch each time.
+
+It is the same primitive. A workspace is a container of typed, Markdown-bodied entries — `note`, `decision`, `open_question`, `saved_query`, `saved_view`, or `private_annotation` — with optional references to capability UUIDs. Entries are visible only to the owning actor or tenant, plus anyone explicitly granted a share. Nothing in a workspace flows into the catalog or becomes visible to other tenants through normal registry queries.
 
 **Before calling any workspace endpoint:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned and a valid bearer token must be available. Any authenticated `consumer`, `producer`, or `admin` role can create and manage workspaces. See [auth.md](../01-overview/04-auth.md) for how to obtain a token.
 
 ---
 
-## Scenario 1 — An architect evaluating capability candidates
+## Scenario 1 — An agent recording persistent memory across sessions
 
-An architect is deciding whether to adopt one of three shared capabilities for a new product feature. She wants to record her findings without them becoming part of the shared annotation thread on each capability, which would be visible to producer teams and other consumers.
+An agent that evaluates capabilities during a task needs a place to record what it decided and why — so the next session can retrieve that reasoning rather than re-evaluating the catalog from scratch. Workspaces serve this directly: entries are persisted in the database and are visible to any session that presents the same actor identity.
+
+The agent creates a personal workspace once, during its first session:
+
+```bash
+curl -X POST https://registry.example.com/v1/workspaces \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "agent-memory-capability-decisions",
+    "owner_kind": "actor",
+    "description": "Persistent decisions and observations recorded across agent sessions"
+  }'
+```
+
+After reaching a decision about a capability, the agent writes a `decision` entry anchored to the relevant entity UUID:
+
+```bash
+curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/entries \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "kind": "decision",
+    "body_md": "Adopted payments-v3 for checkout flow. Evaluated against payments-v2 and stripe-bridge. Decisive factor: payments-v3 exposes idempotency keys on all mutation endpoints.",
+    "reference_ids": ["<capability-uuid>"],
+    "references_jsonb": {
+      "rejected": ["<payments-v2-uuid>", "<stripe-bridge-uuid>"],
+      "session_id": "<agent-session-id>"
+    }
+  }'
+```
+
+In the next session, before evaluating the same area, the agent queries its prior decisions:
+
+```bash
+curl "https://registry.example.com/v1/workspaces/search?kind=decision&reference_ids=<capability-uuid>" \
+  -H "Authorization: Bearer <token>"
+```
+
+The search returns every `decision` entry that references the target capability UUID, across all workspaces the agent owns or holds a share on. The agent reconstructs its prior reasoning without re-evaluating the catalog.
+
+**Two agents sharing a memory store.** When two agents with separate actor identities need a common memory — a copilot pair, a planner and an executor — one creates a tenant-owned workspace and grants the other `contributor` access:
+
+```bash
+curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/shares \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "grantee_actor_id": "<second-agent-actor-uuid>",
+    "grantee_tenant_id": "<tenant-uuid>",
+    "role": "contributor"
+  }'
+```
+
+Both agents can now write and read from the same workspace. Reads from either actor are subject to the same visibility gate — nothing leaks to unrelated actors or tenants.
+
+**Expiry caveat.** Entries without an `expires_at` persist indefinitely. An agent using workspaces for long-lived memory should omit `expires_at` when writing. If `expires_at` is set, the background expiry worker soft-invalidates the entry after that timestamp — it disappears from list and search results and is no longer useful as a memory store. Use `expires_at` only for intentionally short-lived notes, not for decisions the agent will need to recall in future sessions.
+
+---
+
+## Scenario 2 — An architect evaluating capability candidates
+
+An architect is deciding whether to adopt one of three shared capabilities for a new product feature. She wants to record her findings without them becoming part of the shared annotation thread on each capability, which is visible to producer teams and other consumers.
 
 She creates a personal workspace scoped to her actor:
 
@@ -45,13 +111,13 @@ curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/entries \
   }'
 ```
 
-Later she adds an `open_question` entry for a point she needs to resolve before the decision is final. When the evaluation is complete and the decision is recorded, she archives the workspace with a `PATCH` — it disappears from her default listing but remains readable with `include_archived=true` if she needs to trace her reasoning later.
+Later she adds an `open_question` entry for a point she needs to resolve before the decision is final. When the evaluation is complete, she archives the workspace with a `PATCH` — it disappears from her default listing but remains readable with `include_archived=true` if she needs to trace her reasoning later.
 
 The capability's annotation thread, visible to the producer and other consumers, is untouched throughout. Her working notes stayed private.
 
 ---
 
-## Scenario 2 — A platform team sharing an incident scratchpad
+## Scenario 3 — A platform team sharing an incident scratchpad
 
 During a live incident, a platform team's on-call group needs a shared space to record observations, pin the queries they are using, and log decisions — all scoped to their tenant rather than any individual engineer.
 
@@ -68,7 +134,7 @@ curl -X POST https://registry.example.com/v1/workspaces \
   }'
 ```
 
-Any member of the owning tenant can read the workspace automatically — no share grant required for teammates. Entries accumulate as the incident progresses. One engineer saves the registry query they are using to check blast radius:
+Any member of the owning tenant can read the workspace automatically — no share grant required for teammates. One engineer saves the registry query they are using to check blast radius:
 
 ```bash
 curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/entries \
@@ -82,77 +148,6 @@ curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/entries \
 ```
 
 When the incident is resolved, the team lead adds a `decision` entry summarising the root cause and chosen fix. The workspace persists as a durable incident record that can be searched later.
-
----
-
-## Scenario 3 — An agent recording persistent memory across sessions
-
-An agent or copilot that evaluates capabilities during a task needs a place to record what it decided and why — so the next session can retrieve that reasoning rather than starting from scratch. The registry's workspace surface serves this directly: entries are persisted in the database and are visible to any session that presents the same actor identity.
-
-The agent creates a personal workspace once, during its first session:
-
-```bash
-curl -X POST https://registry.example.com/v1/workspaces \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "agent-memory-capability-decisions",
-    "owner_kind": "actor",
-    "description": "Persistent decisions and observations recorded across agent sessions"
-  }'
-```
-
-In later sessions the agent retrieves its workspace by listing:
-
-```bash
-curl "https://registry.example.com/v1/workspaces" \
-  -H "Authorization: Bearer <token>"
-```
-
-The response includes workspaces owned by the calling actor. The agent identifies its workspace by `name` or stores the `workspace_id` in its configuration.
-
-After reaching a decision about a capability, the agent writes a `decision` entry anchored to the relevant entity UUID:
-
-```bash
-curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/entries \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "kind": "decision",
-    "body_md": "Adopted payments-v3 for checkout flow. Evaluated against payments-v2 and stripe-bridge. Decisive factor: payments-v3 exposes idempotency keys on all mutation endpoints.",
-    "reference_ids": ["<capability-uuid>"],
-    "references_jsonb": {
-      "rejected": ["<payments-v2-uuid>", "<stripe-bridge-uuid>"],
-      "session_id": "<agent-session-id>"
-    }
-  }'
-```
-
-In the next session, before evaluating the same area, the agent queries its prior decisions:
-
-```bash
-curl "https://registry.example.com/v1/workspaces/search?kind=decision&reference_ids=<capability-uuid>" \
-  -H "Authorization: Bearer <token>"
-```
-
-The search returns every `decision` entry that references the target capability UUID, across all workspaces the agent owns or holds a share on. The agent can reconstruct its prior reasoning without re-evaluating the catalog from scratch.
-
-**Two agents sharing a memory store.** When two agents with separate actor identities need a common memory — a copilot pair, a planner and an executor — one creates a tenant-owned workspace and grants the other `contributor` access:
-
-```bash
-curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/shares \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "grantee_actor_id": "<second-agent-actor-uuid>",
-    "grantee_tenant_id": "<tenant-uuid>",
-    "role": "contributor"
-  }'
-```
-
-Both agents can now write and read from the same workspace. Reads from either actor are subject to the same visibility gate — nothing leaks to unrelated actors or tenants.
-
-**Expiry caveat.** Entries without an `expires_at` persist indefinitely. An agent using workspaces for long-lived memory should omit `expires_at` when writing. If `expires_at` is set, the background expiry worker soft-invalidates the entry after that timestamp — it disappears from list and search results and is no longer useful as a memory store. Use `expires_at` only for intentionally short-lived notes, not for decisions the agent will need to recall in future sessions.
 
 ---
 
