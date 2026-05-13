@@ -190,7 +190,10 @@ async def two_tenant_app(pg_container: str, app_settings: Settings) -> AsyncIter
 # UUIDs. Producer tokens satisfy the role requirement for all three.
 PATH_PARAM_SWAP_CASES: list[tuple[str, str, dict[str, Any] | None]] = [
     ("GET", "/v1/capabilities/{entity_id}", None),
-    ("PATCH", "/v1/capabilities/{entity_id}", {"name": "should-be-rejected"}),
+    # UpdateEntityRequest body shape is {"updates": {...}}; the older
+    # `{name: ...}` form fails Pydantic validation with 422 before reaching
+    # the authorization layer, which would mask the isolation check.
+    ("PATCH", "/v1/capabilities/{entity_id}", {"updates": {"name": "should-be-rejected"}}),
     ("DELETE", "/v1/capabilities/{entity_id}", None),
 ]
 
@@ -267,10 +270,15 @@ async def test_dependencies_tenant_isolation(two_tenant_app: TwoTenantHarness) -
         path,
         headers={"Authorization": f"Bearer {two_tenant_app.token_b}"},
     )
-    assert response.status_code == 200
-    body = response.json()
-    edges = body.get("edges") or []
-    assert edges == [], f"tenant B must see 0 dependency edges across tenant A's data; got {len(edges)} edge(s)"
+    # Both anti-enumeration responses are acceptable:
+    # - 200 with empty edges (indistinguishable from a valid-but-empty graph)
+    # - 404 (the post-Cluster-F visibility chokepoint hides cross-tenant rows
+    #   as "not found" so missing-vs-invisible are indistinguishable too).
+    assert response.status_code in (200, 404), response.text
+    if response.status_code == 200:
+        body = response.json()
+        edges = body.get("edges") or []
+        assert edges == [], f"tenant B must see 0 dependency edges across tenant A's data; got {len(edges)} edge(s)"
 
 
 # ---------------------------------------------------------------------------
@@ -526,8 +534,11 @@ async def test_mcp_search_returns_zero_hits_for_cross_tenant_query(
         args={"q": "payment-service-iso", "top_k": 10},
     )
 
-    assert result, "call_tool must return a non-empty sequence"
-    first = result[0]
+    assert result, "call_tool must return a non-empty result"
+    # FastMCP returns (content_blocks, _) in some versions, content_blocks
+    # directly in others.
+    content_blocks = result[0] if isinstance(result, tuple) else result
+    first = content_blocks[0]
     assert first.type == "text"
     parsed = json.loads(first.text)
     assert isinstance(parsed, list), "search result body must be a JSON array"
@@ -896,7 +907,10 @@ async def _seed_p4_admin(
                     vocab_id=uuid.uuid4(),
                     tenant_id=tenant_id,
                     kind="entity_type",
-                    value="p4-iso-service",
+                    # Per-tenant suffix so the isolation assertion in
+                    # test_vocabulary_tenant_isolation can distinguish A's
+                    # rows from B's rows.
+                    value=f"p4-iso-service-{tenant_slug}",
                     is_system=False,
                     deprecated_at=None,
                     created_at=_NOW_P4,
@@ -906,7 +920,7 @@ async def _seed_p4_admin(
                 CapabilityTypeSchema(
                     schema_id=uuid.uuid4(),
                     tenant_id=tenant_id,
-                    type_name="p4-iso-type",
+                    type_name=f"p4-iso-type-{tenant_slug}",
                     json_schema={"type": "object"},
                     is_advisory=True,
                     t_valid_from=_NOW_P4,
@@ -920,7 +934,9 @@ async def _seed_p4_admin(
                 Role(
                     role_id=uuid.uuid4(),
                     tenant_id=tenant_id,
-                    name=f"p4-iso-role-{tenant_slug}",
+                    # chk_roles_name allows only consumer/producer/admin/auditor;
+                    # use one of those for the test's identity-only seed.
+                    name="consumer",
                     permissions=["read"],
                     created_at=_NOW_P4,
                 )
@@ -1011,8 +1027,8 @@ async def test_vocabulary_tenant_isolation(
         response.status_code == 200
     ), f"GET /v1/admin/vocabularies/entity_type must return 200; got {response.status_code}: {response.text}"
     vocab_list = response.json()
-    # Tenant A's value "p4-iso-service" must NOT appear in tenant B's response.
-    tenant_a_values = [v["value"] for v in vocab_list if v["value"] == "p4-iso-service"]
+    # Tenant A's value (uniquely suffixed with its slug) must NOT appear in B's response.
+    tenant_a_values = [v["value"] for v in vocab_list if f"-a-{suffix_a}" in v.get("value", "")]
     assert tenant_a_values == [], f"tenant B must not see tenant A's vocabulary values; found: {tenant_a_values}"
 
 
@@ -1050,7 +1066,8 @@ async def test_capability_types_tenant_isolation(
         response.status_code == 200
     ), f"GET /v1/admin/capability-types must return 200; got {response.status_code}: {response.text}"
     schemas = response.json()
-    tenant_a_types = [s["type_name"] for s in schemas if s["type_name"] == "p4-iso-type"]
+    # Tenant A's type_name (uniquely suffixed) must NOT appear in B's response.
+    tenant_a_types = [s["type_name"] for s in schemas if f"-a-{suffix_a}" in s.get("type_name", "")]
     assert tenant_a_types == [], f"tenant B must not see tenant A's capability type schemas; found: {tenant_a_types}"
 
 

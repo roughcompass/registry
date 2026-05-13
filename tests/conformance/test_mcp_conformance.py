@@ -257,10 +257,27 @@ async def test_list_tools(mcp_harness: McpHarness) -> None:
     tools = await mcp_harness.mcp.list_tools()
     names = {t.name for t in tools}
     assert names == {
+        # Catalog / retrieval surface
+        "whoami",
         "search_capabilities",
         "get_capability",
+        "lookup_by_external_id",
         "get_dependencies",
         "list_capabilities",
+        "get_dependents",
+        "get_blast_radius",
+        # Annotations (registered unconditionally)
+        "submit_annotation",
+        "list_my_annotations",
+        "triage_annotation",
+        # Workspaces (registered unconditionally)
+        "create_workspace",
+        "list_workspaces",
+        "get_workspace",
+        "add_workspace_entry",
+        "update_workspace_entry",
+        "search_workspace_entries",
+        "list_workspace_shares",
     }, f"unexpected tool set: {names}"
 
     # Each tool must carry a non-empty inputSchema dict.
@@ -298,9 +315,11 @@ async def test_search_capabilities_returns_results(mcp_harness: McpHarness) -> N
         args={"q": "payment", "top_k": 5},
     )
 
-    # MCP tool result is a sequence of content blocks.
-    assert result, "call_tool must return a non-empty sequence"
-    first = result[0]
+    # MCP tool result: in newer FastMCP, call_tool returns (content_blocks, _).
+    # In older versions it's just content_blocks. Handle both.
+    content_blocks = result[0] if isinstance(result, tuple) else result
+    assert content_blocks, "call_tool must return non-empty content blocks"
+    first = content_blocks[0]
 
     # TextContent has type='text'.
     assert first.type == "text", f"expected type='text', got {first.type!r}"
@@ -326,8 +345,9 @@ async def test_get_capability_with_time_travel(mcp_harness: McpHarness) -> None:
         args={"entity_id": entity_id, "as_of": "2026-01-01T00:00:00Z"},
     )
 
-    assert result, "call_tool must return a non-empty sequence"
-    first = result[0]
+    content_blocks = result[0] if isinstance(result, tuple) else result
+    assert content_blocks, "call_tool must return non-empty content blocks"
+    first = content_blocks[0]
     assert first.type == "text"
 
     parsed = json.loads(first.text)

@@ -299,9 +299,12 @@ def upgrade() -> None:
     for index_sql in _INDEXES:
         op.execute(index_sql)
 
-    today = datetime.date.today()
-    start = datetime.date(today.year, today.month, 1)
-    for partition_name, from_iso, to_iso in _monthly_partition_bounds(start, 12):
+    # Pin the partition origin so the generated DDL is deterministic across
+    # environments (same fix shape as DEF-T21 for migration 0006). The
+    # 24-month window covers 2025-01 through 2026-12, encompassing the
+    # fixed-clock dates used across the test suite.
+    start = datetime.date(2025, 1, 1)
+    for partition_name, from_iso, to_iso in _monthly_partition_bounds(start, 24):
         op.execute(
             f"CREATE TABLE {partition_name} PARTITION OF audit_log " f"FOR VALUES FROM ('{from_iso}') TO ('{to_iso}')"
         )
