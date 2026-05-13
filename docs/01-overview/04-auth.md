@@ -220,6 +220,66 @@ requests automatically.
 
 ---
 
+## RSAM auth mode (IDA + entitlement-reference-api deployments)
+
+Some enterprise deployments authenticate callers via an internal directory
+authority (IDA) and derive tenant-scope grants from an external entitlement
+reference API (RSAM), rather than embedding tenant claims in the JWT.
+
+Set `AUTH_MODE=rsam` to activate this lane. You must also supply the base URL
+of the entitlement reference API:
+
+```
+AUTH_MODE=rsam
+AUTH_CLAIM_SOURCE_URL=https://entitlements.internal.example.com
+```
+
+### How it works
+
+The token validation and grant resolution are separated into two steps:
+
+1. **JWT validation.** The OIDC validator checks the token signature, issuer,
+   expiry, and `sub` claim — the same checks that run in the default mode.
+   The `tenant_id`/`tid` claim check is **skipped** when `AUTH_MODE=rsam`
+   because IDA tokens carry the caller's employee subject in `sub` but no
+   tenant claim.
+
+2. **Grant resolution.** The resolver factory selects `RsamClaimSource` (the
+   only registered resolver for `rsam` mode) and calls its `resolve()` method
+   with the validated token claims. `resolve()` calls the external authority
+   endpoint for the subject, parses the returned authority strings, and
+   materialises JIT tenant rows for each SEAL the caller holds authority over.
+
+The resolver factory selects the active resolver by calling `is_in_scope()` on
+each registered `ClaimResolverBase` in order. The first resolver whose
+`is_in_scope()` returns `True` handles the request.
+
+### Auth mode env vars
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AUTH_MODE` | `oidc` | `oidc` (default) or `rsam`. Selects the tenant-grant resolution strategy. |
+| `AUTH_CLAIM_SOURCE_URL` | — | Base URL of the external claim source. Required when `AUTH_MODE=rsam`. |
+| `AUTH_CLAIM_CACHE_TTL_SECONDS` | `300` | TTL (seconds) for the grant cache. `0` disables caching. |
+| `AUTH_STALE_CEILING_SECONDS` | `86400` | Max staleness tolerated when the claim source is unreachable and stale-on-failure is on. |
+| `AUTH_SERVE_STALE_ON_FAILURE` | `false` | Serve cached grants when the external claim source is unreachable. Default is fail-closed. |
+| `AUTH_TENANT_ID_HEADER` | `X-Tenant-ID` | Header name the upstream gateway sends to identify the requesting tenant. |
+| `AUTH_SEAL_ID_HEADER_ALIAS` | `X-SEAL-ID` | Optional legacy-header alias accepted alongside `AUTH_TENANT_ID_HEADER`. Set to empty to disable. |
+| `OIDC_DISCOVERY_URL` | — | OpenID Connect discovery document URL. Required for both `oidc` and `rsam` modes when bearer tokens are JWTs. |
+
+### What is not live yet
+
+The actual HTTP call to the entitlement reference API is stubbed. Production
+code that reaches the `fetch_authorities` path without an injected callable
+raises `NotImplementedError` immediately — an unambiguous signal that the path
+is not ready, rather than silently returning empty grants.
+
+The live wiring is gated on upstream-contract validation (endpoint URL, response
+schema, caller-auth mechanism) that is still pending. Until that work is
+complete, `AUTH_MODE=rsam` is not suitable for production deployments.
+
+---
+
 ## What's deliberately not in this doc
 
 - **Per-provider setup tutorials.** The discovery URL is the abstraction
