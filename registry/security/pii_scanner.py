@@ -337,8 +337,16 @@ class PiiScanner:
                 return []
 
         # Chunked path: 8 KB chunks with 100-char overlap.
+        #
+        # Dedup by span overlap, not by exact (offset, length) match. A loose
+        # pattern like \d+ can match a token in full in chunk N and then match
+        # the *suffix* of the same token (clipped at the chunk start) in
+        # chunk N+1 at a different (offset, length). The two matches overlap
+        # but their keys differ — an exact-key set would let the suffix slip
+        # through and double-report what is in fact a single PII token.
+        # Suppress any new match whose span overlaps an already-accepted one.
         results: list[PiiMatchResult] = []
-        seen_spans: set[tuple[int, int]] = set()
+        accepted_spans: list[tuple[int, int]] = []
         pos = 0
         text_len = len(text)
 
@@ -351,18 +359,19 @@ class PiiScanner:
                 chunk_matches = []
 
             for m in chunk_matches:
-                abs_offset = pos + m.offset
-                span = (abs_offset, m.length)
-                if span not in seen_spans:
-                    seen_spans.add(span)
-                    results.append(
-                        PiiMatchResult(
-                            name=m.name,
-                            offset=abs_offset,
-                            length=m.length,
-                            category=m.category,
-                        )
+                abs_start = pos + m.offset
+                abs_end = abs_start + m.length
+                if any(s < abs_end and e > abs_start for s, e in accepted_spans):
+                    continue
+                accepted_spans.append((abs_start, abs_end))
+                results.append(
+                    PiiMatchResult(
+                        name=m.name,
+                        offset=abs_start,
+                        length=m.length,
+                        category=m.category,
                     )
+                )
 
             # Advance by chunk size (without overlap) so overlap region is
             # re-scanned in the next chunk to catch cross-boundary matches.

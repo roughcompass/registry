@@ -608,3 +608,35 @@ class TestPerformance:
         elapsed_ms = (time.perf_counter() - start) * 1000
 
         assert elapsed_ms < 100, f"scan took {elapsed_ms:.1f} ms (limit 100 ms)"
+
+
+# ---------------------------------------------------------------------------
+# Chunk-boundary dedup — loose-regex suffix false-positive
+# ---------------------------------------------------------------------------
+
+
+def test_pii_scanner_does_not_double_report_cross_chunk_token() -> None:
+    """A token straddling a chunk boundary must be reported once, not twice.
+
+    With an exact-(offset, length) dedup, a loose regex like ``\\d+`` could
+    match the full token in chunk N and then match just its suffix in
+    chunk N+1 at a different (offset, length) — the keys differ and the
+    suffix slips through as a spurious second finding. The fix dedups by
+    span overlap, suppressing any subsequent match whose range intersects
+    an already-accepted one.
+    """
+    pattern = RegexPattern(name="digits", category="TEST", regex=r"\d+")
+    scanner = PiiScanner([pattern], "advisory")
+
+    # 8185 'A's + 10 digits + 5 'B's = 8200 chars total. The digit run
+    # straddles the 8192-byte chunk boundary.
+    text = "A" * 8185 + "1234567890" + "B" * 5
+    response = scanner.scan(text, field_type=_FIELD)
+
+    assert len(response.matched_patterns) == 1, (
+        f"expected exactly one match for the digit run; got "
+        f"{[(m.offset, m.length) for m in response.matched_patterns]}"
+    )
+    only = response.matched_patterns[0]
+    assert only.offset == 8185, only.offset
+    assert only.length == 10, only.length
