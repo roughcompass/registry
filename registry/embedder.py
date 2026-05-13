@@ -7,7 +7,7 @@ Two flavours:
 * `StubEmbedder` — returns zero vectors of the right shape. Integration tests
   that don't exercise retrieval recall use this to skip the model download.
 
-Both implement the `Embedder` Protocol from `catalog/types.py`.
+Both implement the `Embedder` Protocol from `registry/types.py`.
 """
 
 from __future__ import annotations

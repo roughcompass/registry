@@ -1,4 +1,4 @@
-"""Unit tests for catalog.api.audit.emit.
+"""Unit tests for registry.api.audit.emit.
 
 Confirms emit() never re-raises (failed audit must not roll back the
 service-layer mutation), and that the Prometheus failure counter

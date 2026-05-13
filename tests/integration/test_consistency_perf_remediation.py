@@ -17,7 +17,7 @@ Covers six contracts enforced during this phase:
    No ``rows``, no ``results``, no bare list.
 
 5. VALID_ROLES consistency (CPR-T07) — static-analysis check via grep:
-   service modules import named constants from ``catalog.api.auth.context``
+   service modules import named constants from ``registry.api.auth.context``
    rather than hard-coded string literals.
 
 6. Rate-limit enforcement (CPR-T11) — when a tenant exhausts its write budget

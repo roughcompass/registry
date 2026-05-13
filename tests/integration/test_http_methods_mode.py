@@ -51,12 +51,12 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     """
     import importlib  # noqa: PLC0415
 
-    import catalog.api.routers.admin as _admin
-    import catalog.api.routers.artifacts as _art
-    import catalog.api.routers.capabilities as _cap
-    import catalog.api.routers.concepts as _con
-    import catalog.api.routers.graph as _graph
-    import catalog.api.routers.operations as _ops
+    import registry.api.routers.admin as _admin
+    import registry.api.routers.artifacts as _art
+    import registry.api.routers.capabilities as _cap
+    import registry.api.routers.concepts as _con
+    import registry.api.routers.graph as _graph
+    import registry.api.routers.operations as _ops
 
     # Default mode is "rest"; fallback string matches the current default.
     prev_mode = os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest")

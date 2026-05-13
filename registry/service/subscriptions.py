@@ -12,7 +12,7 @@ The subscription service owns three things:
 Payload-minimality is enforced by the type system: the service stores only the
 columns defined on ``notifications`` (slug, kinds, versions, fetch_url) — no
 body text, description, or freeform field is ever written. The
-:class:`~catalog.types.CapabilityRegistryEvent` dataclass mirrors the same shape
+:class:`~registry.types.CapabilityRegistryEvent` dataclass mirrors the same shape
 and is the canonical wire format for both the inbox (``GET /v1/notifications``)
 and the webhook payload.
 

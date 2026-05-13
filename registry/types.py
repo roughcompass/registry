@@ -1,6 +1,6 @@
 """Shared dataclasses and protocols. Single import leaf for the package.
 
-No imports from other catalog/ modules. Stdlib + numpy only.
+No imports from other registry/ modules. Stdlib + numpy only.
 """
 
 from __future__ import annotations

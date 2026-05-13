@@ -16,7 +16,7 @@ POST /webhooks/gitlab?source_id={uuid}
 Both endpoints are intentionally *public* (no Bearer auth) but HMAC-verified.
 An invalid or missing signature returns 401.
 
-The router is mounted by ``catalog/main.py``.
+The router is mounted by ``registry/main.py``.
 """
 
 from __future__ import annotations

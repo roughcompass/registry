@@ -20,6 +20,7 @@ from __future__ import annotations
 import datetime
 import importlib.util
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Load the migration module without a real DB
@@ -54,41 +55,78 @@ _SYSTEM_PII_PATTERN_IDS = _mig._SYSTEM_PII_PATTERN_IDS  # dict name -> uuid str
 DEFAULT_TENANT_UUID = _mig.DEFAULT_TENANT_UUID
 
 
-def _capture_upgrade() -> list[str]:
-    """Run upgrade() with op.execute patched; return all SQL strings issued."""
-    executed: list[str] = []
+def _make_capturing_op_patches(executed: list[str]) -> tuple[Any, Any]:
+    """Build (capture_op_execute, capture_op_get_bind) so both flow into *executed*.
 
-    def capture(sql: object) -> None:
+    Migrations issue some statements via ``op.execute(...)`` and others via
+    ``bind = op.get_bind(); bind.execute(text(...), {...})`` (the
+    parameterized path). For bind.execute we serialize the bind dict
+    alongside the SQL so legacy tests that look for the seed value in the
+    captured text continue to find it after the bind-parameter migration.
+    """
+    from unittest.mock import MagicMock  # noqa: PLC0415
+
+    def capture_execute(sql: object) -> None:
         executed.append(str(sql))
 
+    def _capture_bind_execute(sql: object, *args: Any, **kwargs: Any) -> None:
+        params: Any = None
+        if args:
+            params = args[0]
+        elif "parameters" in kwargs:
+            params = kwargs["parameters"]
+        # Append SQL + param values so legacy tests that grep for a seed
+        # value (which used to be a SQL literal, now lives in the bind dict)
+        # continue to find it.
+        param_str = " | params=" + str(params) if params else ""
+        executed.append(str(sql) + param_str)
+
+    bind_mock = MagicMock()
+    bind_mock.execute = MagicMock(side_effect=_capture_bind_execute)
+
+    def capture_get_bind() -> Any:
+        return bind_mock
+
+    return capture_execute, capture_get_bind
+
+
+def _capture_upgrade() -> list[str]:
+    """Run upgrade() with op.execute + op.get_bind patched; capture all SQL strings."""
+    executed: list[str] = []
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig.upgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 
 def _capture_downgrade() -> list[str]:
-    """Run downgrade() with op.execute patched; return all SQL strings issued."""
+    """Run downgrade() with op.execute + op.get_bind patched; capture all SQL strings."""
     executed: list[str] = []
-
-    def capture(sql: object) -> None:
-        executed.append(str(sql))
-
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig.downgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 
@@ -355,40 +393,42 @@ _P7_DEFAULT_TENANT = _mig7.DEFAULT_TENANT_UUID
 
 
 def _capture_p7_upgrade() -> list[str]:
-    """Run the migration upgrade() with op.execute patched; return all SQL strings issued."""
+    """Run migration upgrade() with op.execute + op.get_bind patched."""
     executed: list[str] = []
-
-    def capture(sql: object) -> None:
-        executed.append(str(sql))
-
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig7.upgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 
 def _capture_p7_downgrade() -> list[str]:
-    """Run the migration downgrade() with op.execute patched; return all SQL strings issued."""
+    """Run migration downgrade() with op.execute + op.get_bind patched."""
     executed: list[str] = []
-
-    def capture(sql: object) -> None:
-        executed.append(str(sql))
-
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig7.downgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 
@@ -783,40 +823,42 @@ _AN_STATUS_SEEDS: list[str] = _mig18._ANNOTATION_STATUS_SEEDS
 
 
 def _capture_0018_upgrade() -> list[str]:
-    """Run 0018 upgrade() with op.execute patched; return all SQL strings issued."""
+    """Run 0018 upgrade() with op.execute + op.get_bind patched."""
     executed: list[str] = []
-
-    def capture(sql: object) -> None:
-        executed.append(str(sql))
-
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig18.upgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 
 def _capture_0018_downgrade() -> list[str]:
-    """Run 0018 downgrade() with op.execute patched; return all SQL strings issued."""
+    """Run 0018 downgrade() with op.execute + op.get_bind patched."""
     executed: list[str] = []
-
-    def capture(sql: object) -> None:
-        executed.append(str(sql))
-
     from alembic import op  # noqa: PLC0415
 
-    original = getattr(op, "execute", None)
+    capture_execute, capture_get_bind = _make_capturing_op_patches(executed)
+    original_execute = getattr(op, "execute", None)
+    original_get_bind = getattr(op, "get_bind", None)
     try:
-        op.execute = capture  # type: ignore[attr-defined]
+        op.execute = capture_execute  # type: ignore[attr-defined]
+        op.get_bind = capture_get_bind  # type: ignore[attr-defined]
         _mig18.downgrade()
     finally:
-        if original is not None:
-            op.execute = original  # type: ignore[attr-defined]
+        if original_execute is not None:
+            op.execute = original_execute  # type: ignore[attr-defined]
+        if original_get_bind is not None:
+            op.get_bind = original_get_bind  # type: ignore[attr-defined]
     return executed
 
 

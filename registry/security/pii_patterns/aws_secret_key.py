@@ -24,7 +24,7 @@ input.
 DB row note
 -----------
 The ``pii_patterns`` row for this detector carries ``regex='__entropy__'`` and
-``detector_module='catalog.security.pii_patterns.aws_secret_key'``.  This sentinel
+``detector_module='registry.security.pii_patterns.aws_secret_key'``.  This sentinel
 tells the dispatcher that the Python module is the authoritative implementation.
 """
 

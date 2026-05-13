@@ -1,7 +1,7 @@
 """Interface normalizer — converts capability interface declarations to a canonical shape.
 
 Normalises a capability's interface declaration into the canonical
-:class:`~catalog.types.InterfaceSurface` shape. Three input formats are
+:class:`~registry.types.InterfaceSurface` shape. Three input formats are
 accepted:
 
 * ``json_schema`` — a JSON Schema object. ``properties`` are flattened

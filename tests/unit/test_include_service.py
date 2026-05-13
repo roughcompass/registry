@@ -566,7 +566,7 @@ async def _mcp_call(mcp: Any, tool: str, args: dict[str, Any]) -> Any:
     """Set auth ContextVar and invoke the MCP tool, returning parsed JSON."""
     cv_tok = _request_token.set(_FAKE_TOKEN)
     try:
-        with patch("catalog.api.routers.mcp._resolve_tenant", new=AsyncMock(return_value=_make_ctx())):
+        with patch("registry.api.routers.mcp._resolve_tenant", new=AsyncMock(return_value=_make_ctx())):
             content_blocks, _ = await mcp.call_tool(tool, args)
         return json.loads(content_blocks[0].text)
     finally:

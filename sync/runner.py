@@ -3,7 +3,7 @@
 Design notes
 ------------
 * One ``AsyncIOScheduler`` is shared between the embedding-drain job and all
-  sync-source jobs.  ``create_scheduler`` is called by ``catalog/main.py``;
+  sync-source jobs.  ``create_scheduler`` is called by ``registry/main.py``;
   callers must start / shutdown it.
 * ``SQLAlchemyJobStore`` requires a *synchronous* SQLAlchemy URL.  The helper
   ``_make_jobstore`` rewrites ``postgresql+asyncpg://`` →
@@ -96,7 +96,7 @@ def _redact_url(url: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Scheduler factory (called by catalog/main.py)
+# Scheduler factory (called by registry/main.py)
 # ---------------------------------------------------------------------------
 
 

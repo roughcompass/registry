@@ -45,7 +45,7 @@ class VocabularyService:
 
         Accepts requires, conflicts_with, composes, provides_to, as well as any
         tenant-local edge_rel values registered via :meth:`add_value`.
-        Raises :class:`~catalog.exceptions.VocabularyError` for unknown or
+        Raises :class:`~registry.exceptions.VocabularyError` for unknown or
         deprecated values.
         """
         await self.validate_value(ctx, "edge_rel", edge_rel)

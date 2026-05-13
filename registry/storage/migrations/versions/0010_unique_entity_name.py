@@ -13,7 +13,7 @@ resolve to several entity_ids.
 After: a unique index ``uq_entities_tenant_name`` enforces that
 ``lower(name)`` is unique within each tenant. Slug validation in the
 service layer rejects non-slug names at write time
-(``catalog/service/slugs.py``).
+(``registry/service/slugs.py``).
 
 Pre-flight guard: if any duplicate ``(tenant_id, lower(name))`` pairs
 exist when this migration runs, the upgrade fails fast with the

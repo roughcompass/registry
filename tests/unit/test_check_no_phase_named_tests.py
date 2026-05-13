@@ -138,7 +138,7 @@ class TestNonCommentLines:
 
 class TestMigrationsExclusion:
     def test_migration_versions_path_excluded(self, tmp_path: Path) -> None:
-        """Files under catalog/storage/migrations/versions/ are not scanned."""
+        """Files under registry/storage/migrations/versions/ are not scanned."""
         versions_dir = tmp_path / "catalog" / "storage" / "migrations" / "versions"
         versions_dir.mkdir(parents=True)
         _write(versions_dir, "0005_phase4_rbac_oidc.py", "revision = '0005'\n")

@@ -6,7 +6,7 @@ Design constraints
   hard-deleted.  Soft-delete is intentionally not used here; the audit trail
   is written to ``audit_log`` instead so deletion history is recoverable.
 * Uniqueness is ``(tenant_id, external_system_slug, external_id)``.  A duplicate
-  insert raises :class:`~catalog.exceptions.ConflictError` with the existing PK
+  insert raises :class:`~registry.exceptions.ConflictError` with the existing PK
   cited in the message.
 * URL resolution: when the ``external_systems.url_template`` contains
   ``{external_id}``, the service substitutes the literal ``external_id`` string
@@ -114,7 +114,7 @@ class ExternalIdService:
         """Register a new external system for the tenant.
 
         ``slug`` must be unique per tenant.  A duplicate insert raises
-        :class:`~catalog.exceptions.ConflictError`.
+        :class:`~registry.exceptions.ConflictError`.
 
         Returns a dict representing the inserted ``external_systems`` row.
         """
@@ -183,7 +183,7 @@ class ExternalIdService:
     async def delete_external_system(self, ctx: TenantContext, slug: str) -> None:
         """Hard-delete an external system registration.
 
-        Raises :class:`~catalog.exceptions.NotFoundError` if the slug does not
+        Raises :class:`~registry.exceptions.NotFoundError` if the slug does not
         exist for this tenant.  Cascading deletes on ``entity_external_ids`` are
         the caller's / DB's responsibility (no FK cascade in schema — service
         must not leave orphaned mappings; callers should delete mappings first
@@ -410,7 +410,7 @@ class ExternalIdService:
         """Hard-delete a single external-ID mapping by its primary key.
 
         Ownership is verified: the row must belong to ``ctx.tenant_id``.
-        Raises :class:`~catalog.exceptions.NotFoundError` if the row does not
+        Raises :class:`~registry.exceptions.NotFoundError` if the row does not
         exist or belongs to a different tenant (avoids leaking existence).
         The deletion is audit-logged unconditionally before the row is removed.
 
@@ -475,14 +475,14 @@ class ExternalIdService:
         """Update the ``url`` or ``metadata_jsonb`` of an existing mapping.
 
         Ownership is verified: the row must belong to both ``ctx.tenant_id``
-        and ``entity_id``.  Raises :class:`~catalog.exceptions.NotFoundError`
+        and ``entity_id``.  Raises :class:`~registry.exceptions.NotFoundError`
         if the row is absent or ownership fails (avoids leaking existence).
 
         Only supplied fields (non-``None``) replace the stored values.  To
         explicitly clear a field pass an empty string or empty dict rather
         than ``None`` — ``None`` means "no change".
 
-        Returns the updated :class:`~catalog.types.ExternalIdRef`.
+        Returns the updated :class:`~registry.types.ExternalIdRef`.
         """
         now = self._clock.now()
         async with self._session_factory() as session, session.begin():

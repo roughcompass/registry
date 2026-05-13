@@ -4,7 +4,7 @@ Combines four moving parts into a single advisory response:
 
 1. :mod:`registry.service.interface_normalize` — turn the producer's
    proposed interface declaration into a canonical
-   :class:`~catalog.types.InterfaceSurface`.
+   :class:`~registry.types.InterfaceSurface`.
 2. Semver validation — reject malformed proposed versions early.
 3. :mod:`registry.service.interface_diff` — classify the change and emit
    per-element evidence.

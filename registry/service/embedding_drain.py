@@ -1,6 +1,6 @@
 """Outbox drain job — consumes `embedding_outbox`, writes to `embeddings`.
 
-Registered as an APScheduler job in `catalog/main.py`
+Registered as an APScheduler job in `registry/main.py`
 lifespan. Runs every `settings.outbox_poll_interval_s` seconds with
 `max_instances=1` and `coalesce=True` so overlapping ticks are harmless.
 

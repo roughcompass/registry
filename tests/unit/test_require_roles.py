@@ -56,7 +56,7 @@ async def test_require_roles_passes_when_role_present() -> None:
     ctx = _ctx(["admin"])
     dep = require_roles(["admin"])
 
-    with patch("catalog.api.auth.context.get_tenant_context", AsyncMock(return_value=ctx)):
+    with patch("registry.api.auth.context.get_tenant_context", AsyncMock(return_value=ctx)):
         result = await dep(ctx=ctx)
     assert result is ctx
 

@@ -16,7 +16,7 @@ Bearer token is therefore extracted from the raw ASGI scope that the SSE
 transport passes to the ``handle_sse`` closure.  The scope is threaded
 into each tool call via a per-request token holder that is written by the
 SSE handler before delegating to the MCP server.  This re-uses
-``catalog.api.auth.tokens.validate_token`` directly and is semantically
+``registry.api.auth.tokens.validate_token`` directly and is semantically
 identical to the REST middleware — the same hash, the same DB check, the
 same ``TenantContext`` shape.
 

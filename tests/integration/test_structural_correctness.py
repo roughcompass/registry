@@ -362,7 +362,7 @@ async def test_oidc_concurrent_refresh_issues_exactly_one_fetch() -> None:
             resp.json = MagicMock(return_value=fake_jwks)
             return resp
 
-    with patch("catalog.api.auth.oidc.httpx.AsyncClient", _FakeClient):
+    with patch("registry.api.auth.oidc.httpx.AsyncClient", _FakeClient):
         calls = [cache.get_jwks("https://example.com/.well-known/jwks.json") for _ in range(10)]
         results = await asyncio.gather(*calls)
 

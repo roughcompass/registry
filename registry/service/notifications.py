@@ -2,7 +2,7 @@
 
 Reads from the ``notifications`` table (DDL in migration 0009).
 Reads are payload-minimal — only the columns persisted on the row are
-returned. The :class:`~catalog.types.CapabilityRegistryEvent` dataclass is
+returned. The :class:`~registry.types.CapabilityRegistryEvent` dataclass is
 the canonical wire format.
 
 Surface

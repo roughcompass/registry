@@ -1,6 +1,6 @@
 """Interface diff engine — classifies changes between two interface surfaces.
 
-Compares two :class:`~catalog.types.InterfaceSurface` objects produced
+Compares two :class:`~registry.types.InterfaceSurface` objects produced
 by :mod:`registry.service.interface_normalize` and classifies the
 overall change as one of three severities:
 

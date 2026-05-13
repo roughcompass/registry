@@ -1,6 +1,6 @@
 """Standalone sync-worker entrypoint.
 
-Run via ``python -m catalog.sync_worker``.
+Run via ``python -m registry.sync_worker``.
 
 This module starts the APScheduler-based sync loop without launching the
 FastAPI HTTP server.  It is the entrypoint used by the Helm sync-worker
@@ -8,7 +8,7 @@ Deployment (``helm/templates/deployment-sync.yaml``).
 
 Usage::
 
-    python -m catalog.sync_worker
+    python -m registry.sync_worker
 
 Environment variables are the same as the API server (DATABASE_URL, etc.).
 """

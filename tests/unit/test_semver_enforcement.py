@@ -12,7 +12,7 @@ Contract under test
 - Else if the value parses via ``semver.Version.parse()`` → silent no-op.
   Pre-release (``-alpha.1``) and build metadata (``+sha.deadbeef``) suffixes
   are accepted.
-- Else → raises :class:`catalog.exceptions.ValidationError` (mapped to HTTP 422
+- Else → raises :class:`registry.exceptions.ValidationError` (mapped to HTTP 422
   by the API layer) with message:
   ``"'<value>' is not valid semver 2.0.0. Example: '2.4.1', '3.0.0-alpha.1'."``.
 

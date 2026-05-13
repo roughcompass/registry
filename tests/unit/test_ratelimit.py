@@ -134,11 +134,11 @@ async def test_check_rate_limit_passes_when_lock_acquired() -> None:
 
     with (
         patch(
-            "catalog.api.middleware.ratelimit._lookup_rate_limit",
+            "registry.api.middleware.ratelimit._lookup_rate_limit",
             AsyncMock(return_value=(100, 10)),
         ),
         patch(
-            "catalog.api.middleware.ratelimit._try_advisory_lock",
+            "registry.api.middleware.ratelimit._try_advisory_lock",
             AsyncMock(return_value=True),
         ),
     ):
@@ -155,11 +155,11 @@ async def test_check_rate_limit_raises_429_on_lock_contention() -> None:
 
     with (
         patch(
-            "catalog.api.middleware.ratelimit._lookup_rate_limit",
+            "registry.api.middleware.ratelimit._lookup_rate_limit",
             AsyncMock(return_value=(100, 10)),
         ),
         patch(
-            "catalog.api.middleware.ratelimit._try_advisory_lock",
+            "registry.api.middleware.ratelimit._try_advisory_lock",
             AsyncMock(return_value=False),
         ),
     ):
@@ -183,11 +183,11 @@ async def test_check_rate_limit_raises_429_on_zero_budget_without_lock() -> None
 
     with (
         patch(
-            "catalog.api.middleware.ratelimit._lookup_rate_limit",
+            "registry.api.middleware.ratelimit._lookup_rate_limit",
             AsyncMock(return_value=(100, 0)),  # writes_per_second = 0
         ),
         patch(
-            "catalog.api.middleware.ratelimit._try_advisory_lock",
+            "registry.api.middleware.ratelimit._try_advisory_lock",
             lock_mock,
         ),
     ):
@@ -210,11 +210,11 @@ async def test_check_rate_limit_uses_reads_budget_for_get() -> None:
     # reads=0, writes=10: GET should be throttled; POST would not.
     with (
         patch(
-            "catalog.api.middleware.ratelimit._lookup_rate_limit",
+            "registry.api.middleware.ratelimit._lookup_rate_limit",
             AsyncMock(return_value=(0, 10)),
         ),
         patch(
-            "catalog.api.middleware.ratelimit._try_advisory_lock",
+            "registry.api.middleware.ratelimit._try_advisory_lock",
             AsyncMock(return_value=True),
         ),
     ):
@@ -234,11 +234,11 @@ async def test_check_rate_limit_uses_writes_budget_for_post() -> None:
     # reads=0, writes=10: POST should pass because writes budget > 0.
     with (
         patch(
-            "catalog.api.middleware.ratelimit._lookup_rate_limit",
+            "registry.api.middleware.ratelimit._lookup_rate_limit",
             AsyncMock(return_value=(0, 10)),
         ),
         patch(
-            "catalog.api.middleware.ratelimit._try_advisory_lock",
+            "registry.api.middleware.ratelimit._try_advisory_lock",
             AsyncMock(return_value=True),
         ),
     ):

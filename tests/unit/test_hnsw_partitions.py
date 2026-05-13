@@ -43,7 +43,7 @@ _HNSW_EF_CONSTRUCTION: int = _pm._HNSW_EF_CONSTRUCTION
 # Load 0006_phase5_partitions migration module (leading digit prevents normal import)
 _MIG_SPEC = importlib.util.spec_from_file_location(
     "migration_0006",
-    _REPO_ROOT / "catalog" / "storage" / "migrations" / "versions" / "0006_phase5_partitions.py",
+    _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0006_phase5_partitions.py",
 )
 assert _MIG_SPEC is not None and _MIG_SPEC.loader is not None
 _mig = importlib.util.module_from_spec(_MIG_SPEC)

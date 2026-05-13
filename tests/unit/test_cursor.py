@@ -1,4 +1,4 @@
-"""Unit tests for catalog.api.cursor — opaque cursor encode/decode."""
+"""Unit tests for registry.api.cursor — opaque cursor encode/decode."""
 
 from __future__ import annotations
 

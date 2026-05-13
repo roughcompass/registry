@@ -65,7 +65,7 @@ def test_actor_has_oidc_subject_column() -> None:
 
 def test_role_actor_role_rate_limit_in_models_all() -> None:
     """Spot-check __all__ in models is not explicitly excluding new classes."""
-    import catalog.storage.models as m
+    import registry.storage.models as m
 
     assert hasattr(m, "Role")
     assert hasattr(m, "ActorRole")

@@ -78,7 +78,7 @@ _VALID_MODES: frozenset[str] = frozenset({"rest", "post_only", "both"})
 _VALID_SEPS: frozenset[str] = frozenset({"colon", "slash"})
 
 # The canonical source of truth for these defaults is
-# ``catalog.config.Settings.http_methods_mode`` /
+# ``registry.config.Settings.http_methods_mode`` /
 # ``Settings.http_method_alias_separator``. The constants below are
 # kept as a fallback for module-load-time consumers (routers that
 # import ``get_mode_settings()`` before an app is built); ``from_env``
@@ -97,7 +97,7 @@ def get_mode_settings() -> tuple[HttpMethodsMode, AliasSeperator]:
     Returns ``(mode, separator)`` with validated values.  Falls back to
     ``("rest", "colon")`` on missing or invalid env vars and emits a warning.
 
-    The canonical defaults live in :class:`catalog.config.Settings`
+    The canonical defaults live in :class:`registry.config.Settings`
     (``http_methods_mode`` / ``http_method_alias_separator``). This
     function duplicates the env-var read because routers register routes
     at import time, before any ``Settings`` instance exists. Keep the

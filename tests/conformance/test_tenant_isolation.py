@@ -466,7 +466,7 @@ async def _call_tool_as(mcp: Any, *, token: str, tool: str, args: dict[str, Any]
     """Set the Bearer token ContextVar and call the MCP tool in-process.
 
     Mirrors the ``_call_as`` helper in ``test_mcp_conformance.py`` and the
-    ``handle_sse`` closure in ``catalog.api.routers.mcp`` — the same ContextVar
+    ``handle_sse`` closure in ``registry.api.routers.mcp`` — the same ContextVar
     path that every live SSE request takes.
     """
     cv_token = _request_token.set(token)

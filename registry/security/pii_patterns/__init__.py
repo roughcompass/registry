@@ -1,7 +1,7 @@
 """Built-in PII pattern modules.
 
 Each sub-module exposes a module-level singleton named ``pattern`` that
-implements the ``Scanner`` Protocol defined in ``catalog.security.pii_scanner``.
+implements the ``Scanner`` Protocol defined in ``registry.security.pii_scanner``.
 Singletons are importable directly:
 
     from registry.security.pii_patterns.email import pattern as email_pattern

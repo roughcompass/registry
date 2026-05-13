@@ -228,7 +228,7 @@ async def test_lifecycle_endpoint_allowed_for_admin() -> None:
     entity_id = uuid.uuid4()
 
     with (
-        patch("catalog.api.routers.admin_lifecycle.LifecycleService") as mock_cls,
+        patch("registry.api.routers.admin_lifecycle.LifecycleService") as mock_cls,
     ):
         mock_instance = AsyncMock()
         mock_instance.transition = AsyncMock()
@@ -250,7 +250,7 @@ async def test_lifecycle_endpoint_allowed_for_producer() -> None:
     app = _make_app_with_ctx(ctx)
     entity_id = uuid.uuid4()
 
-    with patch("catalog.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
+    with patch("registry.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
         mock_instance = AsyncMock()
         mock_instance.transition = AsyncMock()
         mock_cls.return_value = mock_instance
@@ -283,7 +283,7 @@ async def test_lifecycle_endpoint_maps_lifecycle_error_to_422() -> None:
     app = _make_app_with_ctx(ctx)
     entity_id = uuid.uuid4()
 
-    with patch("catalog.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
+    with patch("registry.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
         mock_instance = AsyncMock()
         mock_instance.transition = AsyncMock(side_effect=LifecycleError("invalid transition: 'ga' -> 'alpha'"))
         mock_cls.return_value = mock_instance
@@ -310,7 +310,7 @@ async def test_lifecycle_endpoint_successor_uuid_accepted() -> None:
     entity_id = uuid.uuid4()
     successor_id = uuid.uuid4()
 
-    with patch("catalog.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
+    with patch("registry.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
         mock_instance = AsyncMock()
         mock_instance.transition = AsyncMock()
         mock_cls.return_value = mock_instance
@@ -332,7 +332,7 @@ async def test_lifecycle_endpoint_successor_none_sentinel_accepted() -> None:
     app = _make_app_with_ctx(ctx)
     entity_id = uuid.uuid4()
 
-    with patch("catalog.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
+    with patch("registry.api.routers.admin_lifecycle.LifecycleService") as mock_cls:
         mock_instance = AsyncMock()
         mock_instance.transition = AsyncMock()
         mock_cls.return_value = mock_instance

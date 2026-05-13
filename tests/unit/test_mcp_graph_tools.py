@@ -196,7 +196,7 @@ async def _call(mcp: Any, tool: str, args: dict[str, Any]) -> Any:
 # This mirrors what the integration suite does with a real DB.
 # ---------------------------------------------------------------------------
 
-_PATCH_TARGET = "catalog.api.routers.mcp._resolve_tenant"
+_PATCH_TARGET = "registry.api.routers.mcp._resolve_tenant"
 
 
 # ---------------------------------------------------------------------------

@@ -88,7 +88,7 @@ from registry.api.routers.admin_vocab import mutation_router as _vocab_mutation
 from registry.api.routers.admin_vocab import router as _vocab_router
 
 # LifecycleService is re-exported here so that unit tests that patch
-# "catalog.api.routers.admin.LifecycleService" continue to work without
+# "registry.api.routers.admin.LifecycleService" continue to work without
 # change.  The name lives in admin_lifecycle.py; re-importing it here puts
 # it in this module's namespace so mock.patch targets resolve correctly.
 from registry.service.lifecycle import LifecycleService  # noqa: F401

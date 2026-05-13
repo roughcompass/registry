@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 
 def test_rbac_oidc_migration_importable() -> None:
     """0005_phase4_rbac_oidc module must be importable without a DB connection."""
-    mod = importlib.import_module("catalog.storage.migrations.versions.0005_phase4_rbac_oidc")
+    mod = importlib.import_module("registry.storage.migrations.versions.0005_phase4_rbac_oidc")
     assert mod.revision == "0005_phase4_rbac_oidc"
     assert mod.down_revision == "0004_phase3_sync_infra"
     assert callable(mod.upgrade)

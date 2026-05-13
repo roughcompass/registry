@@ -1,4 +1,4 @@
-"""Unit tests for catalog.api.auth.tokens.
+"""Unit tests for registry.api.auth.tokens.
 
 Covers hash equality, expired-token rejection, revoked-token rejection,
 and not-found rejection. The DB session is mocked — testcontainers

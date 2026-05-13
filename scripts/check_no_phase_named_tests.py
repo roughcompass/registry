@@ -45,7 +45,7 @@ _DEFAULT_SCOPE: tuple[str, ...] = ("registry/tests",)
 # embed phase tokens as revision identifiers — they are not test artifacts.
 _EXCLUDE_SUBTREES: frozenset[str] = frozenset(
     {
-        "catalog/storage/migrations/versions",
+        "registry/storage/migrations/versions",
         ".venv",
         "__pycache__",
         ".pytest_cache",
@@ -211,7 +211,8 @@ def _print_explain() -> int:
         print()
     print(f"Lines ending with '{_BYPASS_MARKER}' are exempt from comment checks.")
     print(
-        "The Alembic migrations versions subtree " "(`catalog/storage/migrations/versions/`) is excluded from the walk."
+        "The Alembic migrations versions subtree "
+        "(`registry/storage/migrations/versions/`) is excluded from the walk."
     )
     return 0
 

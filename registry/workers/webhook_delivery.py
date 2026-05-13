@@ -23,7 +23,7 @@ Responsibilities
    callers may use :meth:`make_digest_envelope` to combine accumulated
    events into a single ``CapabilityRegistry.Digest v1`` envelope. The
    actual time-window accumulation logic lives in the scheduler that calls
-   this worker (typically the AsyncIOScheduler in :mod:`catalog.main`);
+   this worker (typically the AsyncIOScheduler in :mod:`registry.main`);
    the worker itself stays stateless.
 
 Concurrency

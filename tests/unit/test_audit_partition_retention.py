@@ -143,7 +143,7 @@ class TestCheckAuditPartitionAges:
     async def test_gauge_set_to_count_of_eligible(self) -> None:
         sf = self._make_session_factory(["audit_log_2022_01", "audit_log_2022_06", "audit_log_2025_04"])
         with patch(
-            "catalog.main.audit_partitions_eligible_for_archival",
+            "registry.main.audit_partitions_eligible_for_archival",
             return_value=["audit_log_2022_01", "audit_log_2022_06"],
         ) as mock_pred:
             await check_audit_partition_ages(session_factory=sf)
@@ -154,9 +154,9 @@ class TestCheckAuditPartitionAges:
     @pytest.mark.asyncio
     async def test_warning_emitted_when_eligible(self, caplog: pytest.LogCaptureFixture) -> None:
         sf = self._make_session_factory(["audit_log_2021_03"])
-        with caplog.at_level(logging.WARNING, logger="catalog.main"):
+        with caplog.at_level(logging.WARNING, logger="registry.main"):
             with patch(
-                "catalog.main.audit_partitions_eligible_for_archival",
+                "registry.main.audit_partitions_eligible_for_archival",
                 return_value=["audit_log_2021_03"],
             ):
                 await check_audit_partition_ages(session_factory=sf)
@@ -167,9 +167,9 @@ class TestCheckAuditPartitionAges:
     @pytest.mark.asyncio
     async def test_no_warning_when_none_eligible(self, caplog: pytest.LogCaptureFixture) -> None:
         sf = self._make_session_factory(["audit_log_2025_04"])
-        with caplog.at_level(logging.WARNING, logger="catalog.main"):
+        with caplog.at_level(logging.WARNING, logger="registry.main"):
             with patch(
-                "catalog.main.audit_partitions_eligible_for_archival",
+                "registry.main.audit_partitions_eligible_for_archival",
                 return_value=[],
             ):
                 await check_audit_partition_ages(session_factory=sf)
@@ -193,7 +193,7 @@ class TestCheckAuditPartitionAges:
         sf.kw = {"bind": bind}
         bind.connect.side_effect = RuntimeError("connection refused")
 
-        with caplog.at_level(logging.WARNING, logger="catalog.main"):
+        with caplog.at_level(logging.WARNING, logger="registry.main"):
             await check_audit_partition_ages(session_factory=sf)
 
         assert "failed to query pg_inherits" in caplog.text
