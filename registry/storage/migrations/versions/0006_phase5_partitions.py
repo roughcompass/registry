@@ -43,9 +43,13 @@ depends_on: tuple[str, ...] | None = None
 # Fixed origin date for monthly partitions. The original code used
 # datetime.date.today() which made the generated DDL non-deterministic — two
 # environments running the migration in different calendar months produced
-# different partition names and value ranges. Use the month the migration
-# landed (2026-05) so every environment generates the same schema.
-_PARTITION_START: datetime.date = datetime.date(2026, 5, 1)
+# different partition names and value ranges. Pinned to 2025-01 so the
+# 24-month window covers 2025-01 through 2026-12, which encompasses the
+# fixed-clock values used across the test suite (FakeClock typically yields
+# 2026-01-01 through 2026-12) and gives operators a year of headroom on
+# either side.
+_PARTITION_START: datetime.date = datetime.date(2025, 1, 1)
+_PARTITION_COUNT: int = 24
 
 
 def _monthly_bounds(start: datetime.date, count: int) -> Iterator[tuple[str, str, str]]:
@@ -184,7 +188,7 @@ def upgrade() -> None:
         op.execute(idx_sql)
 
     start = _PARTITION_START
-    for suffix, from_iso, to_iso in _monthly_bounds(start, 12):
+    for suffix, from_iso, to_iso in _monthly_bounds(start, _PARTITION_COUNT):
         op.execute(
             f"CREATE TABLE audit_log_new_{suffix} "
             f"PARTITION OF audit_log_new "
@@ -196,7 +200,7 @@ def upgrade() -> None:
     for idx_sql in _EPISODES_NEW_INDEXES:
         op.execute(idx_sql)
 
-    for suffix, from_iso, to_iso in _monthly_bounds(start, 12):
+    for suffix, from_iso, to_iso in _monthly_bounds(start, _PARTITION_COUNT):
         op.execute(
             f"CREATE TABLE episodes_new_{suffix} "
             f"PARTITION OF episodes_new "

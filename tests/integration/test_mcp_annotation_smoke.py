@@ -39,6 +39,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -216,6 +217,7 @@ async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> A
         session_factory=session_factory,
         clock=clock,
         annotation_service=annotation_svc,
+        workspace_service=MagicMock(),
     )
 
     # Block-policy scanner: any PII match raises a 422 which the MCP layer
@@ -235,6 +237,7 @@ async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> A
         session_factory=session_factory,
         clock=clock,
         annotation_service=annotation_svc_block,
+        workspace_service=MagicMock(),
     )
 
     try:

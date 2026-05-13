@@ -242,7 +242,9 @@ async def get_sync_source(
     factory = request.app.state.session_factory
     async with factory() as session:
         source = await session.get(SyncSource, source_id)
-    if source is None or source.tenant_id != ctx.tenant_id:
+    # is_active=False is a soft-deleted row; the contract says GET on a
+    # soft-deleted source returns 404 (the row is hidden, not surfaced).
+    if source is None or source.tenant_id != ctx.tenant_id or not source.is_active:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="sync_source not found")
     response = _source_to_response(source, include_links=True)
     etag = compute_etag(source.source_id, latest_timestamp(source.created_at))

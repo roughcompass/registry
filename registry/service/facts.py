@@ -490,8 +490,12 @@ class FactService:
                         "is_authoritatives": [r["is_authoritative"] for r in new_facts],
                         "is_auth_superseded": [r["is_authoritative_superseded"] for r in new_facts],
                         "sync_run_ids": [str(r["sync_run_id"]) for r in new_facts],
-                        "t_valid_froms": [r["t_valid_from"].isoformat() for r in new_facts],
-                        "t_ingested_ats": [r["t_ingested_at"].isoformat() for r in new_facts],
+                        # asyncpg's CAST(... AS timestamptz[]) requires actual
+                        # datetime objects, not ISO strings. Pass the raw
+                        # datetime values from the build loop so the array
+                        # binding survives the driver-level type check.
+                        "t_valid_froms": [r["t_valid_from"] for r in new_facts],
+                        "t_ingested_ats": [r["t_ingested_at"] for r in new_facts],
                         "created_bys": [str(r["created_by"]) if r["created_by"] else None for r in new_facts],
                     },
                 )
@@ -507,7 +511,9 @@ class FactService:
                         "fid": str(r["fact_id"]),
                         "body": r["body"],
                         "chunk_plan": json.dumps(make_chunk_plan(r["body"])),
-                        "now": now.isoformat(),
+                        # asyncpg's CAST(... AS timestamptz[]) requires actual
+                        # datetime objects, not ISO strings.
+                        "now": now,
                     }
                     for r in new_facts
                 ]

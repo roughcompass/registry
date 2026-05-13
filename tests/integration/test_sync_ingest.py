@@ -194,6 +194,36 @@ async def _create_sync_source(
     return source_id
 
 
+async def _seed_sync_run(
+    pg_url: str,
+    *,
+    tenant_id: uuid.UUID,
+    source_id: uuid.UUID,
+    sync_run_id: uuid.UUID,
+) -> None:
+    """Insert a sync_runs row so facts.sync_run_id FK is satisfied.
+
+    Bypasses run_sync_job (which would also schedule downstream work);
+    used by tests that call upsert_synced_facts directly.
+    """
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session, session.begin():
+            session.add(
+                SyncRun(
+                    sync_run_id=sync_run_id,
+                    tenant_id=tenant_id,
+                    source_id=source_id,
+                    status="running",
+                    trigger="manual",
+                    started_at=_NOW,
+                )
+            )
+    finally:
+        await engine.dispose()
+
+
 def _make_settings(pg_url: str, **kwargs: Any) -> Settings:
     return Settings(
         database_url=pg_url,
@@ -484,6 +514,9 @@ async def test_authoritative_wins_conflict(pg_container: str) -> None:
             source_type="openapi",
         )
         sync_run_id = uuid.uuid4()
+        await _seed_sync_run(
+            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=sync_run_id
+        )
         pf = ParsedFact(
             entity_id=entity_id,
             category="overview",
@@ -578,11 +611,17 @@ async def test_partial_sync_idempotency(pg_container: str) -> None:
         )
 
         run_id_1 = uuid.uuid4()
+        await _seed_sync_run(
+            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_1
+        )
         result1 = await catalog.upsert_synced_facts(ctx, [pf], run_id_1, source_row)
         assert result1.created == 1
 
         # Second run: same fact body.
         run_id_2 = uuid.uuid4()
+        await _seed_sync_run(
+            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_2
+        )
         pf2 = ParsedFact(
             entity_id=entity_id,
             category="api_doc",
