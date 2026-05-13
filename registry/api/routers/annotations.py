@@ -384,6 +384,7 @@ async def _triage_annotation_handler(
         annotation_id=annotation_id,
         new_status=body.status,
         triage_note=body.triage_note,
+        version_target=body.version_target,
     )
     response = _ref_to_response(ref)
     return response.model_dump(exclude_none=True)

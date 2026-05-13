@@ -818,6 +818,7 @@ def create_catalog_mcp_server(
                 annotation_id=ann_uuid,
                 new_status=new_status,
                 triage_note=triage_note,
+                version_target=version_target,
             )
         except HTTPException as exc:
             raise _http_exc_to_tool_error(exc) from exc

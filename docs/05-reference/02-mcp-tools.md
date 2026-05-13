@@ -422,7 +422,7 @@ Triage an annotation on a capability the calling tenant owns. Updates the annota
 | `annotation_id` | string (UUID) | yes | — | UUID of the annotation to triage. Must be a UUID — slugs are not accepted. |
 | `new_status` | string | yes | — | Target status. One of: `open`, `triaged`, `acknowledged`, `closed`. |
 | `triage_note` | string | no | null | Optional provider note to record with this transition. PII-scanned before storage; a block-level match raises a ToolError. |
-| `version_target` | string | no | null | Accepted but not applied. See "Relationship to REST" below. |
+| `version_target` | string | no | null | When supplied, updates the annotation's stored `version_target`. When omitted, the existing value is left unchanged. |
 
 **State transitions:** Both forward and reverse transitions are accepted — there is no enforced direction. Setting `new_status` to the annotation's current status is a no-op: the tool returns the unchanged annotation and no audit entry is written. For the full status vocabulary and lifecycle description, see the Annotations section in [api.md](01-api.md).
 
@@ -439,7 +439,7 @@ Triage an annotation on a capability the calling tenant owns. Updates the annota
 | `triage_note` | string or null | Provider note as set by this call, or the prior note if `triage_note` was not supplied |
 | `category` | string | Category value from submission |
 | `status` | string | New status as set by this call |
-| `version_target` | string or null | Version string from original submission (not updated by this call) |
+| `version_target` | string or null | Version string as set by this call, or the prior value if `version_target` was not supplied |
 | `created_at` | ISO-8601 datetime | Original submission timestamp |
 | `updated_at` | ISO-8601 datetime | Timestamp of this update |
 | `warnings` | array or absent | Present only when the PII scanner returned a warn-level match on `triage_note`. Each entry has `field` and `categories`. |
@@ -454,7 +454,7 @@ Triage an annotation on a capability the calling tenant owns. Updates the annota
 | `Invalid status '...'. Must be one of: ...` | `new_status` is not in the closed vocabulary | Use one of: `open`, `triaged`, `acknowledged`, `closed` |
 | `pii_detected in annotation.triage_note` | `triage_note` triggered a block-level PII policy | Remove or redact the sensitive content before retrying |
 
-**Relationship to REST:** This tool wraps the same service method as `PATCH /v1/annotations/{annotation_id}`. The authorization rule (caller's tenant must own the capability), the state-transition semantics, and the PII policy on `triage_note` are identical. Two differences: first, the MCP tool requires a UUID for `annotation_id`; the REST endpoint also accepts UUID-only (no slug form for annotation IDs). Second, the `version_target` parameter is accepted by the MCP tool signature but is not forwarded to the service — it has no effect. The REST `PATCH` endpoint does apply a supplied `version_target` to the annotation row. If updating `version_target` is required, use the REST endpoint directly. For the full annotation state model, see the Annotations section in [api.md](01-api.md).
+**Relationship to REST:** This tool wraps the same service method as `PATCH /v1/annotations/{annotation_id}`. The authorization rule (caller's tenant must own the capability), the state-transition semantics, and the PII policy on `triage_note` are identical. One difference: the MCP tool requires a UUID for `annotation_id`; the REST endpoint also accepts UUID-only (no slug form for annotation IDs). For the full annotation state model, see the Annotations section in [api.md](01-api.md).
 
 **Example:**
 

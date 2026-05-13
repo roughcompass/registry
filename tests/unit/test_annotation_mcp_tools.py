@@ -511,6 +511,30 @@ async def test_triage_annotation_delegates_triage_note() -> None:
     assert call_kwargs["new_status"] == "acknowledged"
 
 
+@pytest.mark.asyncio
+async def test_triage_annotation_delegates_version_target() -> None:
+    """triage_annotation forwards version_target to the service."""
+    ann_svc = MagicMock()
+    ann_svc.triage_annotation = AsyncMock(return_value=_make_annotation_ref(status="triaged"))
+    mcp = _build_mcp(annotation_service=ann_svc)
+    ctx = _make_ctx()
+
+    with patch(_PATCH_TARGET, new=AsyncMock(return_value=ctx)):
+        await _call(
+            mcp,
+            "triage_annotation",
+            {
+                "annotation_id": str(_ANN_ID),
+                "new_status": "triaged",
+                "version_target": "v1.0",
+            },
+        )
+
+    call_kwargs = ann_svc.triage_annotation.call_args.kwargs
+    assert call_kwargs["version_target"] == "v1.0"
+    assert call_kwargs["new_status"] == "triaged"
+
+
 # ---------------------------------------------------------------------------
 # 9. triage_annotation — non-owner tenant (403)
 # ---------------------------------------------------------------------------

@@ -32,6 +32,10 @@ from registry.service.annotations import (
     _decode_cursor,
     _encode_cursor,
 )
+from registry.api.routers.annotations import (
+    AnnotationTriageRequest,
+    _triage_annotation_handler,
+)
 from registry.types import FakeClock, PiiMatchResult, PiiScanResponse, TenantContext
 
 _NOW = datetime.datetime(2026, 5, 12, 12, 0, 0, tzinfo=datetime.UTC)
@@ -628,6 +632,41 @@ async def test_triage_sets_version_target() -> None:
     assert update_params is not None
     assert update_params.get("version_target") == "v2.3"
     assert "version_target = :version_target" in update_sql
+
+
+@pytest.mark.asyncio
+async def test_rest_handler_forwards_version_target() -> None:
+    """REST PATCH body with version_target='v1.0' reaches the service as version_target='v1.0'."""
+    fake_ref = AnnotationRef(
+        annotation_id=_ANNOTATION_ID,
+        tenant_id=_TENANT_A,
+        capability_id=_CAPABILITY_ID,
+        author_actor_id=uuid.uuid4(),
+        author_tenant_id=_TENANT_B,
+        body="b",
+        triage_note=None,
+        category="feedback",
+        status="triaged",
+        version_target="v1.0",
+        created_at=_NOW,
+        updated_at=_NOW,
+        warnings=None,
+    )
+    svc = MagicMock()
+    svc.triage_annotation = AsyncMock(return_value=fake_ref)
+    ctx = _provider_ctx()
+    body = AnnotationTriageRequest(status="triaged", version_target="v1.0")
+
+    await _triage_annotation_handler(
+        annotation_id=_ANNOTATION_ID,
+        body=body,
+        svc=svc,
+        ctx=ctx,
+    )
+
+    call_kwargs = svc.triage_annotation.call_args.kwargs
+    assert call_kwargs["version_target"] == "v1.0"
+    assert call_kwargs["new_status"] == "triaged"
 
 
 @pytest.mark.asyncio
