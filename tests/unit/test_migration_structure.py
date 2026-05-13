@@ -101,6 +101,53 @@ def test_mig0007_downgrade_sql_is_parameterized() -> None:
         assert ":tid" in sql_text and ":kind" in sql_text and ":value" in sql_text
 
 
+def test_mig0006_upgrade_uses_fixed_partition_origin() -> None:
+    """0006 partition DDL must not vary with the system clock.
+
+    Patches datetime.date.today() to two different values and runs upgrade()
+    in each scenario; asserts the captured op.execute SQL strings are
+    identical across runs — proving the partition names and ranges no longer
+    drift with the calendar month the migration happens to run in.
+    """
+    import datetime as _dt
+
+    mod = importlib.import_module(
+        "registry.storage.migrations.versions.0006_phase5_partitions"
+    )
+
+    def _capture_sqls(patched_today: _dt.date) -> list[str]:
+        captured: list[str] = []
+        op_execute = MagicMock(side_effect=lambda s, *_a, **_k: captured.append(str(s)))
+        # date.today is C-level and cannot be patched via patch.object; wrap
+        # the whole datetime.date attribute with a stub that only redirects
+        # today(). Other constructors (datetime.date(y, m, 1)) must still work.
+        original_date = _dt.date
+
+        class _StubDate(original_date):
+            @classmethod
+            def today(cls) -> _dt.date:
+                return patched_today
+
+        with (
+            patch.object(mod, "op", MagicMock(execute=op_execute)),
+            patch.object(mod.datetime, "date", _StubDate),
+        ):
+            mod.upgrade()
+        return captured
+
+    sqls_may = _capture_sqls(_dt.date(2026, 5, 1))
+    sqls_jun = _capture_sqls(_dt.date(2026, 6, 1))
+
+    assert sqls_may == sqls_jun, (
+        "partition DDL must not depend on the system clock; got different "
+        f"output for May vs June. May had {len(sqls_may)} stmts, "
+        f"June had {len(sqls_jun)} stmts."
+    )
+    # And both must contain the pinned origin month.
+    combined_may = "\n".join(sqls_may)
+    assert "2026_05" in combined_may, combined_may[:200]
+
+
 def test_mig0009_downgrade_sql_is_parameterized() -> None:
     """0009 downgrade DELETEs must use named placeholders for kind/value/schema_id."""
     mod = importlib.import_module(

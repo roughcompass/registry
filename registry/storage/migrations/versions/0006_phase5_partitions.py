@@ -40,6 +40,14 @@ depends_on: tuple[str, ...] | None = None
 # ---------------------------------------------------------------------------
 
 
+# Fixed origin date for monthly partitions. The original code used
+# datetime.date.today() which made the generated DDL non-deterministic — two
+# environments running the migration in different calendar months produced
+# different partition names and value ranges. Use the month the migration
+# landed (2026-05) so every environment generates the same schema.
+_PARTITION_START: datetime.date = datetime.date(2026, 5, 1)
+
+
 def _monthly_bounds(start: datetime.date, count: int) -> Iterator[tuple[str, str, str]]:
     """Yield (partition_suffix, from_iso, to_iso) for *count* consecutive months."""
     year, month = start.year, start.month
@@ -175,8 +183,7 @@ def upgrade() -> None:
     for idx_sql in _AUDIT_LOG_NEW_INDEXES:
         op.execute(idx_sql)
 
-    today = datetime.date.today()
-    start = datetime.date(today.year, today.month, 1)
+    start = _PARTITION_START
     for suffix, from_iso, to_iso in _monthly_bounds(start, 12):
         op.execute(
             f"CREATE TABLE audit_log_new_{suffix} "
