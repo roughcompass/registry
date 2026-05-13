@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import datetime
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0007_phase6_graph_primitives"
@@ -425,16 +426,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+
     # Remove system PII pattern rows (seeded above)
-    pattern_ids_csv = ", ".join(f"'{pid}'::uuid" for pid in _SYSTEM_PII_PATTERN_IDS.values())
-    op.execute(f"DELETE FROM pii_patterns WHERE pattern_id IN ({pattern_ids_csv})")
+    pattern_ids_list = [str(pid) for pid in _SYSTEM_PII_PATTERN_IDS.values()]
+    bind.execute(
+        sa.text("DELETE FROM pii_patterns WHERE pattern_id = ANY(:ids)"),
+        {"ids": pattern_ids_list},
+    )
 
     # Remove vocabulary seeds
+    _vocab_delete_sql = sa.text(
+        "DELETE FROM vocabulary_values "
+        "WHERE tenant_id = :tid AND kind = :kind AND value = :value"
+    )
     for kind, value in _VOCAB_SEEDS:
-        op.execute(
-            f"DELETE FROM vocabulary_values "
-            f"WHERE tenant_id = '{DEFAULT_TENANT_UUID}' "
-            f"AND kind = '{kind}' AND value = '{value}'"
+        bind.execute(
+            _vocab_delete_sql,
+            {"tid": DEFAULT_TENANT_UUID, "kind": kind, "value": value},
         )
 
     # Drop tables in reverse dependency order (CASCADE handles child FKs)

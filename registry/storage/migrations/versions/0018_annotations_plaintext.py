@@ -42,6 +42,7 @@ downgrade (reverse order):
 
 from __future__ import annotations
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0018_annotations_plaintext"
@@ -141,18 +142,22 @@ def upgrade() -> None:
     op.execute(_CREATE_IDX_AUTHOR)
     op.execute(_CREATE_IDX_STATUS)
 
+    bind = op.get_bind()
+    _seed_sql = sa.text(
+        "INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
+        "VALUES (:tid, :kind, :value, TRUE) "
+        "ON CONFLICT DO NOTHING"
+    )
     for value in _ANNOTATION_CATEGORY_SEEDS:
-        op.execute(
-            f"INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
-            f"VALUES ('{DEFAULT_TENANT_UUID}', 'annotation_category', '{value}', TRUE) "
-            f"ON CONFLICT DO NOTHING"
+        bind.execute(
+            _seed_sql,
+            {"tid": DEFAULT_TENANT_UUID, "kind": "annotation_category", "value": value},
         )
 
     for value in _ANNOTATION_STATUS_SEEDS:
-        op.execute(
-            f"INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
-            f"VALUES ('{DEFAULT_TENANT_UUID}', 'annotation_status', '{value}', TRUE) "
-            f"ON CONFLICT DO NOTHING"
+        bind.execute(
+            _seed_sql,
+            {"tid": DEFAULT_TENANT_UUID, "kind": "annotation_status", "value": value},
         )
 
 

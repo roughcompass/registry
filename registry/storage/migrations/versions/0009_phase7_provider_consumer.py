@@ -43,6 +43,7 @@ from __future__ import annotations
 import datetime
 import json
 
+import sqlalchemy as sa
 from alembic import op
 
 revision = "0009_phase7_provider_consumer"
@@ -410,41 +411,54 @@ def upgrade() -> None:
     op.execute(_INTEGRATION_PAIRS_TRIGGER)
 
     # --- Vocabulary seeds (idempotent) ---
+    bind = op.get_bind()
+    _vocab_insert_sql = sa.text(
+        "INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
+        "VALUES (:tid, :kind, :value, TRUE) "
+        "ON CONFLICT DO NOTHING"
+    )
     for kind, value in _VOCAB_SEEDS:
-        op.execute(
-            f"INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
-            f"VALUES ('{DEFAULT_TENANT_UUID}', '{kind}', '{value}', TRUE) "
-            f"ON CONFLICT DO NOTHING"
+        bind.execute(
+            _vocab_insert_sql,
+            {"tid": DEFAULT_TENANT_UUID, "kind": kind, "value": value},
         )
 
     # --- capability_type_schemas: integration type seed (idempotent) ---
-    schema_json = _INTEGRATION_TYPE_SCHEMA.replace("'", "''")
-    op.execute(
-        f"INSERT INTO capability_type_schemas "
-        f"(schema_id, tenant_id, type_name, json_schema, is_advisory, "
-        f" t_valid_from, t_ingested_at) "
-        f"VALUES ("
-        f"  '{_INTEGRATION_SCHEMA_ID}'::uuid,"
-        f"  '{DEFAULT_TENANT_UUID}'::uuid,"
-        f"  'integration',"
-        f"  '{schema_json}'::jsonb,"
-        f"  FALSE,"
-        f"  now(),"
-        f"  now()"
-        f") ON CONFLICT DO NOTHING"
+    bind.execute(
+        sa.text(
+            "INSERT INTO capability_type_schemas "
+            "(schema_id, tenant_id, type_name, json_schema, is_advisory, "
+            " t_valid_from, t_ingested_at) "
+            "VALUES (:schema_id, :tid, 'integration', CAST(:schema_json AS jsonb), "
+            "        FALSE, now(), now()) "
+            "ON CONFLICT DO NOTHING"
+        ),
+        {
+            "schema_id": _INTEGRATION_SCHEMA_ID,
+            "tid": DEFAULT_TENANT_UUID,
+            "schema_json": _INTEGRATION_TYPE_SCHEMA,
+        },
     )
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+
     # --- Remove capability_type_schemas seed ---
-    op.execute(f"DELETE FROM capability_type_schemas " f"WHERE schema_id = '{_INTEGRATION_SCHEMA_ID}'::uuid")
+    bind.execute(
+        sa.text("DELETE FROM capability_type_schemas WHERE schema_id = :schema_id"),
+        {"schema_id": _INTEGRATION_SCHEMA_ID},
+    )
 
     # --- Remove vocabulary seeds ---
+    _vocab_delete_sql = sa.text(
+        "DELETE FROM vocabulary_values "
+        "WHERE tenant_id = :tid AND kind = :kind AND value = :value"
+    )
     for kind, value in _VOCAB_SEEDS:
-        op.execute(
-            f"DELETE FROM vocabulary_values "
-            f"WHERE tenant_id = '{DEFAULT_TENANT_UUID}' "
-            f"AND kind = '{kind}' AND value = '{value}'"
+        bind.execute(
+            _vocab_delete_sql,
+            {"tid": DEFAULT_TENANT_UUID, "kind": kind, "value": value},
         )
 
     # --- Drop trigger + function before dropping integration_pairs ---
