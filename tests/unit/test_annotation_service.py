@@ -24,6 +24,10 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi import HTTPException
 
+from registry.api.routers.annotations import (
+    AnnotationTriageRequest,
+    _triage_annotation_handler,
+)
 from registry.service.annotations import (
     VALID_CATEGORIES,
     VALID_STATUSES,
@@ -31,10 +35,6 @@ from registry.service.annotations import (
     AnnotationService,
     _decode_cursor,
     _encode_cursor,
-)
-from registry.api.routers.annotations import (
-    AnnotationTriageRequest,
-    _triage_annotation_handler,
 )
 from registry.types import FakeClock, PiiMatchResult, PiiScanResponse, TenantContext
 
@@ -694,6 +694,40 @@ async def test_triage_preserves_version_target_when_omitted() -> None:
     update_sqls = [sql for sql in session._executed if sql.upper().lstrip().startswith("UPDATE")]
     assert len(update_sqls) == 1
     assert "version_target" not in update_sqls[0]
+
+
+@pytest.mark.asyncio
+async def test_triage_without_triage_note_preserves_existing_note_in_db() -> None:
+    """Omitting triage_note leaves the stored note intact; SET clause does not name it."""
+    pre_existing = _open_annotation_row()
+    pre_existing["triage_note"] = "Awaiting vendor response."
+    session = _make_session(annotation_row=pre_existing)
+    svc = AnnotationService(
+        session_factory=_make_factory(session),
+        visibility_svc=_visibility(),
+        pii_scanner=_pii_clean(),
+        audit_writer=_audit_writer(),
+        clock=FakeClock(_NOW),
+    )
+    ctx = _provider_ctx()
+
+    ref = await svc.triage_annotation(ctx, _ANNOTATION_ID, new_status="triaged")
+
+    # Pre-triage value is preserved on the returned ref.
+    assert ref.triage_note == "Awaiting vendor response."
+
+    # The UPDATE's SET clause does not mention triage_note — the column is
+    # omitted entirely so the stored value is left unchanged. Bind params do
+    # not include triage_note either.
+    update_idx = next(
+        i for i, sql in enumerate(session._executed)
+        if sql.upper().lstrip().startswith("UPDATE")
+    )
+    update_sql = session._executed[update_idx]
+    update_params = session._executed_params[update_idx]
+    assert "triage_note" not in update_sql
+    assert update_params is not None
+    assert "triage_note" not in update_params
 
 
 # ---------------------------------------------------------------------------

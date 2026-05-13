@@ -402,37 +402,33 @@ class AnnotationService:
         now = self._clock.now()
         old_status = annotation.status
 
-        # Step 6 — UPDATE status, triage_note, optionally version_target, and
-        # updated_at. version_target follows None-as-no-change semantics: when
-        # the caller omits it, the column is left out of the SET clause so the
-        # stored value is preserved. Two literal SQL branches keep the SET
-        # clause fully static in either path.
+        # Step 6 — UPDATE status, updated_at, and optionally triage_note /
+        # version_target. Both optional columns follow None-as-no-change
+        # semantics: when the caller omits a value, the column is left out of
+        # the SET clause so the stored value is preserved. The SET clause is
+        # assembled from a fixed set of literal column-fragment strings — no
+        # user input enters the SQL text.
+        # TODO: clearing triage_note or version_target to NULL requires a
+        # sentinel (e.g. empty string) — not yet supported.
+        set_parts = ["status = :new_status", "updated_at = :now"]
         params: dict[str, Any] = {
             "new_status": new_status,
-            "triage_note": triage_note,
             "now": now,
             "annotation_id": annotation_id,
         }
+        if triage_note is not None:
+            set_parts.append("triage_note = :triage_note")
+            params["triage_note"] = triage_note
         if version_target is not None:
-            update_sql = """
-                UPDATE capability_annotations
-                SET status = :new_status,
-                    triage_note = :triage_note,
-                    version_target = :version_target,
-                    updated_at = :now
-                WHERE annotation_id = :annotation_id
-                  AND t_invalidated_at IS NULL
-            """
+            set_parts.append("version_target = :version_target")
             params["version_target"] = version_target
-        else:
-            update_sql = """
-                UPDATE capability_annotations
-                SET status = :new_status,
-                    triage_note = :triage_note,
-                    updated_at = :now
-                WHERE annotation_id = :annotation_id
-                  AND t_invalidated_at IS NULL
-            """
+
+        update_sql = (
+            "UPDATE capability_annotations "
+            f"SET {', '.join(set_parts)} "
+            "WHERE annotation_id = :annotation_id "
+            "  AND t_invalidated_at IS NULL"
+        )
 
         async with self._session_factory() as session, session.begin():
             await session.execute(text(update_sql), params)
