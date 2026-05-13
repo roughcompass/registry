@@ -344,13 +344,12 @@ class ClosureRefreshWorker:
             if closure_rows:
                 # Build one bulk INSERT ... VALUES (...), (...) ... ON CONFLICT DO UPDATE.
                 #
-                # Array columns (edge_path uuid[], edge_rels text[]) are embedded as
-                # PostgreSQL array literals rather than bound parameters because asyncpg
-                # requires Python-native list types for ARRAY bind params, but the UUID[]
-                # column expects uuid-typed elements — casting each element via a Python
-                # list would require extra driver-level type annotations.  The values
-                # here are all derived from the CTE output (valid UUIDs and edge-rel
-                # strings); no user-supplied content flows through this path.
+                # edge_path (uuid[]) is embedded as a PostgreSQL array literal of
+                # UUID strings — `str(uuid.UUID(...))` is always hex-and-dash so
+                # the literal cannot be malformed by its contents. edge_rels
+                # (text[]) is bound out-of-band as a Python list so arbitrary
+                # rel strings (including ones containing single quotes) cannot
+                # malform the SQL even if the rel vocabulary widens later.
                 value_fragments: list[str] = []
                 params: dict[str, Any] = {"refreshed_at": now}
 
@@ -358,12 +357,13 @@ class ClosureRefreshWorker:
                     edge_path_list: list[uuid.UUID] = r["edge_path"]
                     edge_rels_list: list[str] = r["edge_rels"]
 
+                    edge_rels_key = f"edge_rels_{idx}"
+                    params[edge_rels_key] = list(edge_rels_list)
+
                     if edge_path_list:
                         edge_path_sql = "ARRAY[" + ", ".join(f"'{str(e)}'::uuid" for e in edge_path_list) + "]::uuid[]"
-                        edge_rels_sql = "ARRAY[" + ", ".join(f"'{rel}'" for rel in edge_rels_list) + "]::text[]"
                     else:
                         edge_path_sql = "ARRAY[]::uuid[]"
-                        edge_rels_sql = "ARRAY[]::text[]"
 
                     tid_key = f"tid_{idx}"
                     root_key = f"root_{idx}"
@@ -379,7 +379,7 @@ class ClosureRefreshWorker:
 
                     value_fragments.append(
                         f"(gen_random_uuid(), :{tid_key}, :{root_key}, :{member_key},"
-                        f" :{dir_key}, :{depth_key}, {edge_path_sql}, {edge_rels_sql}, :refreshed_at)"
+                        f" :{dir_key}, :{depth_key}, {edge_path_sql}, :{edge_rels_key}::text[], :refreshed_at)"
                     )
 
                 bulk_sql = (
