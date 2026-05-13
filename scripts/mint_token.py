@@ -47,9 +47,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--expires-days",
         type=int,
         default=None,
-        help="Days until token expires; omit for non-expiring",
+        metavar="N",
+        help="Number of days until token expiry (minimum 1); omit for non-expiring",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.expires_days is not None and args.expires_days < 1:
+        # 0 or negative would mint an already-expired token: the CLI exits 0
+        # and prints the token, then every API call using it returns 401 —
+        # a confusing double-failure in time-pressured incidents. Fail at
+        # argument-parse time instead.
+        parser.error("--expires-days must be a positive integer (minimum 1)")
+    return args
 
 
 async def _mint(args: argparse.Namespace) -> str:
