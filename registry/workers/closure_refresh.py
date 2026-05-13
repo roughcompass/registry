@@ -49,6 +49,21 @@ _COOLDOWN_S: int = 60
 _BATCH_SIZE: int = 50
 
 
+# SQL template for _claim_batch — defined at module scope so a test can pin
+# the literal interval at import time. The cooldown is embedded directly
+# rather than substituted via str.replace() so SQLAlchemy's named-parameter
+# binding is not bypassed and asyncpg's prepared-statement cache stays warm.
+_CLAIM_BATCH_SQL: str = """
+    SELECT outbox_id, tenant_id, edge_id, attempts, enqueued_at
+    FROM   closure_outbox
+    WHERE  last_error IS NULL
+       OR  last_attempt_at < now() - interval '60 seconds'
+    ORDER  BY enqueued_at
+    LIMIT  :batch_size
+    FOR UPDATE SKIP LOCKED
+"""
+
+
 class ClosureRefreshWorker:
     """Drains ``closure_outbox`` and keeps ``closure_cache`` consistent.
 
@@ -159,17 +174,7 @@ class ClosureRefreshWorker:
         """
         async with self._session_factory() as session, session.begin():
             result = await session.execute(
-                text(
-                    """
-                    SELECT outbox_id, tenant_id, edge_id, attempts, enqueued_at
-                    FROM   closure_outbox
-                    WHERE  last_error IS NULL
-                       OR  last_attempt_at < now() - interval ':cooldown seconds'
-                    ORDER  BY enqueued_at
-                    LIMIT  :batch_size
-                    FOR UPDATE SKIP LOCKED
-                    """.replace(":cooldown", str(_COOLDOWN_S))
-                ),
+                text(_CLAIM_BATCH_SQL),
                 {"batch_size": self._batch_size},
             )
             return [dict(r) for r in result.mappings().all()]
