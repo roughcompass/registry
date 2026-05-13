@@ -23,8 +23,15 @@ import os
 import sys
 from pathlib import Path
 
-from registry.config import Settings
-from registry.main import create_app
+# Ensure the repo root is importable when invoked as a subprocess from
+# arbitrary cwd. Without this, `from registry.X import Y` raises
+# ModuleNotFoundError.
+_REPO_ROOT = Path(__file__).parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from registry.config import Settings  # noqa: E402
+from registry.main import create_app  # noqa: E402
 
 _OUT = Path(__file__).parent.parent / "openapi.json"
 

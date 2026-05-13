@@ -327,6 +327,91 @@
         "title": "AffectedConsumer",
         "type": "object"
       },
+      "AnnotationCreateRequest": {
+        "description": "Request body for POST /v1/capabilities/{capability_id}/annotations.",
+        "properties": {
+          "body": {
+            "description": "Annotation text (min 1 character).",
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "category": {
+            "description": "Annotation category. Must be one of: bug, doc_gap, feedback, question, suggestion.",
+            "title": "Category",
+            "type": "string"
+          },
+          "triage_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider triage note.",
+            "title": "Triage Note"
+          },
+          "version_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional version string this annotation targets.",
+            "title": "Version Target"
+          }
+        },
+        "required": [
+          "body",
+          "category"
+        ],
+        "title": "AnnotationCreateRequest",
+        "type": "object"
+      },
+      "AnnotationTriageRequest": {
+        "description": "Request body for PATCH /v1/annotations/{annotation_id}.",
+        "properties": {
+          "status": {
+            "description": "Annotation triage status. Must be one of: acknowledged, closed, open, triaged.",
+            "title": "Status",
+            "type": "string"
+          },
+          "triage_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional provider triage note.",
+            "title": "Triage Note"
+          },
+          "version_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional version string this annotation targets.",
+            "title": "Version Target"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AnnotationTriageRequest",
+        "type": "object"
+      },
       "ArtifactListResponse": {
         "description": "Paginated artifact list. Same envelope shape as CapabilityListResponse.\n\n``items`` carry the artifact rows shaped per the ``?fields=`` param;\ncallers that want the full body must opt in via\n``?fields=fact_id,category,title,body_format,created_at,body``.\n\n``next_cursor`` is ``None`` when no further pages exist; pass it as\n``cursor=`` on the next request to retrieve the following page.",
         "properties": {
@@ -1668,6 +1753,111 @@
         "title": "EntityRefResponse",
         "type": "object"
       },
+      "EntryCreateRequest": {
+        "description": "Request body for POST /v1/workspaces/{workspace_id}/entries.",
+        "properties": {
+          "body_md": {
+            "description": "Entry body in Markdown (min 1 character).",
+            "minLength": 1,
+            "title": "Body Md",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional ISO-8601 expiry timestamp for time-limited entries.",
+            "title": "Expires At"
+          },
+          "kind": {
+            "description": "Entry kind. Must be one of: note, decision, open_question, saved_query, saved_view, private_annotation.",
+            "title": "Kind",
+            "type": "string"
+          },
+          "reference_ids": {
+            "description": "Optional list of entity UUIDs this entry references.",
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Reference Ids",
+            "type": "array"
+          },
+          "references_jsonb": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional structured references (arbitrary JSON object).",
+            "title": "References Jsonb"
+          }
+        },
+        "required": [
+          "kind",
+          "body_md"
+        ],
+        "title": "EntryCreateRequest",
+        "type": "object"
+      },
+      "EntryUpdateRequest": {
+        "description": "Request body for PATCH /v1/workspaces/{workspace_id}/entries/{entry_id}.",
+        "properties": {
+          "body_md": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New entry body.",
+            "title": "Body Md"
+          },
+          "reference_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New reference_ids list. Replaces the existing list.",
+            "title": "Reference Ids"
+          },
+          "references_jsonb": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New structured references. Replaces the existing object.",
+            "title": "References Jsonb"
+          }
+        },
+        "title": "EntryUpdateRequest",
+        "type": "object"
+      },
       "ExternalIdCreate": {
         "properties": {
           "external_id": {
@@ -2966,6 +3156,288 @@
         "title": "PreviewVersionRequest",
         "type": "object"
       },
+      "ProgressionDefinitionCreate": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "is_advisory": {
+            "default": true,
+            "title": "Is Advisory",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entity_type",
+          "definition"
+        ],
+        "title": "ProgressionDefinitionCreate",
+        "type": "object"
+      },
+      "ProgressionDefinitionResponse": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "is_advisory": {
+            "title": "Is Advisory",
+            "type": "boolean"
+          },
+          "progression_id": {
+            "format": "uuid",
+            "title": "Progression Id",
+            "type": "string"
+          },
+          "t_ingested_at": {
+            "format": "date-time",
+            "title": "T Ingested At",
+            "type": "string"
+          },
+          "t_invalidated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Invalidated At"
+          },
+          "t_valid_from": {
+            "format": "date-time",
+            "title": "T Valid From",
+            "type": "string"
+          },
+          "t_valid_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Valid To"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "progression_id",
+          "tenant_id",
+          "entity_type",
+          "definition",
+          "is_advisory",
+          "t_valid_from",
+          "t_valid_to",
+          "t_ingested_at",
+          "t_invalidated_at"
+        ],
+        "title": "ProgressionDefinitionResponse",
+        "type": "object"
+      },
+      "ProgressionDefinitionUpdate": {
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "dry_run": {
+            "default": false,
+            "title": "Dry Run",
+            "type": "boolean"
+          },
+          "force": {
+            "default": false,
+            "title": "Force",
+            "type": "boolean"
+          },
+          "force_timeout_seconds": {
+            "default": 30.0,
+            "title": "Force Timeout Seconds",
+            "type": "number"
+          },
+          "is_advisory": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Advisory"
+          },
+          "migration_plan": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Migration Plan"
+          }
+        },
+        "required": [
+          "definition"
+        ],
+        "title": "ProgressionDefinitionUpdate",
+        "type": "object"
+      },
+      "ProgressionOverrideCreate": {
+        "properties": {
+          "bypass_skip_rules": {
+            "default": false,
+            "title": "Bypass Skip Rules",
+            "type": "boolean"
+          },
+          "from_state": {
+            "title": "From State",
+            "type": "string"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "t_valid_to": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "T Valid To"
+          },
+          "to_state": {
+            "title": "To State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "from_state",
+          "to_state",
+          "gate_id",
+          "reason"
+        ],
+        "title": "ProgressionOverrideCreate",
+        "type": "object"
+      },
+      "ProgressionOverrideResponse": {
+        "properties": {
+          "audit_event_id": {
+            "format": "uuid",
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "authorized_by": {
+            "format": "uuid",
+            "title": "Authorized By",
+            "type": "string"
+          },
+          "bypass_skip_rules": {
+            "title": "Bypass Skip Rules",
+            "type": "boolean"
+          },
+          "consumed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Consumed At"
+          },
+          "entity_id": {
+            "format": "uuid",
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "from_state": {
+            "title": "From State",
+            "type": "string"
+          },
+          "gate_id": {
+            "title": "Gate Id",
+            "type": "string"
+          },
+          "override_id": {
+            "format": "uuid",
+            "title": "Override Id",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "t_valid_from": {
+            "format": "date-time",
+            "title": "T Valid From",
+            "type": "string"
+          },
+          "t_valid_to": {
+            "format": "date-time",
+            "title": "T Valid To",
+            "type": "string"
+          },
+          "tenant_id": {
+            "format": "uuid",
+            "title": "Tenant Id",
+            "type": "string"
+          },
+          "to_state": {
+            "title": "To State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "override_id",
+          "tenant_id",
+          "entity_id",
+          "from_state",
+          "to_state",
+          "gate_id",
+          "bypass_skip_rules",
+          "reason",
+          "authorized_by",
+          "t_valid_from",
+          "t_valid_to",
+          "consumed_at",
+          "audit_event_id"
+        ],
+        "title": "ProgressionOverrideResponse",
+        "type": "object"
+      },
       "ProjectionResponse": {
         "description": "HTTP response shape for GET /v1/graph/provider and /v1/graph/consumer.\n\nMaps one-to-one to ``registry.service.projections.Projection``.\n``next_cursor`` is None when no further pages exist; pass it as ``cursor=``\non the next request to retrieve the following page.",
         "properties": {
@@ -3001,6 +3473,30 @@
           "next_cursor"
         ],
         "title": "ProjectionResponse",
+        "type": "object"
+      },
+      "PurgeResultResponse": {
+        "description": "JSON shape returned by DELETE /v1/admin/actors/{actor_id}/personal-data.",
+        "properties": {
+          "purged_entries": {
+            "title": "Purged Entries",
+            "type": "integer"
+          },
+          "purged_workspaces": {
+            "title": "Purged Workspaces",
+            "type": "integer"
+          },
+          "revoked_shares": {
+            "title": "Revoked Shares",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "purged_entries",
+          "purged_workspaces",
+          "revoked_shares"
+        ],
+        "title": "PurgeResultResponse",
         "type": "object"
       },
       "RoleResponse": {
@@ -3140,6 +3636,35 @@
           "visibility"
         ],
         "title": "SetVisibilityRequest",
+        "type": "object"
+      },
+      "ShareCreateRequest": {
+        "description": "Request body for POST /v1/workspaces/{workspace_id}/shares.",
+        "properties": {
+          "grantee_actor_id": {
+            "description": "UUID of the actor being granted access.",
+            "format": "uuid",
+            "title": "Grantee Actor Id",
+            "type": "string"
+          },
+          "grantee_tenant_id": {
+            "description": "UUID of the grantee's tenant.",
+            "format": "uuid",
+            "title": "Grantee Tenant Id",
+            "type": "string"
+          },
+          "role": {
+            "description": "Share role. Must be 'reader' or 'contributor'.",
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grantee_actor_id",
+          "grantee_tenant_id",
+          "role"
+        ],
+        "title": "ShareCreateRequest",
         "type": "object"
       },
       "SubscriptionCreate": {
@@ -4151,6 +4676,84 @@
         ],
         "title": "WhoAmIResponse",
         "type": "object"
+      },
+      "WorkspaceCreateRequest": {
+        "description": "Request body for POST /v1/workspaces.",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional description.",
+            "title": "Description"
+          },
+          "name": {
+            "description": "Workspace name (min 1 character).",
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_kind": {
+            "description": "Workspace ownership model. Must be 'actor' (personal) or 'tenant' (team).",
+            "title": "Owner Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "owner_kind"
+        ],
+        "title": "WorkspaceCreateRequest",
+        "type": "object"
+      },
+      "WorkspaceUpdateRequest": {
+        "description": "Request body for PATCH /v1/workspaces/{workspace_id}.",
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "ISO-8601 timestamp to archive. Pass null to un-archive.",
+            "title": "Archived At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New description. Pass null to clear.",
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "New workspace name.",
+            "title": "Name"
+          }
+        },
+        "title": "WorkspaceUpdateRequest",
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -4361,6 +4964,50 @@
         "summary": "Get Actor",
         "tags": [
           "admin: actors"
+        ]
+      }
+    },
+    "/v1/admin/actors/{actor_id}/personal-data": {
+      "delete": {
+        "description": "Physically delete all workspace content authored by actor_id.\n\nThis endpoint fulfills right-to-be-forgotten (RTBF) requests for workspace\ndata. It performs a hard DELETE (not a soft-delete) across:\n\n- workspace_entries created by the actor\n- actor-owned workspaces that are now empty after entry deletion\n- active workspace shares granted TO the actor (revoke, not delete)\n\nworkspace_share_acceptances rows are retained as an audit trail of\nhistorical cross-tenant access events. They contain an opaque actor\nidentifier, not authored content, and their retention is consistent with\naudit-integrity requirements.\n\nThe operation is idempotent. A second call returns counts of 0.\n\nReturns 200 with PurgeResult counts (not 204) so the admin caller can\nconfirm what was actually purged.\n\nRaises 403 if the caller does not hold the admin role.",
+        "operationId": "delete_actor_personal_data_v1_admin_actors__actor_id__personal_data_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "actor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Actor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PurgeResultResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Purge all workspace personal data for an actor (RTBF).",
+        "tags": [
+          "admin: workspaces"
         ]
       }
     },
@@ -5898,6 +6545,451 @@
         ]
       }
     },
+    "/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides": {
+      "get": {
+        "description": "List progression overrides for an entity with optional filters.\n\nQuery parameters:\n  consumed=true   \u2014 only overrides where consumed_at IS NOT NULL\n  consumed=false  \u2014 only overrides where consumed_at IS NULL\n  expired=true    \u2014 only overrides where t_valid_to < now()\n  expired=false   \u2014 only overrides where t_valid_to >= now()\n  from_state      \u2014 exact match on from_state\n  to_state        \u2014 exact match on to_state",
+        "operationId": "list_progression_overrides_v1_admin_tenants__tenant_id__entities__entity_id__progression_overrides_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "consumed",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Consumed"
+            }
+          },
+          {
+            "in": "query",
+            "name": "expired",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Expired"
+            }
+          },
+          {
+            "in": "query",
+            "name": "from_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "From State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "To State"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressionOverrideResponse"
+                  },
+                  "title": "Response List Progression Overrides V1 Admin Tenants  Tenant Id  Entities  Entity Id  Progression Overrides Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Progression Overrides",
+        "tags": [
+          "admin: progression"
+        ]
+      },
+      "post": {
+        "description": "Create a single-use progression gate override for a specific entity.\n\nFollows audit-before-commit ordering: the audit_log row is written and\ncommitted in its own transaction before the override row is inserted.\nIf the audit write fails the override is never created \u2014 a silently-created\noverride with no audit record is structurally impossible.\n\nDefault t_valid_to: now + 1 hour when the caller omits the field.\nDefault bypass_skip_rules: False \u2014 must be an explicit opt-in.\nauthorized_by is always set to the actor making the request.",
+        "operationId": "create_progression_override_v1_admin_tenants__tenant_id__entities__entity_id__progression_overrides_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressionOverrideCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressionOverrideResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Progression Override",
+        "tags": [
+          "admin: progression"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/progression-definitions": {
+      "get": {
+        "description": "Return all currently-active progression definitions for the tenant.\n\nActive means: t_valid_to IS NULL AND t_invalidated_at IS NULL.",
+        "operationId": "list_progression_definitions_v1_admin_tenants__tenant_id__progression_definitions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ProgressionDefinitionResponse"
+                  },
+                  "title": "Response List Progression Definitions V1 Admin Tenants  Tenant Id  Progression Definitions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Progression Definitions",
+        "tags": [
+          "admin: progression"
+        ]
+      },
+      "post": {
+        "description": "Create the first progression definition for a (tenant, entity_type) pair.\n\nValidates the definition JSONB against the meta-schema before persisting.\nReturns 422 with structured error paths on schema violations.\nReturns 403 if the caller does not hold the admin role.\n\nThe tenant_id in the URL must match the caller's tenant \u2014 the admin role\ndependency already resolves the tenant from the token; cross-tenant writes\nare rejected because ctx.tenant_id will not match a different tenant_id path\nparameter (enforced below).",
+        "operationId": "create_progression_definition_v1_admin_tenants__tenant_id__progression_definitions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressionDefinitionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressionDefinitionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Progression Definition",
+        "tags": [
+          "admin: progression"
+        ]
+      }
+    },
+    "/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}": {
+      "delete": {
+        "description": "Soft-delete a progression definition by setting t_valid_to = now.\n\nNo successor row is inserted. t_invalidated_at remains NULL.\nEmits audit event progression.definition.soft_deleted.\nReturns 404 if not found or not owned by this tenant.",
+        "operationId": "soft_delete_progression_definition_v1_admin_tenants__tenant_id__progression_definitions__progression_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "progression_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Progression Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft Delete Progression Definition",
+        "tags": [
+          "admin: progression"
+        ]
+      },
+      "get": {
+        "description": "Return a specific progression definition by progression_id.\n\nReturns 404 if the row does not exist or belongs to a different tenant.",
+        "operationId": "get_progression_definition_v1_admin_tenants__tenant_id__progression_definitions__progression_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "progression_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Progression Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressionDefinitionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Progression Definition",
+        "tags": [
+          "admin: progression"
+        ]
+      },
+      "put": {
+        "description": "Supersede a progression definition \u2014 inserts a new row and closes the active one.\n\nThe progression_id in the URL identifies which active definition to supersede.\nA new row is inserted; the previously-active row for the same (tenant_id,\nentity_type) has its t_valid_to set to now. Both writes happen in a single\ntransaction so there is never a gap or overlap in the validity window.\n\nWhen the incoming body flips is_advisory from True to False, a pre-flight scan\nruns before writing. The scan validates every entity of the same (tenant_id,\nentity_type) against the proposed enforcing definition and collects offenders.\nFour outcome paths:\n\n- dry_run=True: return 200 with offender list; do NOT write.\n- force=True + migration_plan: skip scan, write immediately; migration_plan is\n  recorded in the audit payload so the bypass is discoverable.\n- force=True without migration_plan: return 400.\n- Scan times out (force_timeout_seconds exceeded): return 409 with partial results.\n- Offenders found with force=False: return 409 with offender list.\n- Zero offenders: write normally.\n\nValidates the new definition JSONB before writing.\nEmits audit event progression.definition.published.",
+        "operationId": "supersede_progression_definition_v1_admin_tenants__tenant_id__progression_definitions__progression_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "progression_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Progression Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProgressionDefinitionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProgressionDefinitionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Supersede Progression Definition",
+        "tags": [
+          "admin: progression"
+        ]
+      }
+    },
     "/v1/admin/tokens": {
       "post": {
         "operationId": "mint_token_v1_admin_tokens_post",
@@ -6212,6 +7304,97 @@
         ]
       }
     },
+    "/v1/annotations/{annotation_id}": {
+      "delete": {
+        "description": "Soft-delete an annotation. Idempotent \u2014 second call returns 204 unchanged.\n\nAuthorization: the annotation's author OR a producer/admin in the capability's\nowner tenant can delete. The service enforces this check and treats an already-\ndeleted annotation as a no-op rather than a 404.",
+        "operationId": "_delete_annotation_handler_v1_annotations__annotation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Annotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete an annotation (idempotent)",
+        "tags": [
+          "annotations"
+        ]
+      },
+      "patch": {
+        "description": "Triage an annotation \u2014 update its status and optionally set a triage note.\n\nAuthorization: the caller's tenant must own the capability the annotation\nbelongs to. The service enforces this check before applying any update.\n\nReturns 200 with the updated AnnotationResponse. A warn-level PII hit on\ntriage_note populates the top-level ``warnings`` list in the response.\n\nAn invalid status value is rejected with 422 (service-layer vocabulary check).",
+        "operationId": "_triage_annotation_handler_v1_annotations__annotation_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Annotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Triage Annotation Handler V1 Annotations  Annotation Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Triage an annotation (update status / triage note)",
+        "tags": [
+          "annotations"
+        ]
+      }
+    },
     "/v1/capabilities": {
       "get": {
         "description": "Paginated list of capabilities visible to the caller's tenant.\n\nPagination is keyset-based: the response carries ``next_cursor`` (or null\nwhen no further pages exist). Pass ``cursor=<value>`` on the next request\nto retrieve the following page.\n\nThe legacy ``?page=N`` offset parameter is no longer accepted. Clients\nthat send it receive a 422 with code ``page_param_deprecated``.",
@@ -6381,6 +7564,146 @@
         "summary": "Create Capability",
         "tags": [
           "capabilities"
+        ]
+      }
+    },
+    "/v1/capabilities/{capability_id}/annotations": {
+      "get": {
+        "description": "List annotations on a capability.\n\nProvider path: caller's tenant owns the capability \u2192 returns all active\nannotations, optionally filtered by status.\n\nAuthor path: caller's tenant does not own the capability \u2192 returns only\nannotations where author_tenant_id == caller's tenant. Receiving an empty\nlist is not a 403 \u2014 it means the caller has no authored annotations on this\ncapability.\n\nCursor-paginated on (t_ingested_at ASC, annotation_id ASC).",
+        "operationId": "list_annotations_v1_capabilities__capability_id__annotations_get",
+        "parameters": [
+          {
+            "description": "Capability UUID",
+            "in": "path",
+            "name": "capability_id",
+            "required": true,
+            "schema": {
+              "description": "Capability UUID",
+              "format": "uuid",
+              "title": "Capability Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by annotation status (open/triaged/acknowledged/closed).",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by annotation status (open/triaged/acknowledged/closed).",
+              "title": "Status"
+            }
+          },
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Annotations V1 Capabilities  Capability Id  Annotations Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List annotations on a capability",
+        "tags": [
+          "annotations"
+        ]
+      },
+      "post": {
+        "description": "Submit a new annotation on a capability.\n\nThe caller must be able to see the capability \u2014 the service enforces this\nvia assert_visible before writing the row.\n\nReturns 201 with the full AnnotationResponse. When the PII scanner fires a\nwarn-level policy on the annotation body, the response includes a top-level\n``warnings`` list; clients should surface this to the submitting actor.\n\nPydantic rejects empty body strings and unknown category values with 422\nbefore the service is called. Category values outside the closed vocabulary\nare also rejected by the service with 422 as a defense-in-depth check.",
+        "operationId": "create_annotation_v1_capabilities__capability_id__annotations_post",
+        "parameters": [
+          {
+            "description": "Capability UUID",
+            "in": "path",
+            "name": "capability_id",
+            "required": true,
+            "schema": {
+              "description": "Capability UUID",
+              "format": "uuid",
+              "title": "Capability Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Annotation V1 Capabilities  Capability Id  Annotations Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Submit an annotation on a capability",
+        "tags": [
+          "annotations"
         ]
       }
     },
@@ -9280,6 +10603,778 @@
         "summary": "Whoami",
         "tags": [
           "whoami"
+        ]
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "description": "List workspaces the calling actor can see.\n\nReturns workspaces where the caller is the owning actor, any member of the\nowning tenant, or holds an active workspace share. Excludes soft-deleted rows.\nExcludes archived rows unless include_archived=true.\n\nCursor-paginated on workspace_id ascending.",
+        "operationId": "list_workspaces_v1_workspaces_get",
+        "parameters": [
+          {
+            "description": "Include archived workspaces (default false).",
+            "in": "query",
+            "name": "include_archived",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include archived workspaces (default false).",
+              "title": "Include Archived",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Workspaces V1 Workspaces Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List workspaces visible to the caller",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "post": {
+        "description": "Create a new workspace.\n\nowner_kind='actor' creates a personal workspace tied to the calling actor.\nowner_kind='tenant' creates a team workspace owned by the calling actor's tenant.\n\nRegulated tenants (is_regulated=true) cannot create workspaces at encryption\ntier 'none' \u2014 the service returns 422 with an actionable message explaining\nthat a higher encryption tier is required. This is a program constraint\n(ENC phase dependency), not a bug.\n\nInvalid owner_kind values are rejected with 422 by the service.",
+        "operationId": "create_workspace_v1_workspaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Workspace V1 Workspaces Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/search": {
+      "get": {
+        "description": "Search workspace entries visible to the calling actor.\n\nReturns entries from workspaces the caller owns or holds an active share on.\nNo entry from a workspace the caller cannot access is ever included.\n\nFilters are AND-combined:\n- q: full-text search on body_md using the GIN index.\n- kind: exact match on entry kind.\n- owner_actor_id: restrict to workspaces owned by this actor (caller or admin only).\n- reference_ids: comma-separated UUIDs; entry must contain ALL of them.\n\nCursor-paginated on entry_id ascending. total_count is null when the service\nomits it for performance \u2014 use next_cursor as the canonical pagination signal.",
+        "operationId": "search_workspaces_v1_workspaces_search_get",
+        "parameters": [
+          {
+            "description": "Full-text search string (optional).",
+            "in": "query",
+            "name": "q",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Full-text search string (optional).",
+              "title": "Q"
+            }
+          },
+          {
+            "description": "Filter by entry kind (optional).",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by entry kind (optional).",
+              "title": "Kind"
+            }
+          },
+          {
+            "description": "Filter by workspace owner actor UUID (optional; self or admin only).",
+            "in": "query",
+            "name": "owner_actor_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by workspace owner actor UUID (optional; self or admin only).",
+              "title": "Owner Actor Id"
+            }
+          },
+          {
+            "description": "Comma-separated list of reference UUIDs. Entry must contain all of them.",
+            "in": "query",
+            "name": "reference_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Comma-separated list of reference UUIDs. Entry must contain all of them.",
+              "title": "Reference Ids"
+            }
+          },
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Search Workspaces V1 Workspaces Search Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search workspace entries visible to the caller",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}": {
+      "delete": {
+        "description": "Soft-delete a workspace. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: the caller must be the owning actor or an admin in the\nworkspace's owning tenant. The service sets t_invalidated_at and treats\nalready-deleted workspaces as a no-op rather than an error.",
+        "operationId": "_delete_workspace_handler_v1_workspaces__workspace_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete a workspace (idempotent)",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "get": {
+        "description": "Return a single workspace by ID.\n\nThe service enforces visibility: the caller must own the workspace or hold\nan active share. Raises 403 if not authorized, 404 if not found.",
+        "operationId": "_get_workspace_handler_v1_workspaces__workspace_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Get Workspace Handler V1 Workspaces  Workspace Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get a workspace by ID",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "patch": {
+        "description": "Update a workspace's name, description, or archived_at.\n\nAuthorization: the caller must be the owning actor or an admin in the\nworkspace's owning tenant. Share holders cannot update. The service enforces\nthis check before applying any change.\n\nPass archived_at=null to un-archive a workspace. Omit a field to leave it\nunchanged (name and description are partial-update safe).",
+        "operationId": "_update_workspace_handler_v1_workspaces__workspace_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Update Workspace Handler V1 Workspaces  Workspace Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a workspace (name, description, archived_at)",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/entries": {
+      "get": {
+        "description": "List active entries in a workspace.\n\nAccess is gated by workspace visibility \u2014 the caller must own the workspace\nor hold an active share. The service raises 403/404 before returning entries.\n\nExcludes soft-deleted entries. Entries past their expires_at are still\nreturned; the expiry worker invalidates them in a background run.\n\nCursor-paginated on entry_id ascending.",
+        "operationId": "list_entries_v1_workspaces__workspace_id__entries_get",
+        "parameters": [
+          {
+            "description": "Workspace UUID",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "Workspace UUID",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Filter by entry kind (optional).",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by entry kind (optional).",
+              "title": "Kind"
+            }
+          },
+          {
+            "description": "Opaque keyset pagination cursor.",
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque keyset pagination cursor.",
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Entries V1 Workspaces  Workspace Id  Entries Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List entries in a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "post": {
+        "description": "Create a new entry in a workspace.\n\nThe caller must own the workspace or hold an active contributor share.\nThe service enforces access via get_workspace before writing.\n\nPII scanner runs on body_md and references_jsonb. A block-level hit raises\n422 and the entry is NOT stored. A warn-level hit stores the entry and\nreturns a top-level ``warnings`` list in the response.\n\nRegulated tenants cannot create entries (defense-in-depth against any path\nthat bypasses the workspace-create guard).",
+        "operationId": "create_entry_v1_workspaces__workspace_id__entries_post",
+        "parameters": [
+          {
+            "description": "Workspace UUID",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "Workspace UUID",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Create Entry V1 Workspaces  Workspace Id  Entries Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create an entry in a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/entries/{entry_id}": {
+      "delete": {
+        "description": "Soft-delete a workspace entry. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: the caller must own the workspace or hold an active contributor\nshare. The service enforces this via get_workspace before writing.",
+        "operationId": "_delete_entry_handler_v1_workspaces__workspace_id__entries__entry_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete a workspace entry (idempotent)",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "patch": {
+        "description": "Update a workspace entry's body, reference_ids, or references_jsonb.\n\nAuthorization: the caller must own the workspace or hold an active\ncontributor share. The service enforces this via workspace visibility before\nwriting.\n\nPII scanner runs on any provided body_md or references_jsonb. A block hit\nreturns 422 and the entry is NOT updated. A warn hit updates the entry and\nreturns a ``warnings`` list in the response.\n\nOnly supplied fields are updated; omitted fields retain their current values.",
+        "operationId": "_update_entry_handler_v1_workspaces__workspace_id__entries__entry_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response  Update Entry Handler V1 Workspaces  Workspace Id  Entries  Entry Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a workspace entry",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/shares": {
+      "get": {
+        "description": "List active (not revoked) shares for a workspace.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant. The service enforces this before returning data.\n\nReturns only shares where revoked_at IS NULL. For full audit history\n(including revocations), query the audit_log.",
+        "operationId": "list_shares_v1_workspaces__workspace_id__shares_get",
+        "parameters": [
+          {
+            "description": "Workspace UUID",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "Workspace UUID",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response List Shares V1 Workspaces  Workspace Id  Shares Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List active shares on a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      },
+      "post": {
+        "description": "Grant an actor access to a workspace.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant.\n\nActor-owned workspaces may only be shared within the same tenant \u2014 a\ncross-tenant share attempt returns 422. Tenant-owned workspaces allow\ncross-tenant shares.\n\nA 409 is returned when an active (non-revoked) share already exists for\nthe grantee. Granting after a prior revocation is allowed: a new row is\ninserted because the unique partial index only covers active rows.",
+        "operationId": "grant_share_v1_workspaces__workspace_id__shares_post",
+        "parameters": [
+          {
+            "description": "Workspace UUID",
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "description": "Workspace UUID",
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShareCreateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Grant Share V1 Workspaces  Workspace Id  Shares Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Grant a share on a workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/shares/{share_id}": {
+      "delete": {
+        "description": "Revoke a workspace share. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant. The service enforces this before revoking.\n\nRaises 404 if share_id does not exist.",
+        "operationId": "_delete_share_handler_v1_workspaces__workspace_id__shares__share_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "share_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Share Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke a workspace share (idempotent)",
+        "tags": [
+          "workspaces"
         ]
       }
     },

@@ -25,11 +25,19 @@ import datetime
 import secrets
 import sys
 import uuid
+from pathlib import Path
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+# Ensure the repo root is importable when invoked as a subprocess from
+# arbitrary cwd. Without this, `from registry.X import Y` raises
+# ModuleNotFoundError.
+_REPO_ROOT = Path(__file__).parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
-from registry.api.auth.tokens import hash_token
-from registry.storage.models import ApiToken
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
+
+from registry.api.auth.tokens import hash_token  # noqa: E402
+from registry.storage.models import ApiToken  # noqa: E402
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
