@@ -149,8 +149,15 @@ class ClosureRefreshWorker:
     # ------------------------------------------------------------------
 
     async def _claim_batch(self) -> list[dict[str, Any]]:
-        """Claim up to ``_batch_size`` outbox rows with SKIP LOCKED."""
-        async with self._session_factory() as session:
+        """Claim up to ``_batch_size`` outbox rows with SKIP LOCKED.
+
+        The explicit ``session.begin()`` is load-bearing: without it the
+        autobegin transaction would be rolled back when this method returns,
+        releasing the ``FOR UPDATE SKIP LOCKED`` row locks before the caller
+        could process the claimed rows. Two concurrent workers would then
+        claim the same outbox rows and write duplicate closure entries.
+        """
+        async with self._session_factory() as session, session.begin():
             result = await session.execute(
                 text(
                     """

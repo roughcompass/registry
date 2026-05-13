@@ -317,3 +317,57 @@ class _async_cm:
 
     async def __aexit__(self, *args: Any) -> bool:
         return False
+
+
+# ---------------------------------------------------------------------------
+# _claim_batch transaction boundary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_uses_explicit_transaction() -> None:
+    """_claim_batch must enter session.begin() before issuing the SELECT FOR UPDATE.
+
+    Without an explicit transaction, SQLAlchemy 2.x rolls back the autobegin
+    transaction on context exit, releasing the FOR UPDATE SKIP LOCKED row
+    locks before the caller can process the rows — letting two workers
+    claim the same outbox entries concurrently.
+    """
+    call_order: list[str] = []
+
+    begin_cm = MagicMock()
+
+    async def _begin_aenter(*_args: Any, **_kwargs: Any) -> None:
+        call_order.append("session.begin().__aenter__")
+        return None
+
+    begin_cm.__aenter__ = AsyncMock(side_effect=_begin_aenter)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+
+    async def _execute(*_args: Any, **_kwargs: Any) -> Any:
+        call_order.append("session.execute")
+        result = MagicMock()
+        result.mappings = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+        return result
+
+    session = AsyncMock()
+    session.execute = _execute
+    session.begin = MagicMock(return_value=begin_cm)
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=cm)
+
+    worker = ClosureRefreshWorker(
+        session_factory=factory,
+        clock=FakeClock(_NOW),
+        concurrency=8,
+    )
+
+    await worker._claim_batch()
+
+    assert call_order[0] == "session.begin().__aenter__", (
+        f"session.begin() must be entered before any execute; saw {call_order}"
+    )
+    assert "session.execute" in call_order
