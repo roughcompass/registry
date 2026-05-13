@@ -115,6 +115,24 @@ def test_verify_signature_round_trip() -> None:
     assert not verify_signature(b"x", "wrong-secret", sig)
 
 
+def test_sign_payload_raises_on_empty_string_secret() -> None:
+    """Empty-string keys are well-formed HMAC inputs but produce trivially
+    reproducible signatures — fail closed instead of silently signing.
+    """
+    with pytest.raises(ValueError, match="hmac_secret is required"):
+        sign_payload(b'{"event": "test"}', "")
+
+
+def test_sign_payload_raises_on_none_secret() -> None:
+    """Existing behavior preserved — None secret is rejected.
+
+    The guard now catches both None and "" by checking falsiness, so the
+    historical None case must continue to raise.
+    """
+    with pytest.raises(ValueError, match="hmac_secret is required"):
+        sign_payload(b'{"event": "test"}', None)  # type: ignore[arg-type]
+
+
 # ---------------------------------------------------------------------------
 # Backoff
 # ---------------------------------------------------------------------------

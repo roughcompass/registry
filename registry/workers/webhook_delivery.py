@@ -90,7 +90,11 @@ def sign_payload(payload: bytes, hmac_secret: str) -> str:
     used by Stripe/GitHub-style webhook signing — the prefix lets
     consumers distinguish algorithms over time.
     """
-    if hmac_secret is None:
+    # Reject both None and empty-string. An empty key still produces a
+    # well-formed HMAC-SHA256 digest, but the signature is trivially
+    # reproducible by anyone who knows the empty-key convention — equivalent
+    # to "no signature" with the appearance of one. Fail loudly instead.
+    if not hmac_secret:
         raise ValueError("hmac_secret is required for webhook signing")
     digest = hmac.new(
         hmac_secret.encode("utf-8"),
@@ -336,6 +340,12 @@ class WebhookDeliveryWorker:
                     c["notification_id"],
                 )
                 continue
+            if not d["hmac_secret"]:
+                _log.warning(
+                    "subscription %s has no HMAC secret configured — "
+                    "delivery will not include a signature header",
+                    d["subscription_id"],
+                )
             out.append(
                 {
                     "delivery_id": c["delivery_id"],
