@@ -139,7 +139,7 @@ async def test_partition_pruning_embeddings(pg_container: str) -> None:
     # output. asyncpg auto-decodes JSON columns into Python lists/dicts, so
     # only run json.loads when the driver handed back a raw string.
     raw_plan = rows[0][0]
-    plan_json = json.loads(raw_plan) if isinstance(raw_plan, (str, bytes, bytearray)) else raw_plan
+    plan_json = json.loads(raw_plan) if isinstance(raw_plan, str | bytes | bytearray) else raw_plan
 
     def _count_partition_scans(node: object) -> int:
         """Recursively count Seq Scan / Index Scan nodes on embeddings partitions."""
