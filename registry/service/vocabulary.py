@@ -17,22 +17,51 @@ from registry.exceptions import VocabularyError
 from registry.storage.models import VocabularyValue
 from registry.types import TenantContext
 
+# Migrations seed system vocabulary (entity_type, fact_category, edge_rel,
+# annotation_category, annotation_status, …) under this fixed UUID with
+# is_system=TRUE. Every tenant inherits those rows transparently — without
+# this, a freshly-provisioned tenant could not create a single capability.
+_SYSTEM_TENANT_UUID = uuid.UUID("00000000-0000-0000-0000-000000000000")
+
 
 class VocabularyService:
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._session_factory = session_factory
 
     async def validate_value(self, ctx: TenantContext, kind: str, value: str) -> None:
-        """Reject if the (kind, value) pair is unknown to this tenant or has been deprecated."""
+        """Reject if the (kind, value) pair is unknown or has been deprecated.
+
+        A value is acceptable when either:
+        - the caller's own tenant has a row matching (kind, value), or
+        - the system tenant has a row matching (kind, value) with
+          ``is_system=TRUE`` (every tenant inherits the seeded vocabulary).
+
+        Tenant-local rows take precedence over system rows so a tenant can
+        deprecate a value for themselves without removing the system seed.
+        Implemented as two sequential ``scalar_one_or_none`` queries (rather
+        than one OR-joined query) so unit-test mocks that only stub
+        ``scalar_one_or_none`` continue to work without each caller's mock
+        having to wire ``scalars().all()``.
+        """
         async with self._session_factory() as session:
-            result = await session.execute(
+            tenant_result = await session.execute(
                 select(VocabularyValue).where(
                     VocabularyValue.tenant_id == ctx.tenant_id,
                     VocabularyValue.kind == kind,
                     VocabularyValue.value == value,
                 )
             )
-            row = result.scalar_one_or_none()
+            row = tenant_result.scalar_one_or_none()
+            if row is None:
+                system_result = await session.execute(
+                    select(VocabularyValue).where(
+                        VocabularyValue.tenant_id == _SYSTEM_TENANT_UUID,
+                        VocabularyValue.is_system.is_(True),
+                        VocabularyValue.kind == kind,
+                        VocabularyValue.value == value,
+                    )
+                )
+                row = system_result.scalar_one_or_none()
         if row is None:
             msg = f"unknown vocabulary value: kind={kind!r} value={value!r}"
             raise VocabularyError(msg)

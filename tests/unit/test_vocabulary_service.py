@@ -19,9 +19,19 @@ def _ctx() -> TenantContext:
 
 
 def _make_session_returning(row: VocabularyValue | None) -> AsyncMock:
-    """Build an AsyncMock that mimics `async with factory() as session: session.execute(...)`."""
+    """Build an AsyncMock that mimics `async with factory() as session: session.execute(...)`.
+
+    validate_value now uses ``result.scalars().all()`` because the vocabulary
+    lookup may return both a tenant-local row and a system fallback row.
+    Wire the mock so both legacy and new shapes resolve correctly.
+    """
+    rows = [row] if row is not None else []
     result = MagicMock()
     result.scalar_one_or_none = MagicMock(return_value=row)
+    scalars = MagicMock()
+    scalars.all = MagicMock(return_value=rows)
+    scalars.first = MagicMock(return_value=row)
+    result.scalars = MagicMock(return_value=scalars)
 
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)

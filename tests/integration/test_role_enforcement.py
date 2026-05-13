@@ -318,6 +318,10 @@ async def test_create_artifact_producer_succeeds(
     _, producer_client, cap_id = enforcement_clients
     resp = await producer_client.post(
         f"/v1/capabilities/{cap_id}/artifacts",
-        json={"category": "overview", "body": "artifact body from producer"},
+        json={
+            "category": "overview",
+            "title": "Producer Test Artifact",
+            "body": "artifact body from producer",
+        },
     )
     assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
