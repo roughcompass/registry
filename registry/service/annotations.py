@@ -585,10 +585,16 @@ class AnnotationService:
     ) -> tuple[list[AnnotationRef], str | None]:
         """List active annotations on a capability with keyset cursor pagination.
 
+        Visibility is enforced at the service layer before any query executes:
+        the call to ``visibility_svc.assert_visible`` raises ``NotFoundError``
+        (→ 404) for capabilities that do not exist and ``PermissionError``
+        (→ 403) for capabilities the caller cannot see. This prevents a
+        cross-tenant probe that would otherwise distinguish private-but-
+        existing from missing capabilities via the 200/404 response gap.
+
         Three access paths based on the caller's tenant relationship to the
-        capability. The caller is presumed to have already passed the visibility
-        check (assert_visible) in the REST layer — this method applies the
-        annotation-level authorship filter on top of that.
+        capability — applied as the annotation-level authorship filter on top
+        of the visibility check above.
 
         Provider path (caller's tenant_id == capability's tenant_id):
             Returns ALL active annotations on the capability, optionally
@@ -612,6 +618,11 @@ class AnnotationService:
         extra row arrives the last row's fields become the next cursor and only
         page_size rows are returned. Invalid cursor → 422.
         """
+        # Visibility chokepoint — must run before any DB query so a caller
+        # without visibility cannot distinguish a private capability (403) from
+        # a missing capability (404) by an empty-list response.
+        await self._visibility_svc.assert_visible(ctx, capability_id)
+
         page_size = min(max(1, page_size), _MAX_PAGE_SIZE)
 
         # Validate status when provided.

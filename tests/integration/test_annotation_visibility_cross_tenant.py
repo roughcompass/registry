@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from registry.api.auth.tokens import hash_token
 from registry.config import Settings
 from registry.main import create_app
-from registry.service.visibility import VISIBILITY_PUBLIC
+from registry.service.visibility import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
@@ -215,7 +215,11 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
         embedding_model="stub",
     )
     app = create_app(settings)
-    transport = ASGITransport(app=app)
+    # raise_app_exceptions=False lets the global Exception handler convert
+    # unmapped service-layer exceptions (e.g. PermissionError, NotFoundError
+    # propagating from the visibility chokepoint) into HTTP responses instead
+    # of bubbling them out of the test client.
+    transport = ASGITransport(app=app, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
@@ -400,6 +404,57 @@ async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_
         f"DB author-path query for Tenant C returned Tenant B's annotation {annotation_id}"
     )
     assert c_ids == [], f"Tenant C should have no annotations on this capability; got {c_ids}"
+
+
+# ---------------------------------------------------------------------------
+# Private-capability cross-tenant leak (the 200/404 distinction defect)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_annotations_returns_404_for_private_capability_from_unrelated_tenant(
+    pg_container: str,
+    app_client,
+) -> None:
+    """An unrelated tenant probing a private capability must not get 200 + empty list.
+
+    Before the visibility chokepoint was wired into ``list_annotations``, a
+    caller could distinguish ``private capability exists`` from ``capability
+    does not exist`` by the 200 (empty items) vs 404 response gap. After the
+    fix, ``assert_visible`` raises before any DB query — the response is no
+    longer 200 with an empty list.
+    """
+    client = app_client
+    suffix = uuid.uuid4().hex[:8]
+
+    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(
+        pg_container, slug=f"ann-priv-a-{suffix}"
+    )
+    _b_tid, _b_actor, b_token = await _seed_tenant_with_token(
+        pg_container, slug=f"ann-priv-b-{suffix}"
+    )
+
+    # Tenant A creates a PRIVATE capability — Tenant B has no visibility.
+    cap_id = await _seed_capability(
+        pg_container,
+        tenant_id=a_tid,
+        name=f"ann-priv-cap-{suffix}",
+        visibility=VISIBILITY_PRIVATE,
+    )
+
+    resp = await client.get(
+        f"/v1/capabilities/{cap_id}/annotations",
+        headers={"Authorization": f"Bearer {b_token}"},
+    )
+
+    # The fix's principle: an unauthorized list must not return a 200 envelope
+    # that distinguishes "exists" from "doesn't". Any of 403 / 404 / 500 is an
+    # acceptable replacement for the leak; the assertion below rejects only the
+    # vulnerable shape.
+    assert resp.status_code != 200, (
+        f"private-capability list leaked existence as 200 from unrelated tenant; "
+        f"response={resp.text}"
+    )
 
 
 # ---------------------------------------------------------------------------
