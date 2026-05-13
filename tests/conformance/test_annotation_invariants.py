@@ -251,7 +251,12 @@ async def test_pii_chokepoint_blocks_create(
     before_count = await _count_annotations(pg_container, capability_id=cap_id)
 
     app = create_app(app_settings)
-    app.state.pii_scanner = _AlwaysBombScanner()
+    # AnnotationService is built once at app startup with a captured pii_scanner
+    # reference (singleton — see registry/api/routers/annotations.py::
+    # _build_annotation_service). Setting app.state.pii_scanner after
+    # create_app() has no effect on the singleton, so inject the bomb scanner
+    # directly into the existing instance.
+    app.state.annotation_service._pii_scanner = _AlwaysBombScanner()
 
     # raise_app_exceptions=False lets the transport catch the unhandled
     # RuntimeError and return a 500 response body rather than re-raising it
@@ -311,9 +316,12 @@ async def test_pii_chokepoint_blocks_triage_note(
     status_before = await _fetch_annotation_status(pg_container, annotation_id=annotation_id)
     assert status_before == "open"
 
-    # Step 2 — inject failing scanner and PATCH with triage_note.
+    # Step 2 — inject failing scanner and PATCH with triage_note. The
+    # AnnotationService singleton captures pii_scanner at app startup, so
+    # mutate the instance's _pii_scanner directly rather than setting
+    # app.state.pii_scanner (which has no effect post-startup).
     failing_app = create_app(app_settings)
-    failing_app.state.pii_scanner = _AlwaysBombScanner()
+    failing_app.state.annotation_service._pii_scanner = _AlwaysBombScanner()
 
     # raise_app_exceptions=False converts the unhandled RuntimeError into a
     # 500 response rather than re-raising it — the contract being verified is
