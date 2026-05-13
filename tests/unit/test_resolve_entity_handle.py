@@ -55,12 +55,18 @@ def _build_service(*, entity: Entity | None) -> CatalogService:
 
     session_factory = MagicMock(return_value=session_cm)
 
+    # MagicMock intercepts any attribute starting with "assert_" as a built-in
+    # assertion verb; setting assert_visible as an explicit AsyncMock keeps
+    # the await chain in EntityService.get_entity clean.
+    visibility = MagicMock()
+    visibility.assert_visible = AsyncMock(return_value=None)
+
     return CatalogService(
         session_factory=session_factory,
         clock=SystemClock(),
         vocabulary=MagicMock(),
         schema=MagicMock(),
-        visibility=MagicMock(),
+        visibility=visibility,
     )
 
 

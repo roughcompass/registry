@@ -436,6 +436,32 @@ def _install_error_envelope(app: FastAPI) -> None:
         envelope = coerce_to_envelope(exc.status_code, exc.detail)
         return JSONResponse(status_code=exc.status_code, content=envelope, headers=exc.headers)
 
+    # Service-layer typed exceptions — map to HTTP status codes here so any
+    # service method that raises NotFoundError/PermissionError surfaces as the
+    # right status without every router needing its own try/except. Router-level
+    # catches (e.g. via map_catalog_error) still take precedence when present.
+    from registry.exceptions import NotFoundError as _NotFoundError  # noqa: PLC0415
+
+    @app.exception_handler(_NotFoundError)
+    async def _not_found_handler(_request: object, exc: _NotFoundError) -> JSONResponse:
+        return JSONResponse(
+            status_code=404,
+            content={"errors": [{"path": None, "code": "not_found", "message": str(exc)}]},
+        )
+
+    @app.exception_handler(PermissionError)
+    async def _permission_handler(_request: object, exc: PermissionError) -> JSONResponse:
+        # Visibility chokepoint denials surface as 403 with no detail about
+        # the owner tenant — the chokepoint's own message contains the
+        # required tenant guidance for the caller. The body intentionally
+        # echoes the raised text only when configured by callers; tests
+        # asserting against cross-tenant probe responses must verify that
+        # the owner-tenant UUID and entity name are not leaked here.
+        return JSONResponse(
+            status_code=403,
+            content={"errors": [{"path": None, "code": "forbidden", "message": "forbidden"}]},
+        )
+
     @app.exception_handler(RequestValidationError)
     async def _validation_exception_handler(_request: object, exc: RequestValidationError) -> JSONResponse:
         items = []

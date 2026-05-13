@@ -170,15 +170,24 @@ class EntityService:
         entity_id: uuid.UUID,
         as_of: datetime.datetime | None = None,
     ) -> EntityRef:
+        # Visibility-aware read: a `public` entity is reachable by any tenant,
+        # a `tenant-shared` entity is reachable by tenants in its ACL, and a
+        # `private` entity is reachable only by its owner tenant. The
+        # visibility chokepoint (service/visibility.py) is the single source of
+        # truth — do NOT add an `Entity.tenant_id == ctx.tenant_id` filter
+        # here. That filter would hide every cross-tenant adoption /
+        # subscription / interface lookup and re-introduce the regression
+        # tracked by tests/integration/test_cross_tenant_isolation.py.
         async with self._session_factory() as session:
-            result = await session.execute(
-                select(Entity).where(Entity.entity_id == entity_id, Entity.tenant_id == ctx.tenant_id)
-            )
+            result = await session.execute(select(Entity).where(Entity.entity_id == entity_id))
             entity = result.scalar_one_or_none()
         if entity is None:
             msg = f"entity {entity_id} not found"
             raise NotFoundError(msg)
-        self._assert_tenant(ctx, entity.tenant_id)
+        # assert_visible raises NotFoundError for missing rows and
+        # PermissionError (→ 403) when the row exists but is not visible to
+        # the caller. Both outcomes correctly hide private cross-tenant rows.
+        await self._visibility.assert_visible(ctx, entity_id)
         return _entity_to_ref(entity)
 
     async def resolve_entity_handle(

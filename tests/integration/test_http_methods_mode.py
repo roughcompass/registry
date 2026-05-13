@@ -51,18 +51,19 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     """
     import importlib  # noqa: PLC0415
 
-    # Every router that uses HttpMethodRouter or get_mode_settings reads the
-    # env var at module-import time. To switch mode, reload all of them so
-    # the env var is re-evaluated. Missing one here is the cluster-D defect:
-    # the un-reloaded router keeps the previously-set mode and leaks PATCH
-    # routes into post_only-mode openapi.
-    import registry.api.routers.adoptions as _adoptions
     import registry.api.routers.admin as _admin
     import registry.api.routers.admin_lifecycle as _adm_life
     import registry.api.routers.admin_pii as _adm_pii
     import registry.api.routers.admin_sync as _adm_sync
     import registry.api.routers.admin_tokens as _adm_tok
     import registry.api.routers.admin_vocab as _adm_vocab
+
+    # Every router that uses HttpMethodRouter or get_mode_settings reads the
+    # env var at module-import time. To switch mode, reload all of them so
+    # the env var is re-evaluated. Missing one here is the cluster-D defect:
+    # the un-reloaded router keeps the previously-set mode and leaks PATCH
+    # routes into post_only-mode openapi.
+    import registry.api.routers.adoptions as _adoptions
     import registry.api.routers.annotations as _ann
     import registry.api.routers.artifacts as _art
     import registry.api.routers.capabilities as _cap
