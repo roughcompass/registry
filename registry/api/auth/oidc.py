@@ -175,6 +175,23 @@ def get_default_cache() -> _OidcCache:
     return _default_cache
 
 
+# Module-level flag — fires the audience-disabled warning at most once per
+# process. Reset between tests by toggling oidc._audience_warning_emitted.
+_audience_warning_emitted: bool = False
+
+
+def _warn_audience_unconfigured_once() -> None:
+    """Log a one-time warning when OIDC is on but no expected audience is set."""
+    global _audience_warning_emitted
+    if _audience_warning_emitted:
+        return
+    _audience_warning_emitted = True
+    _log.warning(
+        "OIDC audience validation is disabled; set OIDC_EXPECTED_AUDIENCE to "
+        "restrict token acceptance to this service."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -228,6 +245,13 @@ async def validate_oidc_token(
             "iss": {"essential": True, "value": issuer},
             "exp": {"essential": True},
         }
+        if settings.oidc_expected_audience:
+            claims.options["aud"] = {
+                "essential": True,
+                "value": settings.oidc_expected_audience,
+            }
+        else:
+            _warn_audience_unconfigured_once()
         claims.validate()
     except JoseError as exc:
         raise CatalogError(f"invalid OIDC token: {exc}") from exc

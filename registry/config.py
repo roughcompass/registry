@@ -53,6 +53,13 @@ class Settings:
 
     # --- Auth ---
     oidc_discovery_url: str | None = None
+    # The expected `aud` claim in JWTs issued for this service. When set,
+    # validate_oidc_token rejects tokens whose audience does not match — this
+    # blocks confused-deputy attacks in shared-IdP deployments (Auth0, Okta,
+    # …) where a token issued for a different application would otherwise be
+    # accepted. Leave unset for backward compatibility, but a startup warning
+    # fires whenever OIDC is enabled and this is absent.
+    oidc_expected_audience: str | None = None
     token_hash_algorithm: str = "sha256"
 
     # --- Auth mode + external claim source ---
@@ -168,6 +175,7 @@ def get_settings() -> Settings:
         outbox_max_attempts=int(os.environ.get("OUTBOX_MAX_ATTEMPTS", "5")),
         backfill_batch_size=int(os.environ.get("BACKFILL_BATCH_SIZE", "64")),
         oidc_discovery_url=os.environ.get("OIDC_DISCOVERY_URL"),
+        oidc_expected_audience=os.environ.get("OIDC_EXPECTED_AUDIENCE"),
         default_reads_per_second=int(os.environ.get("DEFAULT_READS_PER_SECOND", "100")),
         default_writes_per_second=int(os.environ.get("DEFAULT_WRITES_PER_SECOND", "10")),
         rate_limit_enabled=os.environ.get("RATE_LIMIT_ENABLED", "true").lower() not in ("0", "false", "no"),

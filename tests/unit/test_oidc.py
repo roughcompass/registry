@@ -38,12 +38,17 @@ _CLAIMS: dict[str, Any] = {
 }
 
 
-def _make_settings(*, oidc_url: str | None = "https://idp.example.com/.well-known/openid-configuration") -> Settings:
+def _make_settings(
+    *,
+    oidc_url: str | None = "https://idp.example.com/.well-known/openid-configuration",
+    expected_audience: str | None = None,
+) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://x/y",
         pgbouncer_url="postgresql+asyncpg://x/y",
         scheduler_jobstore_url="postgresql+asyncpg://x/y",
         oidc_discovery_url=oidc_url,
+        oidc_expected_audience=expected_audience,
     )
 
 
@@ -62,6 +67,8 @@ def cache() -> _OidcCache:
 def _reset_default_cache() -> None:
     """Reset the process-scoped default cache between tests."""
     oidc_mod._default_cache = None
+    # Reset the one-shot audience-warning flag so each test starts cleanly.
+    oidc_mod._audience_warning_emitted = False
 
 
 # ---------------------------------------------------------------------------
@@ -445,3 +452,150 @@ def test_default_cache_reset_between_tests() -> None:
     assert c is not None
     # The module-level variable is now populated.
     assert oidc_mod._default_cache is c
+
+
+# ---------------------------------------------------------------------------
+# Audience (`aud`) claim validation
+# ---------------------------------------------------------------------------
+
+
+def _build_claims_obj(validate_side_effect: Any = None) -> MagicMock:
+    """Mock authlib JWTClaims with a writable `options` dict + validate hook."""
+    claims_obj = MagicMock()
+    # Real authlib uses dict subscription on .options; expose a real dict so
+    # our code's `claims.options["aud"] = {...}` actually mutates and is
+    # observable from the test.
+    claims_obj.options = {}
+    claims_obj.get.side_effect = lambda k, *a: _CLAIMS.get(k)
+    if validate_side_effect is None:
+        claims_obj.validate.return_value = None
+    else:
+        claims_obj.validate.side_effect = validate_side_effect
+    return claims_obj
+
+
+@pytest.mark.asyncio
+async def test_validate_oidc_token_rejects_wrong_audience(cache: _OidcCache) -> None:
+    """When oidc_expected_audience is set, a token whose aud does not match is rejected.
+
+    The audience check is delegated to authlib's claims.validate(); the
+    fixture wires options['aud'] and raises a JoseError to simulate a
+    mismatch detected by the validator.
+    """
+    from authlib.jose.errors import InvalidClaimError
+
+    settings = _make_settings(expected_audience="this-service")
+
+    claims_obj = _build_claims_obj(
+        validate_side_effect=InvalidClaimError("aud"),
+    )
+    jwt_instance = MagicMock()
+    jwt_instance.decode.return_value = claims_obj
+    db = AsyncMock()
+
+    with (
+        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
+        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+    ):
+        mock_jwk.import_key_set.return_value = MagicMock()
+        with pytest.raises(CatalogError, match="invalid OIDC token"):
+            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+
+    # Audience option must have been wired into the claims-validator config.
+    assert claims_obj.options.get("aud") == {
+        "essential": True,
+        "value": "this-service",
+    }
+
+
+@pytest.mark.asyncio
+async def test_validate_oidc_token_skips_aud_check_when_setting_absent(cache: _OidcCache) -> None:
+    """Without oidc_expected_audience, the aud claim is not added to options.
+
+    Backward-compatible behavior: deployments that have not opted in to
+    audience validation continue to accept tokens irrespective of their aud
+    claim. The warning fires (covered by a separate test), but no rejection.
+    """
+    from registry.storage.models import Actor
+
+    settings = _make_settings(expected_audience=None)
+
+    mock_actor = MagicMock(spec=Actor)
+    mock_actor.actor_id = _ACTOR_ID
+    mock_actor.tenant_id = _TENANT_ID
+    mock_actor.oidc_subject = "user123"
+
+    actor_result = MagicMock()
+    actor_result.scalar_one_or_none.return_value = mock_actor
+    roles_result = MagicMock()
+    roles_result.all.return_value = [("admin",)]
+
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[actor_result, roles_result])
+
+    claims_obj = _build_claims_obj()
+    jwt_instance = MagicMock()
+    jwt_instance.decode.return_value = claims_obj
+
+    with (
+        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
+        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+    ):
+        mock_jwk.import_key_set.return_value = MagicMock()
+        ctx = await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+
+    assert ctx.tenant_id == _TENANT_ID
+    # Crucially: no aud constraint was wired in.
+    assert "aud" not in claims_obj.options
+
+
+@pytest.mark.asyncio
+async def test_validate_oidc_token_logs_warning_when_audience_unconfigured(
+    cache: _OidcCache,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """When OIDC is enabled but audience is absent, a WARNING is logged.
+
+    Logged at most once per process (the autouse fixture resets the flag
+    between tests). Wording must match the audit-source language so
+    operators searching logs can find it.
+    """
+    import logging
+
+    from registry.storage.models import Actor
+
+    settings = _make_settings(expected_audience=None)
+
+    mock_actor = MagicMock(spec=Actor)
+    mock_actor.actor_id = _ACTOR_ID
+    mock_actor.tenant_id = _TENANT_ID
+    mock_actor.oidc_subject = "user123"
+    actor_result = MagicMock()
+    actor_result.scalar_one_or_none.return_value = mock_actor
+    roles_result = MagicMock()
+    roles_result.all.return_value = []
+    db = AsyncMock()
+    db.execute = AsyncMock(side_effect=[actor_result, roles_result])
+
+    claims_obj = _build_claims_obj()
+    jwt_instance = MagicMock()
+    jwt_instance.decode.return_value = claims_obj
+
+    with (
+        caplog.at_level(logging.WARNING, logger="registry.api.auth.oidc"),
+        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
+        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+    ):
+        mock_jwk.import_key_set.return_value = MagicMock()
+        await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+
+    assert any(
+        "OIDC audience validation is disabled" in r.message
+        for r in caplog.records
+    ), f"warning not logged; got records: {[r.message for r in caplog.records]}"
