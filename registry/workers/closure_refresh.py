@@ -384,7 +384,7 @@ class ClosureRefreshWorker:
 
                     value_fragments.append(
                         f"(gen_random_uuid(), :{tid_key}, :{root_key}, :{member_key},"
-                        f" :{dir_key}, :{depth_key}, {edge_path_sql}, :{edge_rels_key}::text[], :refreshed_at)"
+                        f" :{dir_key}, :{depth_key}, {edge_path_sql}, CAST(:{edge_rels_key} AS text[]), :refreshed_at)"
                     )
 
                 bulk_sql = (

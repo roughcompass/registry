@@ -188,6 +188,11 @@ def app_settings(pg_container: str) -> Settings:
         database_url=pg_container,
         pgbouncer_url=pg_container,
         scheduler_jobstore_url=pg_container,
+        # MemoryJobStore avoids the APScheduler-pickles-engine-closure error
+        # ("Can't get local object 'create_engine.<locals>.connect'") that
+        # SQLAlchemyJobStore hits when a TestClient's lifespan starts the
+        # scheduler. Production deploys use SQLAlchemyJobStore.
+        scheduler_use_memory_jobstore=True,
     )
 
 

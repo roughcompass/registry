@@ -137,9 +137,9 @@ async def test_artifact_create_supersession_on_update(client: TestClient, pg_con
     assert f1.status_code == 201, f1.text
 
     # Verify the artifact appears in the listing.
-    listed = client.get(f"/v1/capabilities/{entity_id}/artifacts", headers=auth)
+    listed = client.get(f"/v1/capabilities/{entity_id}/artifacts?fields=fact_id,category,body", headers=auth)
     assert listed.status_code == 200
-    assert any(item["body"] == "v1" for item in listed.json())
+    assert any(item["body"] == "v1" for item in listed.json()["items"])
 
 
 @pytest.mark.asyncio
@@ -184,11 +184,14 @@ async def test_admin_mint_then_revoke(client: TestClient, pg_container: str) -> 
     new_token = minted.json()["plaintext_token"]
     new_token_id = minted.json()["token_id"]
 
-    # Producer token works: list artifacts on a non-existent entity returns [] (no auth failure).
+    # Producer token works: list artifacts on a non-existent entity is a
+    # successful auth — the auth layer passes, the resolver maps the bogus
+    # UUID to NotFoundError (404). The test only needs to prove auth was
+    # accepted, which 404 (vs 401) confirms.
     auth_producer = {"Authorization": f"Bearer {new_token}"}
     bogus_entity = uuid.uuid4()
     r1 = client.get(f"/v1/capabilities/{bogus_entity}/artifacts", headers=auth_producer)
-    assert r1.status_code == 200
+    assert r1.status_code == 404
 
     # Revoke and confirm 401.
     rev = client.delete(f"/v1/admin/tokens/{new_token_id}", headers=auth_admin)
