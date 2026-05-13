@@ -180,12 +180,15 @@ async def test_adopt_list_unadopt_full_lifecycle(pg_container: str, app_client) 
     assert body["tenant_id"] == str(_a_tid)  # provider owns the row
     assert body["intent"] == "billing reconciliation"
     assert body["version_pin"] == ">=1.0,<2.0"
-    assert body["t_invalidated_at"] is None
+    # t_invalidated_at is an audit-view field only; default-view responses
+    # omit bitemporal columns, so it's absent here. The audit-trail
+    # assertion below uses a direct DB query against adoption_events.
 
     # GET list — caller-scoped, sees its own adoption.
     resp = await client.get(f"/v1/capabilities/{cap_id}/adoptions", headers=headers)
     assert resp.status_code == 200
-    listed = resp.json()
+    body = resp.json()
+    listed = body["items"] if isinstance(body, dict) else body
     assert len(listed) == 1
     assert listed[0]["adoption_id"] == str(adoption_id)
 
@@ -196,7 +199,9 @@ async def test_adopt_list_unadopt_full_lifecycle(pg_container: str, app_client) 
     # GET list — empty after unadopt.
     resp = await client.get(f"/v1/capabilities/{cap_id}/adoptions", headers=headers)
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    listed_after = body["items"] if isinstance(body, dict) else body
+    assert listed_after == []
 
     # DB row persists with t_invalidated_at set (audit trail).
     engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})

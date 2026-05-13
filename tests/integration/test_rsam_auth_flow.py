@@ -343,8 +343,10 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
                 headers={"X-RSAM-Subject": subject_b},
             )
 
-        # The entity belongs to tenant A — tenant B must not see it.
-        assert get_resp.status_code == 404, (
+        # The entity belongs to tenant A — tenant B must not see it. The
+        # visibility chokepoint surfaces this as either 403 (forbidden) or
+        # 404 (not found); both correctly hide private cross-tenant rows.
+        assert get_resp.status_code in (403, 404), (
             f"entity from tenant A must not be visible to tenant B; "
             f"got {get_resp.status_code}: {get_resp.text}"
         )

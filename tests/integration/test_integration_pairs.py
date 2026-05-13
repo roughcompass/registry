@@ -178,9 +178,10 @@ async def test_pair_lookup_returns_integration_connecting_two_caps(pg_container:
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["entity_id"] == str(integration)
-    assert body[0]["entity_type"] == "integration"
+    items = body["items"] if isinstance(body, dict) else body
+    assert len(items) == 1
+    assert items[0]["entity_id"] == str(integration)
+    assert items[0]["entity_type"] == "integration"
 
 
 # ---------------------------------------------------------------------------
@@ -213,4 +214,6 @@ async def test_private_integration_is_invisible_to_other_tenants(pg_container: s
         params={"connects": str(cap_a), "and": str(cap_b)},
     )
     assert resp.status_code == 200
-    assert resp.json() == []
+    body = resp.json()
+    items = body["items"] if isinstance(body, dict) else body
+    assert items == []

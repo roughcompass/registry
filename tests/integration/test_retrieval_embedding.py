@@ -20,6 +20,7 @@ import pathlib
 import secrets
 import uuid
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from sqlalchemy import text
@@ -163,6 +164,8 @@ async def test_mcp_list_capabilities(pg_container: str, app_settings: Settings) 
         retrieval=retrieval_svc,
         catalog=catalog_svc,
         session_factory=session_factory,
+        annotation_service=MagicMock(),
+        workspace_service=MagicMock(),
         clock=clock,
     )
 
@@ -180,7 +183,10 @@ async def test_mcp_list_capabilities(pg_container: str, app_settings: Settings) 
         await pg_engine.dispose()
 
     assert result, "call_tool returned empty result"
-    payload = json.loads(result[0].text)  # type: ignore[union-attr]
+    # FastMCP's call_tool returns a (content_blocks, _) tuple. Some MCP
+    # SDK versions return just content_blocks; handle both.
+    content = result[0] if isinstance(result, tuple) else result
+    payload = json.loads(content[0].text)  # type: ignore[union-attr]
     assert "items" in payload
     assert "page" in payload
     assert "page_size" in payload
@@ -252,6 +258,8 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
         retrieval=retrieval_svc,
         catalog=catalog_svc2,
         session_factory=session_factory2,
+        annotation_service=MagicMock(),
+        workspace_service=MagicMock(),
         clock=fake_clock,
     )
 
@@ -277,8 +285,10 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
         _request_token.reset(token_var_tok)
         await pg_engine2.dispose()
 
-    record_t1 = json.loads(result_t1[0].text)  # type: ignore[union-attr]
-    record_t2 = json.loads(result_t2[0].text)  # type: ignore[union-attr]
+    content_t1 = result_t1[0] if isinstance(result_t1, tuple) else result_t1
+    content_t2 = result_t2[0] if isinstance(result_t2, tuple) else result_t2
+    record_t1 = json.loads(content_t1[0].text)  # type: ignore[union-attr]
+    record_t2 = json.loads(content_t2[0].text)  # type: ignore[union-attr]
 
     # At T1 the original body should be in the facts list.
     bodies_t1 = [f["body"] for f in record_t1.get("facts", [])]

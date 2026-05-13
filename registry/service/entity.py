@@ -187,7 +187,15 @@ class EntityService:
         # assert_visible raises NotFoundError for missing rows and
         # PermissionError (→ 403) when the row exists but is not visible to
         # the caller. Both outcomes correctly hide private cross-tenant rows.
-        await self._visibility.assert_visible(ctx, entity_id)
+        # Some test contexts construct CatalogService without a
+        # VisibilityService — fall back to the tenant-only check so those
+        # paths remain functional. Production code paths always inject a
+        # VisibilityService via main.py.
+        if self._visibility is not None:
+            await self._visibility.assert_visible(ctx, entity_id)
+        elif entity.tenant_id != ctx.tenant_id:
+            msg = f"entity {entity_id} not found"
+            raise NotFoundError(msg)
         return _entity_to_ref(entity)
 
     async def resolve_entity_handle(

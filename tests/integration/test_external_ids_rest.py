@@ -379,7 +379,8 @@ async def test_list_external_ids_for_entity(http_client: Any) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_resp.status_code == 200, list_resp.text
-    items = list_resp.json()
+    body = list_resp.json()
+    items = body["items"] if isinstance(body, dict) else body
     assert isinstance(items, list)
     ext_ids = [i["external_id"] for i in items]
     assert ext_id in ext_ids
@@ -536,7 +537,9 @@ async def test_delete_external_id_204(http_client: Any) -> None:
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_resp.status_code == 200, list_resp.text
-    pks_in_list = [i["external_id_pk"] for i in list_resp.json()]
+    body = list_resp.json()
+    items = body["items"] if isinstance(body, dict) else body
+    pks_in_list = [i["external_id_pk"] for i in items]
     assert pk not in pks_in_list, f"Deleted external_id_pk={pk} still appears in list after hard delete"
 
 

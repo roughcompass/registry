@@ -40,7 +40,7 @@ _DEFAULT_TENANT_SLUG = "dev"
 _DEFAULT_ACTOR_NAME = "dev-admin"
 
 # Matches the docker-compose default in registry/docker-compose.yml.
-_DOCKER_COMPOSE_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5544/catalog"
+_DOCKER_COMPOSE_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5544/registry"
 
 
 # Mirrors the vocabulary the Alembic migrations seed for the `default` tenant.

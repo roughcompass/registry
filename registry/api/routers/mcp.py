@@ -602,12 +602,18 @@ def create_catalog_mcp_server(
         if not 1 <= page_size <= 200:
             raise ToolError("page_size must be between 1 and 200")
         temporal_filter = _parse_as_of(as_of)
+        # RetrievalService.list_capabilities is cursor-paginated. The MCP
+        # tool exposes a 1-based `page` knob for client convenience but the
+        # service has no offset support, so `page` collapses to "first page
+        # only" and clients must use list_my_annotations / search_capabilities
+        # for deeper traversal. Passing an empty cursor dict requests the
+        # first page.
         try:
-            entity_refs = await retrieval.list_capabilities(
+            entity_refs, _next_cursor = await retrieval.list_capabilities(
                 ctx,
                 lifecycle=lifecycle,
                 entity_type=entity_type,
-                page=page,
+                cursor={},
                 page_size=page_size,
                 temporal_filter=temporal_filter,
             )

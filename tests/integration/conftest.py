@@ -148,6 +148,33 @@ def respx_cassette() -> Callable[[str], respx.MockRouter]:
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _set_http_methods_mode_for_integration() -> Iterator[None]:
+    """Default REGISTRY_HTTP_METHODS_MODE to "both" for the integration suite.
+
+    Several integration tests POST to alias paths like
+    ``/v1/admin/external-systems/{slug}:delete`` and expect 204. Those
+    aliases are only registered when the mode is ``both`` or ``post_only``.
+    The default mode is ``rest``, which leaves them unregistered.
+
+    Scope this to the integration session so unit tests (which explicitly
+    verify the rest-default behavior) are unaffected. Routers register
+    routes at module-import time, so we set the env var *before* the first
+    integration test imports a router. Tests that need a specific mode
+    (``test_http_methods_mode.py``) override the env var and reload the
+    affected modules.
+    """
+    prev = os.environ.get("REGISTRY_HTTP_METHODS_MODE")
+    os.environ["REGISTRY_HTTP_METHODS_MODE"] = "both"
+    try:
+        yield
+    finally:
+        if prev is None:
+            os.environ.pop("REGISTRY_HTTP_METHODS_MODE", None)
+        else:
+            os.environ["REGISTRY_HTTP_METHODS_MODE"] = prev
+
+
 @pytest.fixture(scope="session")
 def pg_container() -> Iterator[str]:
     """Start a Postgres 16 + pgvector container for the whole test session."""

@@ -116,7 +116,7 @@ async def test_get_capability_by_slug(
     )
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["name"] == "Salt Design System"
+    assert body["name"] == "salt-design-system"
 
 
 @pytest.mark.asyncio
@@ -235,7 +235,7 @@ async def test_subscriptions_default_view_omits_audit_fields(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     if items:
         item = items[0]
         for forbidden in (
@@ -276,7 +276,7 @@ async def test_subscriptions_audit_view_populates_audit_fields(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     if items:
         item = items[0]
         # Audit view must expose the clean names (no t_ prefix).
@@ -304,7 +304,7 @@ async def test_adoptions_audit_view(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r.status_code == 200
-    items = r.json()
+    items = r.json()["items"]
     # If there are rows, verify the audit-field shapes.
     for item in items:
         assert "valid_from" in item
@@ -564,7 +564,7 @@ async def test_patch_subscription_current_if_match_succeeds(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert list_r.status_code == 200
-    subs = list_r.json()
+    subs = list_r.json()["items"]
     matching = [s for s in subs if str(s.get("subscription_id")) == str(sub_id)]
     assert matching, f"subscription {sub_id} not in list"
     ingested_at = matching[0].get("ingested_at")

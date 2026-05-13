@@ -199,7 +199,7 @@ async def test_provider_projection_returns_own_caps_and_provides_to_edge(pg_cont
     body = resp.json()
     node_ids = {n["entity_id"] for n in body["nodes"]}
     assert str(cap_id) in node_ids
-    assert body["total"] >= 1
+    assert len(body["nodes"]) >= 1
 
     # provides_to edge with src=PaymentAPI present
     provides = [e for e in body["edges"] if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)]
@@ -234,7 +234,7 @@ async def test_consumer_projection_includes_adopted_provider_cap(pg_container: s
     node_ids = {n["entity_id"] for n in body["nodes"]}
     # B has no own entities seeded — only the adopted PaymentAPI.
     assert str(cap_id) in node_ids, body
-    assert body["total"] >= 1
+    assert len(body["nodes"]) >= 1
 
     # provides_to edge from PaymentAPI is exposed to the consumer.
     provides = [e for e in body["edges"] if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)]

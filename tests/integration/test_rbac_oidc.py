@@ -450,8 +450,10 @@ async def test_audit_query_time_range(pg_container: str, app_settings: Settings)
     finally:
         await engine.dispose()
 
-    # Seed a lifecycle transition event within the query window.
-    event_ts = datetime.datetime(2026, 3, 15, 12, 0, 0, tzinfo=datetime.UTC)
+    # Seed a lifecycle transition event within the query window. The audit
+    # partitions cover 2026-05-01 .. 2027-04-30 (pinned origin from
+    # migration 0006), so pick a date inside that range.
+    event_ts = datetime.datetime(2026, 7, 15, 12, 0, 0, tzinfo=datetime.UTC)
     audit_id = await _seed_audit_event(
         pg_container,
         tenant_id=tenant_id,
@@ -469,8 +471,8 @@ async def test_audit_query_time_range(pg_container: str, app_settings: Settings)
             "/v1/admin/audit",
             params={
                 "actor_id": str(actor_id),
-                "from": "2026-03-01T00:00:00Z",
-                "to": "2026-04-01T00:00:00Z",
+                "from": "2026-07-01T00:00:00Z",
+                "to": "2026-08-01T00:00:00Z",
                 "page_size": 50,
             },
             headers=headers,
@@ -480,11 +482,11 @@ async def test_audit_query_time_range(pg_container: str, app_settings: Settings)
     assert "rows" in body
     row_ids = [r["audit_id"] for r in body["rows"]]
     assert str(audit_id) in row_ids, f"seeded audit_id {audit_id} not found in rows: {row_ids}"
-    # All returned rows must be within the [2026-03-01, 2026-04-01] window.
+    # All returned rows must be within the [2026-07-01, 2026-08-01] window.
     for row in body["rows"]:
         row_ts = datetime.datetime.fromisoformat(row["ts"])
-        assert row_ts >= datetime.datetime(2026, 3, 1, tzinfo=datetime.UTC)
-        assert row_ts <= datetime.datetime(2026, 4, 1, tzinfo=datetime.UTC)
+        assert row_ts >= datetime.datetime(2026, 7, 1, tzinfo=datetime.UTC)
+        assert row_ts <= datetime.datetime(2026, 8, 1, tzinfo=datetime.UTC)
 
 
 @pytest.mark.asyncio
@@ -535,7 +537,7 @@ async def test_oidc_jwt_resolves_to_tenant_context(
         oidc_discovery_url=discovery_url,
     )
 
-    _oidc_module._invalidate_cache()
+    _oidc_module._default_cache = None  # reset the process-scoped default cache
     try:
         with respx.mock(assert_all_called=False) as mock_router:
             mock_router.get(discovery_url).mock(return_value=MockResponse(200, json=discovery_doc))
@@ -562,7 +564,7 @@ async def test_oidc_jwt_resolves_to_tenant_context(
             # without 401 (authentication succeeded, authorization failed on role).
             assert audit_resp.status_code != 401, f"OIDC JWT must authenticate successfully; got 401: {audit_resp.text}"
     finally:
-        _oidc_module._invalidate_cache()
+        _oidc_module._default_cache = None  # reset the process-scoped default cache
 
 
 @pytest.mark.asyncio

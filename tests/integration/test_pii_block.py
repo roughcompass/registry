@@ -221,11 +221,17 @@ class TestPiiBlockPolicy:
                 art_r.status_code == 422
             ), f"Expected 422 from PII block policy, got {art_r.status_code}: {art_r.text}"
             body = art_r.json()
-            detail = body.get("detail", {})
-            assert detail.get("error") == "pii_blocked", f"Expected error='pii_blocked', got detail={detail}"
-            assert "credit_card" in detail.get(
-                "matched_patterns", []
-            ), f"credit_card must appear in matched_patterns, got {detail}"
+            # The global StarletteHTTPException handler coerces dict details
+            # into the canonical envelope `{"errors": [{path, code, message}]}`.
+            # The raised HTTPException carries a dict {error, message,
+            # matched_patterns}; after coercion the message stringifies the
+            # original dict, so the credit_card / pii_blocked markers should
+            # appear inside the message body.
+            errors = body.get("errors", [])
+            assert errors, f"Expected `errors` in envelope; got {body}"
+            message = str(errors[0].get("message", ""))
+            assert "pii_blocked" in message, f"Expected 'pii_blocked' marker in message; got {message}"
+            assert "credit_card" in message, f"Expected 'credit_card' marker in message; got {message}"
 
     @pytest.mark.asyncio
     async def test_credit_card_body_writes_detection_log_row(self, pg_container: str) -> None:

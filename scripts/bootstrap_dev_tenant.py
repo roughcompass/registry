@@ -49,7 +49,7 @@ _TOKEN_ENV_VAR = "REGISTRY_DEV_TOKEN"
 # Matches the docker-compose default in registry/docker-compose.yml.
 # Used only when DATABASE_URL is not already set — pointing this script at a
 # non-default database is a single `export DATABASE_URL=...` away.
-_DOCKER_COMPOSE_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5544/catalog"
+_DOCKER_COMPOSE_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5544/registry"
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
