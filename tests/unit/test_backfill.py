@@ -70,16 +70,36 @@ def test_cursor_round_trip(tmp_path: Path) -> None:
     """_save_cursor / _load_cursor persist and retrieve a UUID string."""
     target = tmp_path / "cursor"
     fid = str(uuid.uuid4())
-    with patch("scripts.backfill_embeddings._CURSOR_PATH", target):
-        _save_cursor(fid)
-        assert _load_cursor() == fid
+    with patch("scripts.backfill_embeddings._get_cursor_path", return_value=target):
+        _save_cursor(fid, "test-model")
+        assert _load_cursor("test-model") == fid
 
 
 def test_cursor_defaults_to_null_uuid(tmp_path: Path) -> None:
     target = tmp_path / "cursor_missing"
-    with patch("scripts.backfill_embeddings._CURSOR_PATH", target):
-        val = _load_cursor()
+    with patch("scripts.backfill_embeddings._get_cursor_path", return_value=target):
+        val = _load_cursor("test-model")
     assert val == "00000000-0000-0000-0000-000000000000"
+
+
+def test_backfill_cursor_path_includes_model_identifier() -> None:
+    """Different models must get distinct cursor files; neither equals the legacy path."""
+    from scripts.backfill_embeddings import _get_cursor_path
+
+    a = _get_cursor_path("model-A")
+    b = _get_cursor_path("model-B")
+    assert a != b
+    legacy = Path("/tmp/backfill_cursor")
+    assert a != legacy and b != legacy
+
+
+def test_backfill_cursor_path_slugifies_slash_in_model_id() -> None:
+    """A '/' in the model identifier must be replaced with '_' — no sub-directories."""
+    from scripts.backfill_embeddings import _get_cursor_path
+
+    path = _get_cursor_path("openai/text-embedding-3-small")
+    assert path == Path("/tmp/backfill_cursor_openai_text-embedding-3-small.txt"), path
+    assert path.parent == Path("/tmp"), path.parent
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +128,7 @@ async def test_empty_db_returns_zero(tmp_path: Path) -> None:
 
     cursor_path = tmp_path / "cursor"
     with (
-        patch("scripts.backfill_embeddings._CURSOR_PATH", cursor_path),
+        patch("scripts.backfill_embeddings._get_cursor_path", return_value=cursor_path),
         patch("scripts.backfill_embeddings.create_async_engine", return_value=mock_engine),
         patch("scripts.backfill_embeddings.async_sessionmaker", return_value=mock_factory),
     ):
@@ -154,7 +174,7 @@ async def test_cursor_advances_to_last_fact_id(tmp_path: Path) -> None:
 
     cursor_path = tmp_path / "cursor"
     with (
-        patch("scripts.backfill_embeddings._CURSOR_PATH", cursor_path),
+        patch("scripts.backfill_embeddings._get_cursor_path", return_value=cursor_path),
         patch("scripts.backfill_embeddings.create_async_engine", return_value=mock_engine),
         patch("scripts.backfill_embeddings.async_sessionmaker", return_value=mock_factory),
     ):
@@ -185,7 +205,7 @@ async def test_second_run_is_noop(tmp_path: Path) -> None:
 
     cursor_path = tmp_path / "cursor"
     with (
-        patch("scripts.backfill_embeddings._CURSOR_PATH", cursor_path),
+        patch("scripts.backfill_embeddings._get_cursor_path", return_value=cursor_path),
         patch("scripts.backfill_embeddings.create_async_engine", return_value=mock_engine),
         patch("scripts.backfill_embeddings.async_sessionmaker", return_value=mock_factory),
     ):
@@ -219,7 +239,7 @@ def test_main_output_string(tmp_path: Path, capsys: pytest.CaptureFixture[str]) 
     from scripts.backfill_embeddings import main
 
     with (
-        patch("scripts.backfill_embeddings._CURSOR_PATH", cursor_path),
+        patch("scripts.backfill_embeddings._get_cursor_path", return_value=cursor_path),
         patch("scripts.backfill_embeddings.create_async_engine", return_value=mock_engine),
         patch("scripts.backfill_embeddings.async_sessionmaker", return_value=mock_factory),
     ):

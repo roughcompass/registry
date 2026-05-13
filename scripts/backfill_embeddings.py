@@ -19,6 +19,7 @@ import argparse
 import asyncio
 import datetime
 import logging
+import re
 import sys
 import uuid
 from pathlib import Path
@@ -39,21 +40,34 @@ from registry.service.embedding_drain import make_chunk_plan  # noqa: E402
 
 _log = logging.getLogger(__name__)
 
-_CURSOR_PATH = Path("/tmp/backfill_cursor")
 _NULL_CURSOR = "00000000-0000-0000-0000-000000000000"
 
 
-def _load_cursor() -> str:
-    """Return the persisted cursor UUID string, or the null UUID if not set."""
-    if _CURSOR_PATH.exists():
-        value = _CURSOR_PATH.read_text().strip()
+def _get_cursor_path(model_id: str) -> Path:
+    """Return the cursor file path for *model_id*, slugifying unsafe characters.
+
+    Embedding model identifiers commonly contain ``/`` (e.g.
+    ``openai/text-embedding-3-small``) which would create unintended
+    sub-directories or FileNotFoundError under /tmp/. Slugify to a flat,
+    filesystem-safe name so the cursor lives at exactly one well-known
+    location per model.
+    """
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", model_id)
+    return Path(f"/tmp/backfill_cursor_{slug}.txt")
+
+
+def _load_cursor(model_id: str) -> str:
+    """Return the persisted cursor UUID for *model_id*, or the null UUID."""
+    path = _get_cursor_path(model_id)
+    if path.exists():
+        value = path.read_text().strip()
         if value:
             return value
     return _NULL_CURSOR
 
 
-def _save_cursor(cursor: str) -> None:
-    _CURSOR_PATH.write_text(cursor)
+def _save_cursor(cursor: str, model_id: str) -> None:
+    _get_cursor_path(model_id).write_text(cursor)
 
 
 async def _run_backfill(settings: Settings, embedder: object) -> int:
@@ -69,7 +83,7 @@ async def _run_backfill(settings: Settings, embedder: object) -> int:
 
     model_id: str = embedder.model_version  # type: ignore[attr-defined]
     batch_size = settings.backfill_batch_size
-    cursor = _load_cursor()
+    cursor = _load_cursor(model_id)
     total = 0
 
     try:
@@ -161,7 +175,7 @@ async def _run_backfill(settings: Settings, embedder: object) -> int:
                 total += 1
                 cursor = str(fact_id)
 
-            _save_cursor(cursor)
+            _save_cursor(cursor, model_id)
             _log.info("backfill: processed up to cursor=%s total=%d", cursor, total)
 
     finally:
@@ -196,6 +210,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Use StubEmbedder (zero vectors) — for testing without model download",
     )
+    parser.add_argument(
+        "--reset-cursor",
+        action="store_true",
+        help=(
+            "Delete the resumption cursor for the chosen model before starting "
+            "so the backfill scans from the beginning. Useful for recovery after "
+            "a partial run with a wrong cursor position."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -217,6 +240,14 @@ def main(argv: list[str] | None = None) -> None:
         object.__setattr__(settings, "backfill_batch_size", args.batch_size)
 
     embedder = _build_embedder(settings.embedding_model, stub=args.stub)
+
+    if args.reset_cursor:
+        model_id = embedder.model_version  # type: ignore[attr-defined]
+        cursor_path = _get_cursor_path(model_id)
+        if cursor_path.exists():
+            cursor_path.unlink()
+            _log.info("backfill: reset cursor file at %s", cursor_path)
+
     total = asyncio.run(_run_backfill(settings, embedder))
     print(f"backfill complete: {total} facts embedded")
 
