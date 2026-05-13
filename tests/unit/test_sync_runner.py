@@ -242,6 +242,14 @@ def _make_session_factory(
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
+    # session.begin() returns its own async context manager — required by
+    # run_sync_job's `async with session_factory() as session, session.begin():`
+    # pattern. The inner block commits on exit; tests don't need to assert on it.
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
     session_factory = MagicMock(return_value=session)
     return session_factory
 
@@ -505,6 +513,11 @@ async def test_run_sync_job_skips_duplicate_webhook_delivery() -> None:
     session.__aenter__ = AsyncMock(return_value=session)
     session.__aexit__ = AsyncMock(return_value=False)
 
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
     session_factory = MagicMock(return_value=session)
     catalog = _mock_catalog()
     settings = _settings()
@@ -595,3 +608,85 @@ async def test_resolve_sync_actor_returns_existing() -> None:
     session.add.assert_not_called()
 
     _actor_cache.clear()
+
+
+# ---------------------------------------------------------------------------
+# Transaction-boundary invariant for run_sync_job's sync_run insertion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_sync_job_opens_sync_run_row_within_explicit_transaction() -> None:
+    """session.begin() must be entered before session.add(sync_run); no bare commit.
+
+    Mocks session_factory to record the order of begin().__aenter__,
+    session.add, and session.commit. Passes when begin() runs before add and
+    no explicit commit is invoked (the begin() context commits on exit).
+    """
+    from registry.config import Settings
+    from sync import runner as runner_mod
+
+    call_order: list[str] = []
+
+    src_uuid = uuid.uuid4()
+    source_row = MagicMock()
+    source_row.tenant_id = uuid.uuid4()
+    source_row.source_type = "github"
+    source_row.is_active = True
+
+    session = AsyncMock()
+    session.get = AsyncMock(return_value=source_row)
+
+    async def _commit() -> None:
+        call_order.append("session.commit")
+
+    def _add(_obj: Any) -> None:
+        call_order.append("session.add")
+
+    session.commit = AsyncMock(side_effect=_commit)
+    session.add = MagicMock(side_effect=_add)
+
+    begin_cm = MagicMock()
+
+    async def _begin_aenter(*_a: Any, **_k: Any) -> Any:
+        call_order.append("session.begin().__aenter__")
+        return None
+
+    begin_cm.__aenter__ = AsyncMock(side_effect=_begin_aenter)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+
+    session_cm = MagicMock()
+    session_cm.__aenter__ = AsyncMock(return_value=session)
+    session_cm.__aexit__ = AsyncMock(return_value=False)
+    session_factory = MagicMock(return_value=session_cm)
+
+    settings = Settings(
+        database_url="postgresql+asyncpg://x/y",
+        pgbouncer_url="postgresql+asyncpg://x/y",
+        scheduler_jobstore_url="postgresql+asyncpg://x/y",
+    )
+
+    with (
+        patch.object(runner_mod, "resolve_sync_actor", AsyncMock(return_value=uuid.uuid4())),
+        patch.object(runner_mod, "_execute_sync", AsyncMock(return_value=None)),
+    ):
+        await runner_mod.run_sync_job(
+            source_id=str(src_uuid),
+            session_factory=session_factory,
+            catalog=MagicMock(),
+            settings=settings,
+        )
+
+    assert "session.begin().__aenter__" in call_order, call_order
+    begin_idx = call_order.index("session.begin().__aenter__")
+    assert "session.add" in call_order, call_order
+    add_idx = call_order.index("session.add")
+    assert begin_idx < add_idx, (
+        f"session.begin must run before session.add; got {call_order}"
+    )
+
+    assert "session.commit" not in call_order, (
+        f"bare session.commit() must not be called when session.begin() owns "
+        f"the transaction; got {call_order}"
+    )

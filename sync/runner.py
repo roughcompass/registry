@@ -208,7 +208,11 @@ async def run_sync_job(
     """
     sid = uuid.UUID(source_id)
 
-    async with session_factory() as session:
+    # Explicit session.begin() — matches the codebase-wide pattern and avoids
+    # the autobegin-rollback footgun if this is ever nested inside an outer
+    # transaction context (e.g. in tests). session.begin() commits on
+    # successful exit so no manual session.commit() is needed.
+    async with session_factory() as session, session.begin():
         source_row = await session.get(SyncSource, sid)
         if source_row is None:
             _log.error("sync job: source_id=%s not found; aborting", source_id)
@@ -242,7 +246,6 @@ async def run_sync_job(
             started_at=now,
         )
         session.add(sync_run)
-        await session.commit()
 
     ctx = TenantContext(
         tenant_id=source_row.tenant_id,
