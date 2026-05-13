@@ -1557,6 +1557,30 @@ def test_cursor_encode_decode_round_trip() -> None:
     assert decoded_id == original_id
 
 
+def test_annotation_cursor_round_trips_with_stripped_padding() -> None:
+    """A cursor with trailing '=' stripped by a URL normaliser must still decode.
+
+    Gateways and HTTP clients commonly strip trailing '=' from base64 query
+    parameters; the codec must tolerate the stripped form. _encode_cursor
+    already strips on encode (so callers receive a clean string), and
+    _decode_cursor restores padding before decoding — this test verifies
+    both halves by stripping all trailing '=' from a freshly-encoded cursor
+    and asserting it still decodes losslessly.
+    """
+    original_t = datetime.datetime(2026, 5, 13, 18, 14, 7, 123456, tzinfo=datetime.UTC)
+    original_id = uuid.UUID("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+
+    encoded = _encode_cursor(original_t, original_id)
+    # _encode_cursor already strips '=' but be explicit so the test would
+    # fail if a future refactor reintroduced padding on the wire.
+    stripped = encoded.rstrip("=")
+    assert "=" not in stripped, "cursor must not carry base64 padding on the wire"
+
+    decoded_t, decoded_id = _decode_cursor(stripped)
+    assert decoded_t == original_t
+    assert decoded_id == original_id
+
+
 # ---------------------------------------------------------------------------
 # list_annotations — capability missing → 404
 # ---------------------------------------------------------------------------

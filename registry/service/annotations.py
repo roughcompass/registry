@@ -817,7 +817,10 @@ def _encode_cursor(t_ingested_at: datetime, annotation_id: uuid.UUID) -> str:
     total order even when multiple rows share the same t_ingested_at value.
     """
     payload = {"t": t_ingested_at.isoformat(), "id": str(annotation_id)}
-    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+    # Strip trailing '=' so the cursor survives URL normalization layers
+    # (gateways, browsers, retry libraries) that drop padding from query
+    # parameters. _decode_cursor restores the padding before decoding.
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
 
 
 def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
@@ -828,7 +831,11 @@ def _decode_cursor(cursor: str) -> tuple[datetime, uuid.UUID]:
     validation failure, not a server error.
     """
     try:
-        payload = json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
+        # Restore padding stripped by _encode_cursor (or by an upstream gateway
+        # that normalized the query parameter); base64 requires a 4-byte
+        # multiple.
+        padded = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
         return datetime.fromisoformat(payload["t"]), uuid.UUID(payload["id"])
     except Exception as exc:
         raise HTTPException(
