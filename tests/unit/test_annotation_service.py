@@ -94,10 +94,12 @@ def _make_session(
     - SELECT FROM capability_annotations → returns annotation_row if provided, else None
     """
     executed: list[str] = []
+    executed_params: list[dict[str, Any] | None] = []
 
     async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
         sql = " ".join(str(stmt).split())
         executed.append(sql)
+        executed_params.append(params)
         result = MagicMock()
 
         if "FROM entities" in sql and "entity_id = :eid" in sql:
@@ -133,6 +135,7 @@ def _make_session(
     session = AsyncMock()
     session.execute = _execute
     session._executed = executed  # type: ignore[attr-defined]
+    session._executed_params = executed_params  # type: ignore[attr-defined]
     return session
 
 
@@ -586,6 +589,72 @@ async def test_triage_forward_stores_triage_note() -> None:
     ref = await svc.triage_annotation(ctx, _ANNOTATION_ID, new_status="triaged", triage_note="Under review.")
 
     assert ref.triage_note == "Under review."
+
+
+# ---------------------------------------------------------------------------
+# triage_annotation — version_target (None-as-no-change semantics)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_triage_sets_version_target() -> None:
+    """Supplying version_target writes it via the SET clause and surfaces it on the ref."""
+    session = _make_session(annotation_row=_open_annotation_row())
+    svc = AnnotationService(
+        session_factory=_make_factory(session),
+        visibility_svc=_visibility(),
+        pii_scanner=_pii_clean(),
+        audit_writer=_audit_writer(),
+        clock=FakeClock(_NOW),
+    )
+    ctx = _provider_ctx()
+
+    ref = await svc.triage_annotation(
+        ctx,
+        _ANNOTATION_ID,
+        new_status="triaged",
+        version_target="v2.3",
+    )
+
+    assert ref.version_target == "v2.3"
+
+    # The UPDATE binds version_target='v2.3'.
+    update_idx = next(
+        i for i, sql in enumerate(session._executed)
+        if sql.upper().lstrip().startswith("UPDATE")
+    )
+    update_sql = session._executed[update_idx]
+    update_params = session._executed_params[update_idx]
+    assert update_params is not None
+    assert update_params.get("version_target") == "v2.3"
+    assert "version_target = :version_target" in update_sql
+
+
+@pytest.mark.asyncio
+async def test_triage_preserves_version_target_when_omitted() -> None:
+    """Omitting version_target leaves the stored value intact; SET clause does not name it."""
+    pre_existing = _open_annotation_row()
+    pre_existing["version_target"] = "v1.0"
+    session = _make_session(annotation_row=pre_existing)
+    svc = AnnotationService(
+        session_factory=_make_factory(session),
+        visibility_svc=_visibility(),
+        pii_scanner=_pii_clean(),
+        audit_writer=_audit_writer(),
+        clock=FakeClock(_NOW),
+    )
+    ctx = _provider_ctx()
+
+    ref = await svc.triage_annotation(ctx, _ANNOTATION_ID, new_status="triaged")
+
+    # Pre-triage value is preserved on the returned ref.
+    assert ref.version_target == "v1.0"
+
+    # The UPDATE's SET clause does not mention version_target — the column is
+    # omitted entirely so the stored value is left unchanged.
+    update_sqls = [sql for sql in session._executed if sql.upper().lstrip().startswith("UPDATE")]
+    assert len(update_sqls) == 1
+    assert "version_target" not in update_sqls[0]
 
 
 # ---------------------------------------------------------------------------

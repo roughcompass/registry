@@ -335,6 +335,7 @@ class AnnotationService:
         annotation_id: uuid.UUID,
         new_status: str,
         triage_note: str | None = None,
+        version_target: str | None = None,
     ) -> AnnotationRef:
         """Update the status (and optionally triage_note) of an annotation.
 
@@ -401,26 +402,40 @@ class AnnotationService:
         now = self._clock.now()
         old_status = annotation.status
 
-        # Step 6 — UPDATE status, triage_note, and updated_at.
+        # Step 6 — UPDATE status, triage_note, optionally version_target, and
+        # updated_at. version_target follows None-as-no-change semantics: when
+        # the caller omits it, the column is left out of the SET clause so the
+        # stored value is preserved. Two literal SQL branches keep the SET
+        # clause fully static in either path.
+        params: dict[str, Any] = {
+            "new_status": new_status,
+            "triage_note": triage_note,
+            "now": now,
+            "annotation_id": annotation_id,
+        }
+        if version_target is not None:
+            update_sql = """
+                UPDATE capability_annotations
+                SET status = :new_status,
+                    triage_note = :triage_note,
+                    version_target = :version_target,
+                    updated_at = :now
+                WHERE annotation_id = :annotation_id
+                  AND t_invalidated_at IS NULL
+            """
+            params["version_target"] = version_target
+        else:
+            update_sql = """
+                UPDATE capability_annotations
+                SET status = :new_status,
+                    triage_note = :triage_note,
+                    updated_at = :now
+                WHERE annotation_id = :annotation_id
+                  AND t_invalidated_at IS NULL
+            """
+
         async with self._session_factory() as session, session.begin():
-            await session.execute(
-                text(
-                    """
-                    UPDATE capability_annotations
-                    SET status = :new_status,
-                        triage_note = :triage_note,
-                        updated_at = :now
-                    WHERE annotation_id = :annotation_id
-                      AND t_invalidated_at IS NULL
-                    """
-                ),
-                {
-                    "new_status": new_status,
-                    "triage_note": triage_note,
-                    "now": now,
-                    "annotation_id": annotation_id,
-                },
-            )
+            await session.execute(text(update_sql), params)
 
         # Step 7 — emit audit event.
         await self._audit_writer.emit(
@@ -458,7 +473,9 @@ class AnnotationService:
             triage_note=triage_note if triage_note is not None else annotation.triage_note,
             category=annotation.category,
             status=new_status,
-            version_target=annotation.version_target,
+            version_target=(
+                version_target if version_target is not None else annotation.version_target
+            ),
             created_at=annotation.created_at,
             updated_at=now,
             warnings=triage_warnings,
