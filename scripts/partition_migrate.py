@@ -218,7 +218,13 @@ def _transactional_rename(conn: object, table: str, dry_run: bool) -> None:
 
 def _copy_embeddings(conn: object, dry_run: bool) -> int:
     """Bulk-copy embeddings into embeddings_new (hash-partitioned; no range)."""
-    resume_count = _chunk_row_count(conn, "embeddings_new", datetime.date(1970, 1, 1), datetime.date(9999, 1, 1))
+    # embeddings_new is hash-partitioned with no ts column, so the generic
+    # _chunk_row_count (which uses WHERE ts >= ... AND ts < ...) does not
+    # apply. Count the whole table directly for the resume check.
+    cur = conn.cursor()  # type: ignore[attr-defined]
+    cur.execute("SELECT COUNT(*) FROM embeddings_new")
+    row = cur.fetchone()
+    resume_count = int(row[0]) if row else 0
     if resume_count > 0:
         _log.info("RESUME: embeddings_new already has %d rows — skipping copy", resume_count)
         return 0
@@ -400,7 +406,14 @@ def main(argv: list[str] | None = None) -> None:
     except ModuleNotFoundError:
         sys.exit("ERROR: psycopg2 not installed — pip install psycopg2-binary")
 
-    conn = psycopg2.connect(args.database_url)
+    # SQLAlchemy-style URLs ("postgresql+asyncpg://...", "postgresql+psycopg2://...")
+    # are accepted everywhere else in the codebase but psycopg2.connect rejects
+    # the "+driver" suffix. Strip it so DATABASE_URL works without modification.
+    dsn = args.database_url
+    if dsn.startswith("postgresql+"):
+        dsn = "postgresql://" + dsn.split("://", 1)[1]
+
+    conn = psycopg2.connect(dsn)
     conn.autocommit = False
     try:
         run_migration(conn, dry_run=args.dry_run)

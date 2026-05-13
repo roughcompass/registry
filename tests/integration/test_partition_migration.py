@@ -135,8 +135,11 @@ async def test_partition_pruning_embeddings(pg_container: str) -> None:
 
     await engine.dispose()
 
-    # rows is a list of single-column rows; the JSON is in the first cell
-    plan_json = json.loads(rows[0][0])
+    # rows is a list of single-column rows; the first cell holds the EXPLAIN
+    # output. asyncpg auto-decodes JSON columns into Python lists/dicts, so
+    # only run json.loads when the driver handed back a raw string.
+    raw_plan = rows[0][0]
+    plan_json = json.loads(raw_plan) if isinstance(raw_plan, (str, bytes, bytearray)) else raw_plan
 
     def _count_partition_scans(node: object) -> int:
         """Recursively count Seq Scan / Index Scan nodes on embeddings partitions."""
@@ -187,14 +190,31 @@ async def test_audit_partition_detach_procedure(pg_container: str) -> None:
             )
         )
 
-        # Insert a row so the partition is non-empty and queryable after detach
+        # Seed a tenants row so the audit_log_tenant_id_fkey constraint is
+        # satisfied. Use a fixed slug suffix on the synthetic tenant to keep
+        # the test deterministic across reruns within the same container.
+        seed_tenant_id = uuid.uuid4()
+        await conn.execute(
+            sqlalchemy.text(
+                "INSERT INTO tenants (tenant_id, slug, display_name, created_at, is_active) "
+                "VALUES (:tid, :slug, 'audit-detach-test', '2020-01-01 00:00:00+00', TRUE)"
+            ),
+            {"tid": seed_tenant_id, "slug": f"audit-detach-{seed_tenant_id.hex[:8]}"},
+        )
+
+        # Insert a row so the partition is non-empty and queryable after
+        # detach. Column names match the audit_log schema in migration 0006:
+        # audit_id PK, target_type / target_id (not legacy resource_*), ts
+        # as the partition key. actor_id is left NULL so the test does not
+        # have to seed an actors row to satisfy that FK.
         await conn.execute(
             sqlalchemy.text(
                 f"INSERT INTO {partition_name} "
-                f"(log_id, tenant_id, actor_id, action, resource_type, resource_id, ts) "
-                f"VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), "
+                f"(audit_id, tenant_id, actor_id, action, target_type, target_id, ts) "
+                f"VALUES (gen_random_uuid(), :tid, NULL, "
                 f"'test_action', 'capability', gen_random_uuid(), '2020-01-15 00:00:00+00')"
-            )
+            ),
+            {"tid": seed_tenant_id},
         )
 
     # DETACH CONCURRENTLY must run outside an explicit transaction block
