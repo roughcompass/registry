@@ -75,6 +75,13 @@ class Tenant(Base):
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Opaque ID assigned by an upstream identity system. NULL for manually-provisioned
+    # tenants. Uniqueness among non-NULL rows is enforced by a partial DB index
+    # (ix_tenants_external_tenant_id_provider) — see the 0015 migration.
+    external_tenant_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # How this tenant was created. CHECK constraint in DB enforces 'manual' | 'jit' | 'system'.
+    # The specific upstream source name belongs in audit-log payloads, not here.
+    provider: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
 
 
 class Actor(Base, TenantMixin):
@@ -605,3 +612,317 @@ class RateLimit(Base, TenantMixin):
     reads_per_second: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     writes_per_second: Mapped[int] = mapped_column(Integer, nullable=False, default=10)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+# --- Progression definitions ---
+
+
+class ProgressionDefinition(Base, TenantMixin):
+    """Bi-temporal definition of stage-transition rules for an entity type.
+
+    Each row describes how entities of a given ``entity_type`` within a tenant
+    may move between stages. ``definition`` is an opaque JSONB blob interpreted
+    by the progression service; the schema is validated at write time, not here.
+
+    ``is_advisory`` controls enforcement: FALSE means the service rejects
+    invalid transitions; TRUE means it records a warning and allows them.
+
+    Bi-temporal columns follow the registry standard:
+      - ``t_valid_from`` / ``t_valid_to``   — real-world validity window
+      - ``t_ingested_at`` / ``t_invalidated_at`` — registry observation window
+
+    The unique constraint on ``(tenant_id, entity_type, t_valid_from)`` prevents
+    two definitions from starting at the same instant, removing ambiguity when
+    the service resolves the active definition for a given (tenant, entity_type).
+    """
+
+    __tablename__ = "progression_definitions"
+
+    progression_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(Text, nullable=False)
+    definition: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    is_advisory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    t_valid_from: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_valid_to: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    t_ingested_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_invalidated_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class ProgressionOverride(Base, TenantMixin):
+    """Single-use grant authorizing an entity to bypass a gate for a specific transition.
+
+    Each row represents an explicit override issued by an authorized actor. The
+    validity window (``t_valid_from`` / ``t_valid_to``) bounds when the override
+    may be consumed. ``gate_id`` identifies the specific gate to bypass, or "*"
+    meaning any gate on that transition.
+
+    ``bypass_skip_rules`` defaults to False. Set it to True only when the override
+    is intended to allow skipping intermediate states as well as the gate check —
+    this must be an explicit opt-in per the override schema.
+
+    Single-use invariant: ``consumed_at IS NULL`` means the override is available.
+    The progression service writes ``consumed_at`` in the same transaction as the
+    transition it authorizes. No DB constraint enforces single-use — the service
+    owns this invariant and must check ``consumed_at IS NULL`` before consuming.
+    """
+
+    __tablename__ = "progression_overrides"
+
+    override_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False
+    )
+    entity_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("entities.entity_id"), nullable=False
+    )
+    from_state: Mapped[str] = mapped_column(Text, nullable=False)
+    to_state: Mapped[str] = mapped_column(Text, nullable=False)
+    gate_id: Mapped[str] = mapped_column(Text, nullable=False)
+    bypass_skip_rules: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    authorized_by: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False
+    )
+    t_valid_from: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_valid_to: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # References audit_log(audit_id) — the audit record written at the time the
+    # override was issued. Column is named audit_event_id to match the domain term
+    # used in override-creation requests; the DB FK resolves to audit_log.audit_id.
+    audit_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("audit_log.audit_id"), nullable=False
+    )
+
+
+# --- Capability annotations ---
+
+
+class AnnotationRecord(Base):
+    """Bi-temporal record of a consumer annotation against a capability.
+
+    One row per annotation submission.  Soft-delete is implemented via
+    ``t_invalidated_at``: active annotations always have
+    ``t_invalidated_at IS NULL``.  Hard-delete is never performed in this
+    phase; physical purge is a future concern.
+
+    ``body`` is NOT NULL in this phase — every annotation must carry a body.
+    ``triage_note`` is optional; it is written by the capability owner during
+    triage and may remain NULL throughout the annotation's lifetime.
+
+    ``author_actor_id`` and ``author_tenant_id`` are both NOT NULL; they record
+    the submitting actor and their tenant so the service can enforce the
+    provider path vs. author path distinction on list queries without an extra
+    join to the capabilities table.
+
+    Bi-temporal columns follow the registry standard:
+      - ``t_valid_from`` / ``t_valid_to``     — real-world validity window
+      - ``t_ingested_at`` / ``t_invalidated_at`` — registry observation window
+
+    Body access: always go through ``_serialize_body()`` rather than reading
+    ``record.body`` directly.  That single method is the ENC-phase handoff
+    seam: when encryption is retrofitted, only that one method grows the
+    conditional decrypt branch.  Scattered ``row.body`` accesses elsewhere
+    would require a broad sweep at that point and risk missing a callsite.
+    """
+
+    __tablename__ = "capability_annotations"
+
+    annotation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    capability_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    author_actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    author_tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    triage_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="open")
+    version_target: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_valid_from: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_valid_to: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    t_ingested_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    t_invalidated_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    def _serialize_body(self) -> str:
+        """Return the annotation body as a string.
+
+        This phase: body is always NOT NULL plaintext; this returns it directly.
+        This single accessor is the ENC-phase handoff seam: when encryption ships,
+        only this method gets the conditional decrypt branch. Every body access
+        in the service layer goes through this helper, not through ``record.body``.
+        """
+        return self.body
+
+
+# --- Workspace additions ---
+
+
+class WorkspaceRecord(Base, TenantMixin):
+    """One row per workspace.
+
+    ``owner_kind`` is CHECK-constrained to 'actor' | 'tenant' in the DB.
+    When ``owner_kind = 'actor'``, ``owner_actor_id`` must be non-NULL
+    (enforced by ``chk_actor_owner`` in the DB).
+
+    ``encryption_tier`` is NOT NULL with a server default of 'none' — it is a
+    forward-compatibility column so the regulated-tenant block and future ENC
+    detection can read it without a schema change. WS-phase service code only
+    reads it to enforce the regulated-tenant gate; it never writes a value other
+    than 'none'.
+
+    Soft-delete is implemented via ``t_invalidated_at``: active workspaces always
+    have ``t_invalidated_at IS NULL``. Hard-delete is not performed in this phase.
+
+    ``archived_at`` marks a workspace as archived (read-only) without
+    soft-deleting it. A non-NULL ``archived_at`` means entry writes are rejected
+    by the service layer.
+    """
+
+    __tablename__ = "workspaces"
+
+    workspace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # CHECK (owner_kind IN ('actor','tenant')) enforced in DB
+    owner_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    owner_actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=True
+    )
+    # Forward-compatibility column for future ENC-phase detection. WS-phase code
+    # only reads this to enforce the regulated-tenant block; it never writes a
+    # value other than 'none'. NOT NULL with DB DEFAULT 'none'.
+    encryption_tier: Mapped[str] = mapped_column(Text, nullable=False, default="none")
+    archived_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    t_invalidated_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=True
+    )
+
+
+class WorkspaceEntryRecord(Base, TenantMixin):
+    """One row per entry within a workspace.
+
+    ``body_md`` is NOT NULL in this phase — every entry must carry a plaintext
+    body. The ENC-phase ALTER TABLE will drop the NOT NULL constraint and add
+    ``body_ciphertext`` / ``body_nonce`` columns at that point. No ciphertext
+    columns exist on this ORM class; their presence is a contract violation.
+
+    ``references_jsonb`` is an optional JSONB blob for structured cross-reference
+    metadata (e.g. linked entity schemas).
+
+    ``reference_ids`` is a UUID[] column holding the IDs of entities or facts
+    this entry directly references. The GIN index ``idx_we_refs`` enables
+    efficient ``ANY(reference_ids)`` lookups in the service layer without
+    loading every entry row.
+
+    ``kind`` is CHECK-constrained in the DB to the set of known entry kinds
+    ('note', 'decision', 'open_question', 'saved_query', 'saved_view',
+    'private_annotation').
+
+    Soft-delete via ``t_invalidated_at``. Hard-delete is performed only by the
+    RTBF purge path (physical purge, not soft-delete).
+    """
+
+    __tablename__ = "workspace_entries"
+
+    entry_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.workspace_id"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
+    # CHECK (kind IN ('note','decision','open_question','saved_query','saved_view',
+    #   'private_annotation')) enforced in DB
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    # NOT NULL in this phase: plaintext body required. ENC-phase ALTER drops this
+    # constraint and adds body_ciphertext/body_nonce — no ORM change here until then.
+    body_md: Mapped[str] = mapped_column(Text, nullable=False)
+    # Optional JSONB blob for structured cross-reference metadata.
+    references_jsonb: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # UUID[] — GIN-indexed (idx_we_refs) for fast ANY(reference_ids) filtering.
+    reference_ids: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(UUID(as_uuid=True)), nullable=False, default=list)
+    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    t_invalidated_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=True
+    )
+
+
+class WorkspaceShareRecord(Base, TenantMixin):
+    """One row per share grant on a workspace.
+
+    ``role`` is CHECK-constrained to 'reader' | 'contributor' in the DB.
+
+    ``grantee_tenant_id`` enables cross-tenant share detection: when
+    ``tenant_id != grantee_tenant_id``, the share is cross-tenant. The
+    BEFORE INSERT trigger ``trg_ws_share_cross_tenant`` rejects cross-tenant
+    shares on actor-owned workspaces at the DB layer; the service layer guard
+    returns HTTP 422 before the INSERT is attempted.
+
+    ``revoked_at`` is the soft-delete sentinel. A NULL ``revoked_at`` means the
+    share is active. The unique partial index ``uq_share`` on
+    ``(workspace_id, grantee_actor_id) WHERE revoked_at IS NULL`` enforces at
+    most one active share per (workspace, grantee) pair.
+    """
+
+    __tablename__ = "workspace_shares"
+
+    share_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.workspace_id"), nullable=False
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
+    grantee_actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False
+    )
+    grantee_tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False
+    )
+    # CHECK (role IN ('reader','contributor')) enforced in DB
+    role: Mapped[str] = mapped_column(Text, nullable=False, default="reader")
+    granted_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=True
+    )
+    granted_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class WorkspaceShareAcceptanceRecord(Base):
+    """One row per explicit acceptance of a cross-tenant share by a grantee actor.
+
+    Written on first cross-tenant workspace access so the service can record
+    that the grantee acknowledged the share. The unique index
+    ``uq_acceptance`` on ``(share_id, accepting_actor_id)`` makes acceptance
+    idempotent — repeated first-access calls are safe.
+
+    ``accepting_tenant_id`` is stored denormalized so the service can filter
+    acceptances by grantee tenant without joining ``workspace_shares``.
+
+    This table does NOT carry a ``tenant_id`` column (unlike most tables in
+    this schema). The accepting side is identified by ``accepting_tenant_id``;
+    the granting side is reachable via ``share_id → workspace_shares``.
+    TenantMixin is intentionally not applied here.
+    """
+
+    __tablename__ = "workspace_share_acceptances"
+
+    acceptance_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    share_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspace_shares.share_id"), nullable=False
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.workspace_id"), nullable=False
+    )
+    accepting_actor_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False
+    )
+    accepting_tenant_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False
+    )
+    accepted_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)

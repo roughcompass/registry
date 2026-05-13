@@ -107,7 +107,9 @@ def get_mode_settings() -> tuple[HttpMethodsMode, AliasSeperator]:
     # Routers register routes at module-import time before any Settings
     # exists — same defaults as Settings, see the function docstring.
     raw_mode = os.environ.get("REGISTRY_HTTP_METHODS_MODE", _DEFAULT_MODE).strip().lower()  # config: intentional
-    raw_sep = os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", _DEFAULT_SEP).strip().lower()  # config: intentional
+    raw_sep = (  # config: intentional
+        os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", _DEFAULT_SEP).strip().lower()
+    )
 
     if raw_mode not in _VALID_MODES:
         _log.warning(

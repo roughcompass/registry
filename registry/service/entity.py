@@ -13,6 +13,7 @@ from __future__ import annotations
 import datetime
 import logging
 import uuid
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import func, select, text
@@ -20,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry.api.auth.context import ROLE_ADMIN, ROLE_AUDITOR, ROLE_CONSUMER, ROLE_PRODUCER
 from registry.exceptions import NotFoundError, TenantIsolationError, ValidationError
+from registry.service.progression import ProgressionService
 from registry.service.schema import SchemaService
 from registry.service.temporal import normalize_utc
 from registry.service.vocabulary import VocabularyService
@@ -30,6 +32,21 @@ if TYPE_CHECKING:
     from registry.service.visibility import VisibilityService
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass
+class _ProgressionEntityView:
+    """Lightweight entity view passed into ProgressionService.validate_transition.
+
+    Carries only the fields the progression rule engine needs: identity,
+    type, and the post-update merged attribute dict. This avoids passing
+    the ORM Entity row (which has no loaded attributes dict) into the
+    progression service while keeping the interface clean.
+    """
+
+    entity_id: uuid.UUID
+    entity_type: str
+    attributes: dict[str, Any]
 
 
 def _validate_semver_attribute(attributes: dict[str, Any]) -> None:
@@ -216,20 +233,56 @@ class EntityService:
                 raise NotFoundError(msg)
             self._assert_tenant(ctx, entity.tenant_id)
 
-            # Fetch all currently-open attribute rows for the updated keys in one
-            # round-trip instead of one SELECT per key. The result is a Python
-            # dict so the supersede loop below has O(1) lookup with no DB I/O.
-            keys = list(updates.keys())
-            existing_rows_result = await session.execute(
+            # Fetch ALL currently-open attribute rows for the entity in one
+            # round-trip. The result serves two purposes:
+            #   1. Build merged_attributes (existing values overlaid by updates)
+            #      for schema validation before any writes happen.
+            #   2. O(1) lookup during the supersede loop (same dict, no extra I/O).
+            all_existing_result = await session.execute(
                 select(Attribute).where(
                     Attribute.tenant_id == ctx.tenant_id,
                     Attribute.entity_id == entity_id,
-                    Attribute.key.in_(keys),
                     Attribute.t_invalidated_at.is_(None),
                     Attribute.t_valid_to.is_(None),
                 )
             )
-            existing_by_key: dict[str, Attribute] = {row.key: row for row in existing_rows_result.scalars()}
+            existing_by_key: dict[str, Attribute] = {row.key: row for row in all_existing_result.scalars()}
+
+            # Validate the post-update attribute state against the entity_type
+            # schema before writing any rows. Merges existing values under update
+            # keys so the full attribute envelope is what the schema sees, not
+            # just the patch delta. Raises ValidationError (HTTP 422) when a
+            # mandatory schema is violated; advisory violations return warnings
+            # but do not block the write.
+            merged_attributes = {**{k: v.value for k, v in existing_by_key.items()}, **updates}
+            await self._schema.validate_capability(ctx, entity.entity_type, merged_attributes)
+
+            # Validate stage_progression transition when the attribute is being
+            # changed. The check runs after _assert_tenant (above) so tenant
+            # isolation is already enforced. ProgressionService reads tenant_id
+            # from ctx — it never opens a new cross-tenant query path.
+            if "stage_progression" in updates:
+                new_state = updates["stage_progression"]
+                old_state_attr = existing_by_key.get("stage_progression")
+                old_state = old_state_attr.value if old_state_attr is not None else None
+                if new_state != old_state:
+                    # Build a lightweight attribute view for the progression
+                    # service. Merges existing values with incoming updates so
+                    # gate checks see the post-write attribute state.
+                    _attr_view = _ProgressionEntityView(
+                        entity_id=entity.entity_id,
+                        entity_type=entity.entity_type,
+                        attributes=merged_attributes,
+                    )
+                    progression_svc = ProgressionService(
+                        session_factory=self._session_factory,
+                        clock=self._clock,
+                    )
+                    await progression_svc.validate_transition(
+                        ctx, _attr_view, old_state, new_state
+                    )
+                    # validate_transition returns ValidationResult(valid=True)
+                    # or raises ProgressionError (HTTP 422).
 
             for key, value in updates.items():
                 # Close the currently-open row for this key, if any.

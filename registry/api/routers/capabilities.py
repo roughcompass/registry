@@ -38,6 +38,7 @@ from registry.api.schemas import (
     UpdateEntityRequest,
 )
 from registry.exceptions import CatalogError, NotFoundError, ValidationError
+from registry.service.progression import ProgressionError
 from registry.service.temporal import normalize_utc
 from registry.service.visibility import VisibilityService
 from registry.types import CapabilityRecord, EdgeRef, TenantContext
@@ -465,6 +466,15 @@ async def patch_capability(
         )
         await service.update_entity(ctx, resolved.entity_id, body.updates, valid_from=body.valid_from)
         record = await service.get_full_capability(ctx, resolved.entity_id)
+    except ProgressionError as exc:
+        # Enforcing-mode progression rejection — the stage_progression write is
+        # blocked because the gate check failed and no matching override exists.
+        # Surface as 422 so the caller understands the transition was refused by
+        # the rule engine, not by a malformed request.
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail={"code": "progression_rejected", "reason": str(exc)},
+        ) from exc
     except CatalogError as exc:
         raise map_catalog_error(exc) from exc
     return to_response(record)

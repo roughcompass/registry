@@ -37,6 +37,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from registry.api import audit as audit_emit
+from registry.audit import actions
 from registry.exceptions import ConflictError, NotFoundError, TenantIsolationError
 from registry.types import Clock, EntityRef, ExternalIdRef, TenantContext
 
@@ -450,7 +451,7 @@ class ExternalIdService:
             self._session_factory,
             ctx,
             self._clock,
-            action="delete",
+            action=actions.EXTERNAL_ID_DELETED,
             target_type="entity_external_id",
             target_id=external_id_pk,
             after=audit_snapshot,

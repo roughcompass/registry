@@ -26,7 +26,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
-_MIG_PATH = _REPO_ROOT / "catalog" / "storage" / "migrations" / "versions" / "0007_phase6_graph_primitives.py"
+_MIG_PATH = _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0007_phase6_graph_primitives.py"
 
 _MIG_SPEC = importlib.util.spec_from_file_location("migration_0007", _MIG_PATH)
 assert _MIG_SPEC is not None and _MIG_SPEC.loader is not None
@@ -334,7 +334,7 @@ class TestPartitionBoundsHelper:
 # Migration 0009_phase7_provider_consumer unit tests
 # ===========================================================================
 
-_MIG7_PATH = _REPO_ROOT / "catalog" / "storage" / "migrations" / "versions" / "0009_phase7_provider_consumer.py"
+_MIG7_PATH = _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0009_phase7_provider_consumer.py"
 
 _MIG7_SPEC = importlib.util.spec_from_file_location("migration_0009", _MIG7_PATH)
 assert _MIG7_SPEC is not None and _MIG7_SPEC.loader is not None
@@ -661,7 +661,7 @@ class TestP7PartitionBoundsHelper:
 # Migration 0014 — visibility vocabulary rename
 # ---------------------------------------------------------------------------
 
-_MIG14_PATH = _REPO_ROOT / "catalog" / "storage" / "migrations" / "versions" / "0014_visibility_public_rename.py"
+_MIG14_PATH = _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0014_visibility_public_rename.py"
 _MIG14_SPEC = importlib.util.spec_from_file_location("migration_0014", _MIG14_PATH)
 assert _MIG14_SPEC is not None and _MIG14_SPEC.loader is not None
 _mig14 = importlib.util.module_from_spec(_MIG14_SPEC)
@@ -766,3 +766,488 @@ class TestMig0014Downgrade:
         # It may contain 'public' as part of 'public-in-fabric', but must not
         # list a standalone 'public' value separate from 'public-in-fabric'.
         assert "'public'" not in stmt or "public-in-fabric" in stmt
+
+
+# ===========================================================================
+# Migration 0018_annotations_plaintext unit tests
+# ===========================================================================
+
+_MIG18_PATH = _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0018_annotations_plaintext.py"
+_MIG18_SPEC = importlib.util.spec_from_file_location("migration_0018", _MIG18_PATH)
+assert _MIG18_SPEC is not None and _MIG18_SPEC.loader is not None
+_mig18 = importlib.util.module_from_spec(_MIG18_SPEC)
+_MIG18_SPEC.loader.exec_module(_mig18)  # type: ignore[union-attr]
+
+_AN_CATEGORY_SEEDS: list[str] = _mig18._ANNOTATION_CATEGORY_SEEDS
+_AN_STATUS_SEEDS: list[str] = _mig18._ANNOTATION_STATUS_SEEDS
+
+
+def _capture_0018_upgrade() -> list[str]:
+    """Run 0018 upgrade() with op.execute patched; return all SQL strings issued."""
+    executed: list[str] = []
+
+    def capture(sql: object) -> None:
+        executed.append(str(sql))
+
+    from alembic import op  # noqa: PLC0415
+
+    original = getattr(op, "execute", None)
+    try:
+        op.execute = capture  # type: ignore[attr-defined]
+        _mig18.upgrade()
+    finally:
+        if original is not None:
+            op.execute = original  # type: ignore[attr-defined]
+    return executed
+
+
+def _capture_0018_downgrade() -> list[str]:
+    """Run 0018 downgrade() with op.execute patched; return all SQL strings issued."""
+    executed: list[str] = []
+
+    def capture(sql: object) -> None:
+        executed.append(str(sql))
+
+    from alembic import op  # noqa: PLC0415
+
+    original = getattr(op, "execute", None)
+    try:
+        op.execute = capture  # type: ignore[attr-defined]
+        _mig18.downgrade()
+    finally:
+        if original is not None:
+            op.execute = original  # type: ignore[attr-defined]
+    return executed
+
+
+class TestMig0018Module:
+    def test_revision_id(self) -> None:
+        assert _mig18.revision == "0018_annotations_plaintext"
+
+    def test_down_revision(self) -> None:
+        assert _mig18.down_revision == "0017_create_progression_overrides"
+
+    def test_upgrade_callable(self) -> None:
+        assert callable(_mig18.upgrade)
+
+    def test_downgrade_callable(self) -> None:
+        assert callable(_mig18.downgrade)
+
+
+class TestMig0018UpgradeDdl:
+    def test_capability_annotations_table_created(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "CREATE TABLE capability_annotations" in combined
+
+    def test_all_required_columns_present(self) -> None:
+        stmts = _capture_0018_upgrade()
+        create_stmts = [s for s in stmts if "CREATE TABLE capability_annotations" in s]
+        assert len(create_stmts) == 1
+        stmt = create_stmts[0]
+        required_cols = [
+            "annotation_id",
+            "tenant_id",
+            "capability_id",
+            "author_actor_id",
+            "author_tenant_id",
+            "body",
+            "triage_note",
+            "category",
+            "status",
+            "version_target",
+            "created_at",
+            "updated_at",
+            "t_valid_from",
+            "t_valid_to",
+            "t_ingested_at",
+            "t_invalidated_at",
+        ]
+        for col in required_cols:
+            assert col in stmt, f"Column '{col}' missing from capability_annotations DDL"
+
+    def test_body_is_not_null(self) -> None:
+        stmts = _capture_0018_upgrade()
+        create_stmt = next(s for s in stmts if "CREATE TABLE capability_annotations" in s)
+        # body TEXT NOT NULL must appear — the simplest signal is body followed by NOT NULL
+        assert "body" in create_stmt
+        assert "NOT NULL" in create_stmt
+
+    def test_status_default_open(self) -> None:
+        stmts = _capture_0018_upgrade()
+        create_stmt = next(s for s in stmts if "CREATE TABLE capability_annotations" in s)
+        assert "DEFAULT 'open'" in create_stmt
+
+    def test_check_constraint_category(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "chk_annotation_category" in combined
+        for val in ("feedback", "bug", "suggestion", "question", "doc_gap"):
+            assert val in combined, f"category value '{val}' missing from CHECK constraint DDL"
+
+    def test_check_constraint_status(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "chk_annotation_status" in combined
+        for val in ("open", "triaged", "acknowledged", "closed"):
+            assert val in combined, f"status value '{val}' missing from CHECK constraint DDL"
+
+    def test_three_partial_indexes_created(self) -> None:
+        stmts = _capture_0018_upgrade()
+        idx_stmts = [s for s in stmts if "CREATE INDEX" in s and "capability_annotations" in s]
+        assert len(idx_stmts) == 3, f"Expected 3 partial indexes, got {len(idx_stmts)}"
+
+    def test_idx_ann_capability_created(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "idx_ann_capability" in combined
+
+    def test_idx_ann_author_created(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "idx_ann_author" in combined
+
+    def test_idx_ann_status_created(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "idx_ann_status" in combined
+
+    def test_all_indexes_have_partial_predicate(self) -> None:
+        stmts = _capture_0018_upgrade()
+        idx_stmts = [s for s in stmts if "CREATE INDEX" in s and "capability_annotations" in s]
+        for stmt in idx_stmts:
+            assert "t_invalidated_at IS NULL" in stmt, (
+                f"Partial index predicate missing from: {stmt!r}"
+            )
+
+    def test_no_ciphertext_columns(self) -> None:
+        """Plaintext-only invariant: no ENC-phase columns may appear in this migration."""
+        combined = "\n".join(_capture_0018_upgrade())
+        forbidden = [
+            "body_ciphertext",
+            "body_nonce",
+            "triage_note_ciphertext",
+            "triage_note_nonce",
+            "kek_id",
+            "wrapped_dek",
+            "encryption_tier",
+        ]
+        for col in forbidden:
+            assert col not in combined, f"Forbidden ENC-phase column '{col}' found in upgrade() DDL"
+
+
+class TestMig0018VocabSeeds:
+    def test_five_category_seeds(self) -> None:
+        assert len(_AN_CATEGORY_SEEDS) == 5
+
+    def test_four_status_seeds(self) -> None:
+        assert len(_AN_STATUS_SEEDS) == 4
+
+    def test_all_category_values_seeded(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        for val in ("feedback", "bug", "suggestion", "question", "doc_gap"):
+            assert val in combined, f"annotation_category '{val}' not seeded"
+
+    def test_all_status_values_seeded(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        for val in ("open", "triaged", "acknowledged", "closed"):
+            assert val in combined, f"annotation_status '{val}' not seeded"
+
+    def test_seeds_use_on_conflict_do_nothing(self) -> None:
+        stmts = _capture_0018_upgrade()
+        insert_stmts = [s for s in stmts if "INSERT INTO vocabulary_values" in s]
+        total_seeds = len(_AN_CATEGORY_SEEDS) + len(_AN_STATUS_SEEDS)
+        assert len(insert_stmts) == total_seeds, (
+            f"Expected {total_seeds} vocab INSERT statements, got {len(insert_stmts)}"
+        )
+        for stmt in insert_stmts:
+            assert "ON CONFLICT DO NOTHING" in stmt, (
+                f"ON CONFLICT DO NOTHING missing from vocab seed: {stmt!r}"
+            )
+
+    def test_seeds_have_is_system_true(self) -> None:
+        stmts = _capture_0018_upgrade()
+        insert_stmts = [s for s in stmts if "INSERT INTO vocabulary_values" in s]
+        for stmt in insert_stmts:
+            assert "TRUE" in stmt, f"is_system=TRUE missing from vocab seed: {stmt!r}"
+
+    def test_category_kind_used(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "annotation_category" in combined
+
+    def test_status_kind_used(self) -> None:
+        combined = "\n".join(_capture_0018_upgrade())
+        assert "annotation_status" in combined
+
+
+class TestMig0018DowngradeDdl:
+    def test_capability_annotations_dropped(self) -> None:
+        combined = "\n".join(_capture_0018_downgrade())
+        assert "capability_annotations" in combined
+
+    def test_vocab_seeds_deleted(self) -> None:
+        combined = "\n".join(_capture_0018_downgrade())
+        assert "DELETE FROM vocabulary_values" in combined
+        assert "annotation_category" in combined
+        assert "annotation_status" in combined
+
+    def test_delete_filters_is_system(self) -> None:
+        combined = "\n".join(_capture_0018_downgrade())
+        assert "is_system" in combined
+
+    def test_delete_before_drop(self) -> None:
+        """Vocab DELETE must precede the DROP TABLE so no FK violation occurs."""
+        stmts = _capture_0018_downgrade()
+        delete_pos = next((i for i, s in enumerate(stmts) if "DELETE FROM vocabulary_values" in s), None)
+        drop_pos = next((i for i, s in enumerate(stmts) if "DROP TABLE" in s and "capability_annotations" in s), None)
+        assert delete_pos is not None, "DELETE FROM vocabulary_values not found in downgrade()"
+        assert drop_pos is not None, "DROP TABLE capability_annotations not found in downgrade()"
+        assert delete_pos < drop_pos, "vocab DELETE must precede DROP TABLE in downgrade()"
+
+
+# ===========================================================================
+# Migration 0019_workspaces_plaintext unit tests
+# ===========================================================================
+
+_MIG19_PATH = (
+    _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0019_workspaces_plaintext.py"
+)
+_MIG19_SPEC = importlib.util.spec_from_file_location("migration_0019", _MIG19_PATH)
+assert _MIG19_SPEC is not None and _MIG19_SPEC.loader is not None
+_mig19 = importlib.util.module_from_spec(_MIG19_SPEC)
+_MIG19_SPEC.loader.exec_module(_mig19)  # type: ignore[union-attr]
+
+_WS_NEW_TABLES = [
+    "workspaces",
+    "workspace_entries",
+    "workspace_shares",
+    "workspace_share_acceptances",
+]
+
+
+def _capture_0019_upgrade() -> list[str]:
+    """Run 0019 upgrade() with op.execute patched; return all SQL strings issued."""
+    executed: list[str] = []
+
+    def capture(sql: object) -> None:
+        executed.append(str(sql))
+
+    from alembic import op  # noqa: PLC0415
+
+    original = getattr(op, "execute", None)
+    try:
+        op.execute = capture  # type: ignore[attr-defined]
+        _mig19.upgrade()
+    finally:
+        if original is not None:
+            op.execute = original  # type: ignore[attr-defined]
+    return executed
+
+
+def _capture_0019_downgrade() -> list[str]:
+    """Run 0019 downgrade() with op.execute patched; return all SQL strings issued."""
+    executed: list[str] = []
+
+    def capture(sql: object) -> None:
+        executed.append(str(sql))
+
+    from alembic import op  # noqa: PLC0415
+
+    original = getattr(op, "execute", None)
+    try:
+        op.execute = capture  # type: ignore[attr-defined]
+        _mig19.downgrade()
+    finally:
+        if original is not None:
+            op.execute = original  # type: ignore[attr-defined]
+    return executed
+
+
+class TestMig0019Module:
+    def test_revision_id(self) -> None:
+        assert _mig19.revision == "0019_workspaces_plaintext"
+
+    def test_down_revision(self) -> None:
+        assert _mig19.down_revision == "0018_annotations_plaintext"
+
+    def test_upgrade_callable(self) -> None:
+        assert callable(_mig19.upgrade)
+
+    def test_downgrade_callable(self) -> None:
+        assert callable(_mig19.downgrade)
+
+
+class TestMig0019UpgradeDdl:
+    def test_all_four_tables_created(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        for table in _WS_NEW_TABLES:
+            assert f"CREATE TABLE {table}" in combined, (
+                f"CREATE TABLE {table} not found in upgrade() DDL"
+            )
+
+    def test_workspaces_encryption_tier_column(self) -> None:
+        stmts = _capture_0019_upgrade()
+        ws_stmts = [s for s in stmts if "CREATE TABLE workspaces" in s]
+        assert len(ws_stmts) == 1
+        assert "encryption_tier" in ws_stmts[0]
+        assert "DEFAULT 'none'" in ws_stmts[0]
+
+    def test_workspaces_check_constraints(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "chk_owner_kind" in combined
+        assert "chk_encryption_tier" in combined
+        assert "chk_actor_owner" in combined
+
+    def test_workspaces_indexes_created(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "idx_ws_tenant" in combined
+        assert "idx_ws_owner" in combined
+
+    def test_workspace_entries_body_md_not_ciphertext(self) -> None:
+        """Plaintext-only invariant: body_md must be present; no ciphertext columns."""
+        stmts = _capture_0019_upgrade()
+        we_stmts = [s for s in stmts if "CREATE TABLE workspace_entries" in s]
+        assert len(we_stmts) == 1
+        stmt = we_stmts[0]
+        assert "body_md" in stmt
+        assert "body_ciphertext" not in stmt
+        assert "body_nonce" not in stmt
+
+    def test_workspace_entries_kind_check_constraint(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "chk_entry_kind" in combined
+        for val in ("note", "decision", "open_question", "saved_query", "saved_view", "private_annotation"):
+            assert val in combined, f"entry kind '{val}' missing from chk_entry_kind"
+
+    def test_workspace_entries_all_indexes_created(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        for idx in ("idx_we_workspace", "idx_we_tenant", "idx_we_refs", "idx_we_expires", "idx_we_body_fts"):
+            assert idx in combined, f"Index '{idx}' missing from upgrade() DDL"
+
+    def test_workspace_entries_fts_index_uses_gin_tsvector(self) -> None:
+        stmts = _capture_0019_upgrade()
+        fts_stmts = [s for s in stmts if "idx_we_body_fts" in s]
+        assert len(fts_stmts) == 1
+        assert "GIN" in fts_stmts[0]
+        assert "to_tsvector" in fts_stmts[0]
+        assert "english" in fts_stmts[0]
+
+    def test_workspace_entries_refs_index_is_gin(self) -> None:
+        stmts = _capture_0019_upgrade()
+        refs_stmts = [s for s in stmts if "idx_we_refs" in s]
+        assert len(refs_stmts) == 1
+        assert "GIN" in refs_stmts[0]
+
+    def test_workspace_shares_check_constraint(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "chk_share_role" in combined
+        assert "'reader'" in combined
+        assert "'contributor'" in combined
+
+    def test_workspace_shares_unique_partial_index(self) -> None:
+        stmts = _capture_0019_upgrade()
+        uq_stmts = [s for s in stmts if "uq_share" in s]
+        assert len(uq_stmts) == 1
+        assert "UNIQUE" in uq_stmts[0]
+        assert "revoked_at IS NULL" in uq_stmts[0]
+
+    def test_workspace_shares_grantee_index(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "idx_share_grantee" in combined
+
+    def test_owner_kind_trigger_function_created(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "check_workspace_owner_kind_change" in combined
+        assert "PLPGSQL" in combined or "plpgsql" in combined.lower()
+
+    def test_owner_kind_trigger_registered_on_workspaces(self) -> None:
+        stmts = _capture_0019_upgrade()
+        trig_stmts = [s for s in stmts if "trg_ws_owner_kind_change" in s and "CREATE TRIGGER" in s]
+        assert len(trig_stmts) == 1
+        assert "workspaces" in trig_stmts[0]
+
+    def test_share_cross_tenant_trigger_function_created(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "check_workspace_share_cross_tenant" in combined
+
+    def test_share_cross_tenant_trigger_registered_on_shares(self) -> None:
+        stmts = _capture_0019_upgrade()
+        trig_stmts = [s for s in stmts if "trg_ws_share_cross_tenant" in s and "CREATE TRIGGER" in s]
+        assert len(trig_stmts) == 1
+        assert "workspace_shares" in trig_stmts[0]
+
+    def test_workspace_share_acceptances_unique_index(self) -> None:
+        combined = "\n".join(_capture_0019_upgrade())
+        assert "uq_acceptance" in combined
+        assert "share_id" in combined
+        assert "accepting_actor_id" in combined
+
+    def test_no_forbidden_enc_phase_columns(self) -> None:
+        """Plaintext-only invariant: forbidden ENC-phase columns must not appear."""
+        combined = "\n".join(_capture_0019_upgrade())
+        forbidden = [
+            "body_ciphertext",
+            "body_nonce",
+            "references_ciphertext",
+            "references_nonce",
+            "chk_body_xor",
+            "chk_refs_xor",
+            "kek_id",
+            "wrapped_dek",
+            "dek_algorithm",
+            "tenant_encryption_configs",
+            "crypto_shred_events",
+        ]
+        for col in forbidden:
+            assert col not in combined, f"Forbidden ENC-phase column '{col}' found in upgrade() DDL"
+
+    def test_no_bitemporal_columns_on_workspace_tables(self) -> None:
+        """Workspace tables defer bi-temporal columns to v2; t_invalidated_at IS allowed."""
+        stmts = _capture_0019_upgrade()
+        ws_table_stmts = [
+            s for s in stmts
+            if any(f"CREATE TABLE {t}" in s for t in _WS_NEW_TABLES)
+        ]
+        for stmt in ws_table_stmts:
+            for col in ("t_valid_from", "t_valid_to", "t_ingested_at"):
+                assert col not in stmt, (
+                    f"Bi-temporal column '{col}' must not appear in WS-phase table DDL: {stmt[:80]!r}"
+                )
+
+
+class TestMig0019DowngradeDdl:
+    def test_all_four_tables_dropped(self) -> None:
+        combined = "\n".join(_capture_0019_downgrade())
+        for table in _WS_NEW_TABLES:
+            assert table in combined, f"Table {table} not referenced in downgrade() DROP statements"
+
+    def test_trigger_functions_dropped(self) -> None:
+        combined = "\n".join(_capture_0019_downgrade())
+        assert "check_workspace_share_cross_tenant" in combined
+        assert "check_workspace_owner_kind_change" in combined
+
+    def test_acceptances_dropped_before_shares(self) -> None:
+        """workspace_share_acceptances has FK to workspace_shares; must drop first."""
+        stmts = _capture_0019_downgrade()
+        drop_stmts = [s for s in stmts if "DROP TABLE" in s]
+        acc_pos = next((i for i, s in enumerate(drop_stmts) if "workspace_share_acceptances" in s), None)
+        shares_pos = next(
+            (i for i, s in enumerate(drop_stmts) if "workspace_shares" in s and "acceptances" not in s),
+            None,
+        )
+        assert acc_pos is not None, "DROP TABLE workspace_share_acceptances not found"
+        assert shares_pos is not None, "DROP TABLE workspace_shares not found"
+        assert acc_pos < shares_pos, "workspace_share_acceptances must be dropped before workspace_shares"
+
+    def test_entries_dropped_before_workspaces(self) -> None:
+        """workspace_entries has FK to workspaces; must drop first."""
+        stmts = _capture_0019_downgrade()
+        drop_stmts = [s for s in stmts if "DROP TABLE" in s]
+        entries_pos = next((i for i, s in enumerate(drop_stmts) if "workspace_entries" in s), None)
+        ws_pos = next(
+            (
+                i for i, s in enumerate(drop_stmts)
+                if "workspaces" in s
+                and "workspace_entries" not in s
+                and "workspace_shares" not in s
+                and "workspace_share_acceptances" not in s
+            ),
+            None,
+        )
+        assert entries_pos is not None, "DROP TABLE workspace_entries not found"
+        assert ws_pos is not None, "DROP TABLE workspaces not found"
+        assert entries_pos < ws_pos, "workspace_entries must be dropped before workspaces"

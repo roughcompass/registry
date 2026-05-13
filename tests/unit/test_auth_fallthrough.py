@@ -61,8 +61,8 @@ async def test_opaque_token_skips_oidc_path() -> None:
     clock = FakeClock(_FIXED_NOW)
 
     with (
-        patch("catalog.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
-        patch("catalog.api.auth.oidc.validate_oidc_token", AsyncMock()) as v_oidc,
+        patch("registry.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
+        patch("registry.api.auth.oidc.validate_oidc_token", AsyncMock()) as v_oidc,
     ):
         out = await get_tenant_context(request, session, clock)
 
@@ -84,10 +84,10 @@ async def test_jwt_shaped_token_falls_through_on_oidc_failure() -> None:
 
     with (
         patch(
-            "catalog.api.auth.oidc.validate_oidc_token",
+            "registry.api.auth.oidc.validate_oidc_token",
             AsyncMock(side_effect=CatalogError("invalid OIDC token: stub")),
         ) as v_oidc,
-        patch("catalog.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
+        patch("registry.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
     ):
         out = await get_tenant_context(request, session, clock)
 
@@ -108,8 +108,8 @@ async def test_jwt_shaped_token_skips_oidc_when_not_configured() -> None:
     clock = FakeClock(_FIXED_NOW)
 
     with (
-        patch("catalog.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
-        patch("catalog.api.auth.oidc.validate_oidc_token", AsyncMock()) as v_oidc,
+        patch("registry.api.middleware.tenant.validate_token", AsyncMock(return_value=ctx)) as v_api,
+        patch("registry.api.auth.oidc.validate_oidc_token", AsyncMock()) as v_oidc,
     ):
         out = await get_tenant_context(request, session, clock)
 

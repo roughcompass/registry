@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProgressionDefinition",
+  "description": "Meta-schema for a tenant-scoped, entity-type-scoped progression rule set. Every incoming definition JSONB body is validated against this schema at the admin boundary before it reaches the rule engine.",
+  "type": "object",
+  "required": ["states", "transitions"],
+  "additionalProperties": false,
+  "properties": {
+    "states": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "name"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "gates": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "transitions": {
+      "type": "object",
+      "required": ["forward"],
+      "additionalProperties": false,
+      "properties": {
+        "forward": {
+          "type": "string",
+          "enum": ["sequential", "any"]
+        },
+        "reentry": {
+          "type": "object",
+          "required": ["allowed"],
+          "additionalProperties": false,
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "requires": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "skip": {
+          "type": "string",
+          "enum": ["never", "tier-conditional", "explicit-list"]
+        }
+      }
+    },
+    "tier_rules": {
+      "type": "object",
+      "required": ["default"],
+      "properties": {
+        "default": {
+          "$ref": "#/$defs/tier_rule_entry"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/tier_rule_entry"
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "transitions": {
+        "properties": {
+          "skip": {
+            "const": "tier-conditional"
+          }
+        },
+        "required": ["skip"]
+      }
+    }
+  },
+  "then": {
+    "required": ["tier_rules"]
+  },
+  "$defs": {
+    "tier_rule_entry": {
+      "type": "object",
+      "required": ["required", "skip"],
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skip": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

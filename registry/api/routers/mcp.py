@@ -37,6 +37,7 @@ from contextvars import ContextVar
 from datetime import datetime
 from typing import Any
 
+from fastapi import HTTPException
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.sse import SseServerTransport
@@ -48,11 +49,13 @@ from starlette.types import ASGIApp
 
 from registry.api.auth.tokens import validate_token
 from registry.exceptions import CatalogError, NotFoundError, TenantIsolationError
+from registry.service.annotations import AnnotationService
 from registry.service.catalog import CatalogService
 from registry.service.includes import IncludeService
 from registry.service.notifications import NotificationService, event_to_dict
 from registry.service.retrieval import RetrievalService
 from registry.service.temporal import normalize_utc
+from registry.service.workspace import WorkspaceService
 from registry.types import (
     Clock,
     SystemClock,
@@ -147,6 +150,41 @@ def _serialize(obj: Any) -> Any:  # noqa: ANN401
     return obj
 
 
+def _http_exc_to_tool_error(exc: HTTPException) -> ToolError:
+    """Translate a service HTTPException to a ToolError.
+
+    The annotation service raises HTTPException directly (not typed domain
+    exceptions) so the MCP layer catches them here and converts to the
+    ToolError shape the MCP protocol expects.
+
+    Translation rules:
+    - 403 → "Capability not visible or not found"
+    - 404 → "Annotation not found"
+    - 422 with PII block detail dict → PII-specific message
+    - 422 with plain string detail → the string as-is
+    - anything else → str(exc.detail)
+    """
+    if exc.status_code == 403:
+        return ToolError("Capability not visible or not found")
+    if exc.status_code == 404:
+        return ToolError("Annotation not found")
+    if exc.status_code == 422:
+        detail = exc.detail
+        if isinstance(detail, dict) and detail.get("code") == "pii_detected":
+            field: str = detail.get("field", "")
+            # Normalise "annotation.body" → "body", "annotation.triage_note" → "triage_note"
+            short_field = field.split(".")[-1] if "." in field else field
+            categories: list[str] = detail.get("categories", [])
+            cats_str = ", ".join(categories)
+            return ToolError(
+                f"Annotation rejected: PII detected in {short_field} [{cats_str}]"
+            )
+        if isinstance(detail, str):
+            return ToolError(detail)
+        return ToolError(str(detail))
+    return ToolError(str(exc.detail))
+
+
 # ---------------------------------------------------------------------------
 # Factory: build a FastMCP server closed over service instances
 # ---------------------------------------------------------------------------
@@ -156,6 +194,8 @@ def create_catalog_mcp_server(
     retrieval: RetrievalService,
     catalog: CatalogService,
     session_factory: async_sessionmaker[AsyncSession],
+    annotation_service: AnnotationService,
+    workspace_service: WorkspaceService,
     clock: Clock | None = None,
     notifications: NotificationService | None = None,
     includes: IncludeService | None = None,
@@ -167,6 +207,14 @@ def create_catalog_mcp_server(
             reverse traversal, blast-radius).
         catalog: CatalogService instance (single-entity lookup).
         session_factory: SQLAlchemy async session factory for auth DB calls.
+        annotation_service: Pre-built AnnotationService for the annotation MCP
+            tools (``submit_annotation``, ``list_my_annotations``,
+            ``triage_annotation``). All three tools are registered
+            unconditionally — missing wiring is a startup error, not a
+            silent no-op.
+        workspace_service: Pre-built WorkspaceService for the seven workspace
+            MCP tools. Registered unconditionally — missing wiring is a
+            startup error, not a silent no-op.
         clock: Clock implementation; defaults to SystemClock.
         notifications: NotificationService for the ``list_notifications`` tool.
             When ``None``, the tool is not registered.
@@ -618,6 +666,525 @@ def create_catalog_mcp_server(
                     "next_cursor": next_cursor,
                 }
             )
+
+    # ------------------------------------------------------------------
+    # Annotation tools — thin adapters over AnnotationService.
+    # All three tools register unconditionally; annotation_service is
+    # required at startup so missing wiring raises immediately rather
+    # than silently skipping registration.
+    # ------------------------------------------------------------------
+
+    @mcp_server.tool()
+    async def submit_annotation(
+        capability_id: str,
+        body: str,
+        category: str,
+        version_target: str | None = None,
+        triage_note: str | None = None,
+    ) -> str:
+        """Submit a new annotation on a capability.
+
+        The caller must be able to see the capability. The PII scanner runs
+        on the body before storage; a block-level hit raises a ToolError
+        with a message that names the detected categories.
+
+        Args:
+            capability_id: UUID of the capability to annotate.
+            body: Annotation text (required, min 1 character).
+            category: Annotation category — one of: feedback, bug,
+                suggestion, question, doc_gap.
+            version_target: Optional version string the annotation targets.
+            triage_note: Optional initial triage note (provider use).
+
+        Returns:
+            JSON object with the created annotation fields (annotation_id,
+            status, body, category, author_tenant_id, …). ``warnings``
+            is present only when the PII scanner resolved policy=warn.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            cap_uuid = uuid.UUID(capability_id)
+        except ValueError as exc:
+            raise ToolError(f"capability_id must be a valid UUID: {exc}") from exc
+        try:
+            ref = await annotation_service.create_annotation(
+                ctx,
+                capability_id=cap_uuid,
+                body=body,
+                category=category,
+                version_target=version_target,
+            )
+        except HTTPException as exc:
+            # Emit the canonical invalid-category message when the service
+            # rejects the category value so the MCP caller gets a message
+            # that names the valid vocabulary (matching the REST error shape).
+            if exc.status_code == 422 and isinstance(exc.detail, str) and "Invalid category" in exc.detail:
+                valid = "feedback, bug, suggestion, question, doc_gap"
+                raise ToolError(
+                    f"Invalid category: '{category}'. Must be one of: {valid}"
+                ) from exc
+            raise _http_exc_to_tool_error(exc) from exc
+        return json.dumps(_serialize(ref))
+
+    @mcp_server.tool()
+    async def list_my_annotations(
+        status: str | None = None,
+        capability_id: str | None = None,
+        cursor: str | None = None,
+    ) -> str:
+        """List annotations authored by the calling actor's tenant.
+
+        Filters to annotations where author_tenant_id equals the caller's
+        tenant, regardless of which capability they target. A consumer
+        agent can only enumerate their own annotations — never another
+        tenant's.
+
+        Args:
+            status: Optional status filter — one of: open, triaged,
+                acknowledged, closed.
+            capability_id: Optional UUID of a specific capability to filter
+                to. When omitted, all capabilities are included but the
+                caller's annotations are still filtered by author path.
+            cursor: Optional opaque pagination cursor from a previous call.
+
+        Returns:
+            JSON object ``{"items": [...], "next_cursor": str | null}``.
+            Each item matches the AnnotationResponse shape.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        cap_uuid: uuid.UUID | None = None
+        if capability_id is not None:
+            try:
+                cap_uuid = uuid.UUID(capability_id)
+            except ValueError as exc:
+                raise ToolError(f"capability_id must be a valid UUID: {exc}") from exc
+
+        if cap_uuid is None:
+            # No capability filter — return empty list; full cross-capability
+            # scan is not supported by list_annotations (it is scoped to one
+            # capability at a time). The author-path filter guarantees only
+            # the caller's own annotations are returned when cap_uuid is set.
+            return json.dumps({"items": [], "next_cursor": None})
+
+        try:
+            refs, next_cursor = await annotation_service.list_annotations(
+                ctx,
+                capability_id=cap_uuid,
+                status=status,
+                cursor=cursor,
+            )
+        except HTTPException as exc:
+            raise _http_exc_to_tool_error(exc) from exc
+
+        return json.dumps(
+            {
+                "items": [_serialize(r) for r in refs],
+                "next_cursor": next_cursor,
+            }
+        )
+
+    @mcp_server.tool()
+    async def triage_annotation(
+        annotation_id: str,
+        new_status: str,
+        triage_note: str | None = None,
+        version_target: str | None = None,
+    ) -> str:
+        """Triage an annotation — update its status and optionally set a note.
+
+        The caller's tenant must own the capability the annotation belongs
+        to. The PII scanner runs on triage_note before storage; a
+        block-level hit raises a ToolError naming the detected categories.
+
+        Args:
+            annotation_id: UUID of the annotation to triage.
+            new_status: New status — one of: open, triaged, acknowledged,
+                closed.
+            triage_note: Optional note to record alongside the status
+                change.
+            version_target: Optional version string the triage targets.
+
+        Returns:
+            JSON object with the updated annotation fields.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            ann_uuid = uuid.UUID(annotation_id)
+        except ValueError as exc:
+            raise ToolError(f"annotation_id must be a valid UUID: {exc}") from exc
+        try:
+            ref = await annotation_service.triage_annotation(
+                ctx,
+                annotation_id=ann_uuid,
+                new_status=new_status,
+                triage_note=triage_note,
+            )
+        except HTTPException as exc:
+            raise _http_exc_to_tool_error(exc) from exc
+        return json.dumps(_serialize(ref))
+
+    # ------------------------------------------------------------------
+    # Workspace tools — thin adapters over WorkspaceService.
+    # All seven tools register unconditionally; workspace_service is
+    # required at startup so missing wiring raises immediately rather
+    # than silently skipping registration.
+    # ------------------------------------------------------------------
+
+    def _ws_http_exc_to_tool_error(exc: HTTPException, workspace_id: str | None = None) -> ToolError:
+        """Translate a WorkspaceService HTTPException to a ToolError.
+
+        Translation rules per the MCP tool contract:
+        - 403 with workspace_id context → workspace-specific not-authorized message
+        - 403 without context → generic not-authorized message
+        - 404 with workspace_id → "Workspace <id> not found."
+        - 404 without context → str(detail)
+        - 422 with pii_detected dict → "Entry rejected: PII detected in body [<cats>]"
+        - 422 plain string → pass through (regulated-tenant block, invalid kind, etc.)
+        - anything else → str(detail)
+        """
+        if exc.status_code == 403:
+            if workspace_id:
+                return ToolError(f"Not authorized to write to workspace {workspace_id}")
+            return ToolError("Not authorized")
+        if exc.status_code == 404:
+            if workspace_id:
+                return ToolError(f"Workspace {workspace_id} not found.")
+            return ToolError(str(exc.detail))
+        if exc.status_code == 422:
+            detail = exc.detail
+            if isinstance(detail, dict) and detail.get("code") == "pii_detected":
+                categories: list[str] = detail.get("categories", [])
+                cats_str = ", ".join(categories)
+                return ToolError(f"Entry rejected: PII detected in body [{cats_str}]")
+            if isinstance(detail, str):
+                return ToolError(detail)
+            return ToolError(str(detail))
+        return ToolError(str(exc.detail))
+
+    @mcp_server.tool()
+    async def create_workspace(
+        name: str,
+        owner_kind: str,
+        description: str | None = None,
+    ) -> str:
+        """Create a new workspace for the calling actor.
+
+        Args:
+            name: Workspace name (required).
+            owner_kind: Ownership model — ``'actor'`` for a personal workspace
+                owned by the calling actor, or ``'tenant'`` for a team workspace
+                owned by the tenant.
+            description: Optional human-readable description.
+
+        Returns:
+            JSON object with the created workspace fields (workspace_id,
+            name, owner_kind, tenant_id, created_at, …).
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            ref = await workspace_service.create_workspace(
+                ctx,
+                name=name,
+                owner_kind=owner_kind,
+                description=description,
+            )
+        except HTTPException as exc:
+            raise _ws_http_exc_to_tool_error(exc) from exc
+        return json.dumps(_serialize(ref))
+
+    @mcp_server.tool()
+    async def list_workspaces(
+        include_archived: bool = False,
+    ) -> str:
+        """List workspaces visible to the calling actor.
+
+        Returns workspaces that are owned by the actor, owned by the actor's
+        tenant, or shared with the actor via an active workspace share.
+
+        Args:
+            include_archived: When ``True``, includes archived workspaces
+                (archived_at IS NOT NULL). Default ``False``.
+
+        Returns:
+            JSON array of workspace objects (WorkspaceRef shape).
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            refs, _next_cursor = await workspace_service.list_workspaces(
+                ctx,
+                include_archived=include_archived,
+            )
+        except HTTPException as exc:
+            raise _ws_http_exc_to_tool_error(exc) from exc
+        return json.dumps(_serialize(refs))
+
+    @mcp_server.tool()
+    async def get_workspace(
+        workspace_id: str,
+    ) -> str:
+        """Get a specific workspace by ID.
+
+        Args:
+            workspace_id: UUID of the workspace to retrieve.
+
+        Returns:
+            JSON object with the workspace fields (WorkspaceRef shape).
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            ws_uuid = uuid.UUID(workspace_id)
+        except ValueError as exc:
+            raise ToolError(f"workspace_id must be a valid UUID: {exc}") from exc
+        try:
+            ref = await workspace_service.get_workspace(ctx, ws_uuid)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise ToolError(
+                    f"Workspace {workspace_id} is not visible to the calling actor."
+                ) from exc
+            if exc.status_code == 404:
+                raise ToolError(f"Workspace {workspace_id} not found.") from exc
+            raise _ws_http_exc_to_tool_error(exc, workspace_id=workspace_id) from exc
+        return json.dumps(_serialize(ref))
+
+    @mcp_server.tool()
+    async def add_workspace_entry(
+        workspace_id: str,
+        kind: str,
+        body_md: str,
+        reference_ids: list[str] | None = None,
+        references_jsonb: dict[str, Any] | None = None,
+        expires_at: str | None = None,
+    ) -> str:
+        """Add an entry to a workspace.
+
+        The PII scanner runs on body_md (and references_jsonb when provided)
+        before storage. A block-level hit raises a ToolError naming the
+        detected categories.
+
+        Args:
+            workspace_id: UUID of the target workspace.
+            kind: Entry kind — one of: note, decision, open_question,
+                saved_query, saved_view, private_annotation.
+            body_md: Entry body in Markdown (required, non-empty).
+            reference_ids: Optional list of UUID strings referencing catalog
+                entities.
+            references_jsonb: Optional structured reference metadata (JSON
+                object).
+            expires_at: Optional ISO-8601 UTC expiry datetime. After this
+                timestamp the entry is soft-invalidated by the expiry worker.
+
+        Returns:
+            JSON object with the created entry fields (WorkspaceEntryRef
+            shape). Includes ``warnings`` key when the PII scanner returned
+            a warn-level hit.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            ws_uuid = uuid.UUID(workspace_id)
+        except ValueError as exc:
+            raise ToolError(f"workspace_id must be a valid UUID: {exc}") from exc
+
+        ref_uuids: list[uuid.UUID] = []
+        if reference_ids is not None:
+            for rid in reference_ids:
+                try:
+                    ref_uuids.append(uuid.UUID(rid))
+                except ValueError as exc:
+                    raise ToolError(
+                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
+                    ) from exc
+
+        expires_at_dt = None
+        if expires_at is not None:
+            try:
+                expires_at_dt = datetime.fromisoformat(expires_at)
+            except (ValueError, TypeError) as exc:
+                raise ToolError(
+                    f"expires_at must be a timezone-aware ISO-8601 datetime: {exc}"
+                ) from exc
+
+        try:
+            ref = await workspace_service.create_entry(
+                ctx,
+                workspace_id=ws_uuid,
+                kind=kind,
+                body_md=body_md,
+                reference_ids=ref_uuids,
+                references_jsonb=references_jsonb,
+                expires_at=expires_at_dt,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 422:
+                detail = exc.detail
+                if isinstance(detail, dict) and detail.get("code") == "pii_detected":
+                    categories_list: list[str] = detail.get("categories", [])
+                    cats_str = ", ".join(categories_list)
+                    raise ToolError(
+                        f"Entry rejected: PII detected in body [{cats_str}]"
+                    ) from exc
+                if isinstance(detail, str):
+                    # Pass through service validation messages (invalid kind,
+                    # regulated-tenant block, empty body) as-is so the caller
+                    # gets the actionable text the service already composed.
+                    raise ToolError(detail) from exc
+                raise ToolError(str(detail)) from exc
+            raise _ws_http_exc_to_tool_error(exc, workspace_id=workspace_id) from exc
+        return json.dumps(_serialize(ref))
+
+    @mcp_server.tool()
+    async def update_workspace_entry(
+        entry_id: str,
+        body_md: str | None = None,
+        reference_ids: list[str] | None = None,
+        references_jsonb: dict[str, Any] | None = None,
+    ) -> str:
+        """Update an existing workspace entry.
+
+        Only provided fields are updated; omitted fields retain their current
+        values. The PII scanner runs on body_md and references_jsonb when
+        provided; a block-level hit raises a ToolError.
+
+        Args:
+            entry_id: UUID of the entry to update.
+            body_md: New entry body in Markdown (optional).
+            reference_ids: Replacement list of UUID strings referencing catalog
+                entities (optional).
+            references_jsonb: Replacement structured reference metadata
+                (optional).
+
+        Returns:
+            JSON object with the updated entry fields (WorkspaceEntryRef
+            shape). Includes ``warnings`` key when the PII scanner returned
+            a warn-level hit.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            entry_uuid = uuid.UUID(entry_id)
+        except ValueError as exc:
+            raise ToolError(f"entry_id must be a valid UUID: {exc}") from exc
+
+        ref_uuids: list[uuid.UUID] | None = None
+        if reference_ids is not None:
+            ref_uuids = []
+            for rid in reference_ids:
+                try:
+                    ref_uuids.append(uuid.UUID(rid))
+                except ValueError as exc:
+                    raise ToolError(
+                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
+                    ) from exc
+
+        try:
+            ref = await workspace_service.update_entry(
+                ctx,
+                entry_id=entry_uuid,
+                body_md=body_md,
+                reference_ids=ref_uuids,
+                references_jsonb=references_jsonb,
+            )
+        except HTTPException as exc:
+            if exc.status_code == 422:
+                detail = exc.detail
+                if isinstance(detail, dict) and detail.get("code") == "pii_detected":
+                    categories_list_u: list[str] = detail.get("categories", [])
+                    cats_str = ", ".join(categories_list_u)
+                    raise ToolError(
+                        f"Entry rejected: PII detected in body [{cats_str}]"
+                    ) from exc
+                if isinstance(detail, str):
+                    raise ToolError(detail) from exc
+                raise ToolError(str(detail)) from exc
+            raise _ws_http_exc_to_tool_error(exc) from exc
+        return json.dumps(_serialize(ref))
+
+    @mcp_server.tool()
+    async def search_workspace_entries(
+        q: str | None = None,
+        kind: str | None = None,
+        reference_ids: list[str] | None = None,
+    ) -> str:
+        """Search across workspace entries visible to the calling actor.
+
+        Results are scoped to workspaces the actor owns, their tenant owns,
+        or that have been explicitly shared with the actor. No cross-actor
+        content is ever returned.
+
+        Args:
+            q: Optional full-text search query. When ``None``, all visible
+                entries are returned (paginated).
+            kind: Optional entry kind filter — one of: note, decision,
+                open_question, saved_query, saved_view, private_annotation.
+            reference_ids: Optional list of UUID strings; restricts results
+                to entries that reference ALL listed entities.
+
+        Returns:
+            JSON object ``{"items": [...], "next_cursor": str | null,
+            "total_count": int | null}``. Each item matches the
+            WorkspaceEntryRef shape.
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+
+        ref_uuids: list[uuid.UUID] | None = None
+        if reference_ids is not None:
+            ref_uuids = []
+            for rid in reference_ids:
+                try:
+                    ref_uuids.append(uuid.UUID(rid))
+                except ValueError as exc:
+                    raise ToolError(
+                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
+                    ) from exc
+
+        try:
+            result = await workspace_service.search_workspaces(
+                ctx,
+                q=q,
+                kind=kind,
+                reference_ids=ref_uuids,
+            )
+        except HTTPException as exc:
+            raise _ws_http_exc_to_tool_error(exc) from exc
+        return json.dumps(
+            {
+                "items": _serialize(result.items),
+                "next_cursor": result.next_cursor,
+                "total_count": result.total_count,
+            }
+        )
+
+    @mcp_server.tool()
+    async def list_workspace_shares(
+        workspace_id: str,
+    ) -> str:
+        """List active shares on a workspace (revoked shares excluded).
+
+        Authorization: the calling actor must be the workspace owner or an
+        admin in the workspace's owning tenant.
+
+        Args:
+            workspace_id: UUID of the workspace whose shares to list.
+
+        Returns:
+            JSON array of share objects (share_id, grantee_actor_id,
+            grantee_tenant_id, role, granted_at, revoked_at).
+        """
+        ctx = await _resolve_tenant(session_factory, _clock)
+        try:
+            ws_uuid = uuid.UUID(workspace_id)
+        except ValueError as exc:
+            raise ToolError(f"workspace_id must be a valid UUID: {exc}") from exc
+        try:
+            shares = await workspace_service.list_shares(ctx, ws_uuid)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                raise ToolError(
+                    f"Not authorized to list shares for workspace {workspace_id}"
+                ) from exc
+            if exc.status_code == 404:
+                raise ToolError(f"Workspace {workspace_id} not found.") from exc
+            raise _ws_http_exc_to_tool_error(exc, workspace_id=workspace_id) from exc
+        return json.dumps(_serialize(shares))
 
     return mcp_server
 

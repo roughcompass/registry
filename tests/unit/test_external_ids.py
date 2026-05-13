@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from registry.audit import actions
 from registry.exceptions import ConflictError, NotFoundError, TenantIsolationError
 from registry.service.external_ids import ExternalIdService
 from registry.types import EntityRef, ExternalIdRef, FakeClock, TenantContext
@@ -526,7 +527,7 @@ async def test_delete_external_id_calls_audit_emit() -> None:
 
     mock_emit.assert_awaited_once()
     _, call_kwargs = mock_emit.call_args
-    assert call_kwargs["action"] == "delete"
+    assert call_kwargs["action"] == actions.EXTERNAL_ID_DELETED
     assert call_kwargs["target_type"] == "entity_external_id"
     assert call_kwargs["target_id"] == pk
     assert call_kwargs["after"]["external_id"] == "PROJ-1"

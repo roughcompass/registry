@@ -6,7 +6,7 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import Text, pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
@@ -37,6 +37,7 @@ def run_migrations_offline() -> None:
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_num_col_type=Text(),
     )
 
     with context.begin_transaction():
@@ -44,7 +45,15 @@ def run_migrations_offline() -> None:
 
 
 def do_run_migrations(connection: Connection) -> None:
-    context.configure(connection=connection, target_metadata=target_metadata)
+    # version_num_col_type=Text: revision IDs longer than 32 characters
+    # (the Alembic default varchar width) require an unbounded text column.
+    # The alembic_version table is created on first use; setting this here
+    # ensures it is created with TEXT from the start rather than varchar(32).
+    context.configure(
+        connection=connection,
+        target_metadata=target_metadata,
+        version_num_col_type=Text(),
+    )
     with context.begin_transaction():
         context.run_migrations()
 

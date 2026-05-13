@@ -114,8 +114,8 @@ async def test_validate_oidc_token_happy_path(cache: _OidcCache) -> None:
     with (
         patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
         patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("catalog.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("catalog.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
     ):
         mock_jwk.import_key_set.return_value = MagicMock()
         ctx = await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
@@ -159,8 +159,8 @@ async def test_oidc_invalid_signature_raises(cache: _OidcCache) -> None:
     with (
         patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
         patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("catalog.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("catalog.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
     ):
         mock_jwk.import_key_set.return_value = MagicMock()
         with pytest.raises(CatalogError, match="invalid OIDC token"):
@@ -186,8 +186,8 @@ async def test_oidc_actor_not_found_raises(cache: _OidcCache) -> None:
     with (
         patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
         patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("catalog.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("catalog.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
     ):
         mock_jwk.import_key_set.return_value = MagicMock()
         with pytest.raises(CatalogError, match="OIDC actor not found"):
@@ -210,8 +210,8 @@ async def test_oidc_missing_sub_claim_raises(cache: _OidcCache) -> None:
     with (
         patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
         patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("catalog.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("catalog.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
     ):
         mock_jwk.import_key_set.return_value = MagicMock()
         with pytest.raises(CatalogError, match="missing sub claim"):
@@ -368,8 +368,8 @@ async def test_concurrent_validate_at_ttl_boundary_single_jwks_fetch() -> None:
     with (
         patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
         patch.object(cache, "get_jwks", lambda uri: _locked_counting_get_jwks(cache, uri)),
-        patch("catalog.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("catalog.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
+        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
+        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
     ):
         mock_jwk.import_key_set.return_value = MagicMock()
 

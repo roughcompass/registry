@@ -162,7 +162,7 @@ class TestCheckAuditPartitionAges:
                 await check_audit_partition_ages(session_factory=sf)
 
         assert "audit_log_2021_03" in caplog.text
-        assert "runbook-dr.md" in caplog.text
+        assert "runbook-ops.md" in caplog.text
 
     @pytest.mark.asyncio
     async def test_no_warning_when_none_eligible(self, caplog: pytest.LogCaptureFixture) -> None:

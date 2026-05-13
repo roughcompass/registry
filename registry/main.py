@@ -13,7 +13,7 @@ The scheduler runs three background jobs:
 - Audit partition check: hourly job that logs a WARNING and increments
   ``catalog_audit_partitions_eligible_for_archival`` for any ``audit_log``
   partition whose lower range bound is older than 24 months.
-  See ``docs/runbook-dr.md`` for the operator archival procedure.
+  See ``docs/runbook-ops.md`` for the operator archival procedure.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ from sqlalchemy import text
 
 from registry.config import Settings, get_settings
 from registry.embedder import StubEmbedder
+from registry.logging_config import configure_logging
 from registry.service.catalog import CatalogService
 from registry.service.embedding_drain import drain_outbox
 from registry.service.external_ids import ExternalIdService
@@ -302,7 +303,7 @@ _OPENAPI_TAGS: list[dict[str, str]] = [
 
 # Prometheus gauge: number of audit_log child partitions eligible for archival
 # (lower range bound older than 24 months).  Operator should run the detach
-# procedure in docs/runbook-dr.md when this is > 0.
+# procedure in docs/runbook-ops.md when this is > 0.
 _AUDIT_ARCHIVAL_GAUGE: Gauge = Gauge(
     "catalog_audit_partitions_eligible_for_archival",
     "Number of audit_log monthly partitions whose lower bound is older than 24 months",
@@ -394,7 +395,7 @@ async def check_audit_partition_ages(session_factory: object) -> None:
     if count > 0:
         _log.warning(
             "audit_partition_check: %d audit_log partition(s) eligible for archival "
-            "(older than 24 months): %s — run the detach procedure in docs/runbook-dr.md",
+            "(older than 24 months): %s — run the detach procedure in docs/runbook-ops.md",
             count,
             ", ".join(eligible),
         )
@@ -576,6 +577,7 @@ def _build_embedder(settings: Settings) -> Embedder:
 def create_app(settings: Settings | None = None) -> FastAPI:
     """Build and return the FastAPI app. Idempotent — safe to call repeatedly in tests."""
     settings = settings or get_settings()
+    configure_logging(settings)
     _init_otel(settings)
 
     engine = create_engine(settings)
@@ -714,6 +716,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         max_instances=1,
         coalesce=True,
         id="webhook_delivery_drain",
+        replace_existing=True,
+    )
+
+    # Hourly soft-invalidation of workspace entries whose expires_at has passed.
+    # The worker runs across all tenants in one pass; entries are retained for
+    # audit linkage and RTBF — only t_invalidated_at is set, no physical delete.
+    from registry.workers.workspace_expiry import WorkspaceExpiryWorker  # noqa: PLC0415
+
+    expiry_worker = WorkspaceExpiryWorker(
+        session_factory=session_factory,
+        clock=clock,
+    )
+
+    async def _expire_workspace_entries() -> None:
+        try:
+            result = await expiry_worker.run()
+            _log.info(
+                "workspace_expiry.run: expired=%d batch_ts=%s",
+                result.expired_count,
+                result.batch_ts,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("workspace_expiry_run: %s", exc)
+
+    scheduler.add_job(
+        _expire_workspace_entries,
+        trigger="interval",
+        hours=1,
+        max_instances=1,
+        coalesce=True,
+        id="workspace_expiry",
         replace_existing=True,
     )
 
@@ -864,6 +897,50 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(interface_router)
 
+    # Annotation routers — POST/GET scoped to capability, PATCH/DELETE scoped to annotation.
+    from registry.api.routers.annotations import (  # noqa: PLC0415
+        mutation_router as annotations_mutation_router,
+    )
+    from registry.api.routers.annotations import (
+        router as annotations_router,
+    )
+
+    app.include_router(annotations_router)
+    app.include_router(annotations_mutation_router)
+
+    # Workspace CRUD + entry CRUD + share + search routers.
+    from registry.api.routers.workspaces import (  # noqa: PLC0415
+        entry_mutation_router as workspace_entry_mutation_router,
+    )
+    from registry.api.routers.workspaces import (
+        mutation_router as workspace_mutation_router,
+    )
+    from registry.api.routers.workspaces import (
+        router as workspace_router,
+    )
+    from registry.api.routers.workspaces import (
+        share_mutation_router as workspace_share_mutation_router,
+    )
+    from registry.api.routers.workspaces import (
+        share_router as workspace_share_router,
+    )
+
+    app.include_router(workspace_router)
+    app.include_router(workspace_mutation_router)
+    app.include_router(workspace_entry_mutation_router)
+    app.include_router(workspace_share_router)
+    app.include_router(workspace_share_mutation_router)
+
+    # Progression definition admin endpoints (POST/GET/PUT/DELETE).
+    from registry.api.routers.admin_progression import router as admin_progression_router  # noqa: PLC0415
+
+    app.include_router(admin_progression_router)
+
+    # RTBF admin endpoint — DELETE /v1/admin/actors/{actor_id}/personal-data.
+    from registry.api.routers.admin_workspaces import router as admin_workspaces_router  # noqa: PLC0415
+
+    app.include_router(admin_workspaces_router)
+
     # Consumer read router: /v1/search, /v1/capabilities (list), and
     # /v1/capabilities/{entity_id}/dependencies.
     # Mounted after the capabilities router so FastAPI resolves the exact-match
@@ -873,7 +950,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(retrieval_router.router)
 
     # Mount MCP server under /mcp — same process, same port, no sidecar.
+    from registry.api.routers.annotations import _build_annotation_service  # noqa: PLC0415
     from registry.api.routers.mcp import create_catalog_mcp_server, create_mcp_app  # noqa: PLC0415
+    from registry.api.routers.workspaces import _build_workspace_service  # noqa: PLC0415
+
+    annotation_svc = _build_annotation_service(app)
+    app.state.annotation_service = annotation_svc
+
+    workspace_svc = _build_workspace_service(app)
+    app.state.workspace_service = workspace_svc
 
     catalog_mcp_server = create_catalog_mcp_server(
         retrieval=retrieval,
@@ -882,6 +967,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         clock=clock,
         notifications=notifications_svc,
         includes=includes,
+        annotation_service=annotation_svc,
+        workspace_service=workspace_svc,
     )
     mcp_router = create_mcp_app(server=catalog_mcp_server)
     app.mount("/mcp", mcp_router)

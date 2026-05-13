@@ -6,6 +6,7 @@ directly. No module-level singleton — wired by FastAPI DI like `Clock`.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
@@ -54,6 +55,57 @@ class Settings:
     oidc_discovery_url: str | None = None
     token_hash_algorithm: str = "sha256"
 
+    # --- Auth mode + external claim source ---
+    # Which authentication/tenant-scope mode the service operates in.
+    # "oidc"  — tenant scope is derived from standard token claims (default).
+    # "rsam"  — tenant scope is resolved via an external claim source
+    #           (e.g. an entitlement reference API). Requires auth_claim_source_url.
+    # Future modes are added here; the middleware selects behaviour by this value.
+    auth_mode: str = "oidc"
+
+    # Base URL of the external claim source. Must be set when auth_mode != "oidc".
+    # Leave unset (None) in pure OIDC deployments.
+    auth_claim_source_url: str | None = None
+
+    # TTL (seconds) for the external claim-source cache. Applies only when
+    # auth_mode uses an external claim source. 0 disables caching.
+    auth_claim_cache_ttl_seconds: int = 300
+
+    # Maximum staleness (seconds) tolerated when the claim source is unreachable
+    # and auth_serve_stale_on_failure is True. Acts as a hard ceiling — responses
+    # older than this are never served even in stale-on-failure mode.
+    auth_stale_ceiling_seconds: int = 86400
+
+    # When True, serve stale cached claim data if the external claim source is
+    # unreachable, up to auth_stale_ceiling_seconds. Default False (fail closed).
+    # Operators should consider the security trade-off before enabling this.
+    auth_serve_stale_on_failure: bool = False
+
+    # HTTP header name used to carry the per-request tenant identifier.
+    # Must match whatever the upstream gateway or client sends.
+    auth_tenant_id_header: str = "X-Tenant-ID"
+
+    # Optional alias header accepted alongside auth_tenant_id_header.
+    # Useful for compatibility with clients that send a legacy header name.
+    # Set to None to disable alias header acceptance.
+    auth_seal_id_header_alias: str | None = "X-SEAL-ID"
+
+    # --- Progression ---
+    # TTL (seconds) for the cached progression-definition lookup. The definition
+    # describes which capability transitions are allowed. A short TTL keeps the
+    # cache fresh after operator edits; 0 disables caching entirely.
+    progression_definition_cache_ttl_seconds: int = 60
+
+    def __post_init__(self) -> None:
+        # Enforce that any auth mode that uses an external claim source is given
+        # the URL for that source. Failing silently here would produce confusing
+        # runtime errors deep in claim-resolution code.
+        if self.auth_mode != "oidc" and self.auth_claim_source_url is None:
+            raise ValueError(
+                f"AUTH_CLAIM_SOURCE_URL must be set when AUTH_MODE is {self.auth_mode!r}. "
+                "Provide the base URL of the external claim source, or set AUTH_MODE=oidc."
+            )
+
     # --- Rate limiting ---
     default_reads_per_second: int = 100
     default_writes_per_second: int = 10
@@ -84,6 +136,16 @@ class Settings:
     # Each task opens its own DB session; keep this below your PgBouncer pool
     # size divided by the number of worker processes you run.
     closure_refresh_concurrency: int = 8
+
+    # --- Logging ---
+    # "json" emits structured JSON to stdout (production default); "text" emits
+    # human-readable plain text (local development). configure_logging() branches
+    # on this value — unrecognised strings fall through to the text renderer.
+    log_format: str = "json"
+
+    # Root logger level. logging.DEBUG surfaces SQLAlchemy queries and
+    # OpenTelemetry SDK internals — high volume; reserve for diagnosis.
+    log_level: int = logging.INFO
 
 
 def get_settings() -> Settings:
@@ -124,4 +186,16 @@ def get_settings() -> Settings:
         http_methods_mode=os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest").strip().lower(),
         http_method_alias_separator=os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", "colon").strip().lower(),
         closure_refresh_concurrency=int(os.environ.get("CLOSURE_REFRESH_CONCURRENCY", "8")),
+        auth_mode=os.environ.get("AUTH_MODE", "oidc").strip().lower(),
+        auth_claim_source_url=os.environ.get("AUTH_CLAIM_SOURCE_URL") or None,
+        auth_claim_cache_ttl_seconds=int(os.environ.get("AUTH_CLAIM_CACHE_TTL_SECONDS", "300")),
+        auth_stale_ceiling_seconds=int(os.environ.get("AUTH_STALE_CEILING_SECONDS", "86400")),
+        auth_serve_stale_on_failure=(
+            os.environ.get("AUTH_SERVE_STALE_ON_FAILURE", "false").lower() in ("1", "true", "yes")
+        ),
+        auth_tenant_id_header=os.environ.get("AUTH_TENANT_ID_HEADER", "X-Tenant-ID"),
+        auth_seal_id_header_alias=os.environ.get("AUTH_SEAL_ID_HEADER_ALIAS", "X-SEAL-ID") or None,
+        progression_definition_cache_ttl_seconds=int(os.environ.get("PROGRESSION_DEFINITION_CACHE_TTL_SECONDS", "60")),
+        log_format=os.environ.get("LOG_FORMAT", "json"),
+        log_level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     )

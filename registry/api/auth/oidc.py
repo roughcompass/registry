@@ -240,9 +240,27 @@ async def validate_oidc_token(
 
     # ``tenant_id`` comes from a custom claim if present; otherwise we require
     # it in the token so we can scope the DB lookup correctly.
+    # When the service runs in RSAM auth mode, IDA tokens carry no tenant claim —
+    # tenant scope is resolved by the downstream claim-source resolver instead of
+    # the token. Skip the tenant-claim check and actor DB lookup in that mode so
+    # IDA tokens are not rejected here; the resolver factory takes over grant
+    # resolution after this function returns.
     tenant_id_str: str | None = claims.get("tenant_id") or claims.get("tid")
     if not tenant_id_str:
-        raise CatalogError("OIDC token missing tenant_id/tid claim")
+        if settings.auth_mode != "rsam":
+            raise CatalogError("OIDC token missing tenant_id/tid claim")
+        # RSAM mode: JWT signature + sub are valid; grant resolution happens in
+        # the claim-source resolver. Return a sentinel context that carries the
+        # verified subject. The nil UUIDs are intentional — this TenantContext
+        # is only ever consumed by the resolver factory, which replaces it with
+        # the fully-resolved identity before any service code is reached.
+        import uuid  # noqa: PLC0415
+
+        return TenantContext(
+            tenant_id=uuid.UUID(int=0),
+            actor_id=uuid.UUID(int=0),
+            roles=[subject],
+        )
 
     import uuid  # noqa: PLC0415
 

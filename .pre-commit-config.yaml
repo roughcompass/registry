@@ -1,0 +1,48 @@
+# Pre-commit hooks for registry.
+#
+# Install once after cloning:   pre-commit install
+# Run against all files:        pre-commit run --all-files
+#
+# All hooks are LOCAL invocations of tools already pinned in
+# pyproject.toml's [dev] extras, so versions do not drift between local
+# pre-commit and CI. The CI lint stage runs the same commands in
+# .github/workflows/ci.yml.
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+        # Lint the whole repo on every commit — ruff is fast enough.
+        args: [.]
+
+      - id: ruff-format
+        name: ruff format --check
+        entry: ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: [.]
+
+      - id: mypy-strict
+        name: mypy --strict
+        entry: mypy --strict
+        language: system
+        # Same scope as the CI typecheck job. Runs against the registry,
+        # sync, and scripts packages — tests are excluded.
+        pass_filenames: false
+        files: ^(registry|sync|scripts)/.*\.py$
+        args: [registry, sync, scripts]
+
+      - id: no-doc-refs
+        name: no internal-doc references in shipped code
+        # See CLAUDE.md for the rule and the # doc-ref: intentional marker.
+        entry: python scripts/check_no_doc_refs.py
+        language: system
+        pass_filenames: false
+        # Run on every commit (the gate is cheap — pure regex over a few hundred files).
+        always_run: true

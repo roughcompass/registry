@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import logging
 import os
 import subprocess
 import sys
@@ -26,6 +27,20 @@ from testcontainers.postgres import PostgresContainer
 
 from registry.config import Settings
 from registry.types import FakeClock
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_handlers():
+    """Save and restore root-logger handlers around each test.
+
+    configure_logging() calls root_logger.handlers.clear() on entry, which
+    would wipe caplog's LogCaptureHandler if any test triggered the
+    reconfiguration. This fixture protects caplog-based assertions from
+    cross-test handler bleed without coupling tests to the logging module.
+    """
+    original = logging.root.handlers[:]
+    yield
+    logging.root.handlers[:] = original
 
 
 def _to_async_url(jdbc_like: str) -> str:

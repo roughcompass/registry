@@ -153,7 +153,7 @@ class SchemaService:
                     "(schema_id, tenant_id, edge_rel, json_schema, is_advisory, "
                     " advisory_until, t_valid_from, t_valid_to, t_ingested_at, "
                     " t_invalidated_at, created_by) "
-                    "VALUES (:schema_id, :tenant_id, :edge_rel, :json_schema::jsonb, "
+                    "VALUES (:schema_id, :tenant_id, :edge_rel, CAST(:json_schema AS jsonb), "
                     "        :is_advisory, :advisory_until, :t_valid_from, NULL, "
                     "        :t_ingested_at, NULL, :created_by)"
                 ),
