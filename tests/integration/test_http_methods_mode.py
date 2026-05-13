@@ -51,12 +51,39 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     """
     import importlib  # noqa: PLC0415
 
+    # Every router that uses HttpMethodRouter or get_mode_settings reads the
+    # env var at module-import time. To switch mode, reload all of them so
+    # the env var is re-evaluated. Missing one here is the cluster-D defect:
+    # the un-reloaded router keeps the previously-set mode and leaks PATCH
+    # routes into post_only-mode openapi.
+    import registry.api.routers.adoptions as _adoptions
     import registry.api.routers.admin as _admin
+    import registry.api.routers.admin_lifecycle as _adm_life
+    import registry.api.routers.admin_pii as _adm_pii
+    import registry.api.routers.admin_sync as _adm_sync
+    import registry.api.routers.admin_tokens as _adm_tok
+    import registry.api.routers.admin_vocab as _adm_vocab
+    import registry.api.routers.annotations as _ann
     import registry.api.routers.artifacts as _art
     import registry.api.routers.capabilities as _cap
     import registry.api.routers.concepts as _con
+    import registry.api.routers.external_ids as _ext_ids
     import registry.api.routers.graph as _graph
     import registry.api.routers.operations as _ops
+    import registry.api.routers.subscriptions as _subs
+    import registry.api.routers.workspaces as _ws
+
+    # Order matters: admin.py is a facade that imports mutation_router /
+    # admin_mutation_router instances from each admin_*.py submodule. If admin
+    # is reloaded BEFORE its submodules, it captures the still-stale router
+    # instances and they leak into the include chain. Reload all leaf modules
+    # first, then admin last so its re-exports point at the fresh routers.
+    _to_reload = [
+        _cap, _con, _ops, _art, _graph,
+        _adm_life, _adm_pii, _adm_sync, _adm_tok, _adm_vocab,
+        _adoptions, _ann, _ext_ids, _subs, _ws,
+        _admin,
+    ]
 
     # Default mode is "rest"; fallback string matches the current default.
     prev_mode = os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest")
@@ -65,12 +92,8 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
         os.environ["REGISTRY_HTTP_METHODS_MODE"] = mode
         os.environ["REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR"] = "colon"
 
-        importlib.reload(_cap)
-        importlib.reload(_con)
-        importlib.reload(_ops)
-        importlib.reload(_art)
-        importlib.reload(_graph)
-        importlib.reload(_admin)
+        for mod in _to_reload:
+            importlib.reload(mod)
 
         from registry.main import create_app  # noqa: PLC0415
 
@@ -78,13 +101,9 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     finally:
         os.environ["REGISTRY_HTTP_METHODS_MODE"] = prev_mode
         os.environ["REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR"] = prev_sep
-        # Restore modules to "both" so subsequent tests use the default.
-        importlib.reload(_cap)
-        importlib.reload(_con)
-        importlib.reload(_ops)
-        importlib.reload(_art)
-        importlib.reload(_graph)
-        importlib.reload(_admin)
+        # Restore modules to the default so subsequent tests are unaffected.
+        for mod in _to_reload:
+            importlib.reload(mod)
 
 
 async def _seed(pg_url: str, *, slug: str, roles: list[str]) -> tuple[uuid.UUID, uuid.UUID, str]:
