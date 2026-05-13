@@ -131,7 +131,7 @@ async def test_artifact_create_supersession_on_update(client: TestClient, pg_con
     # Create a fact via the artifacts router.
     f1 = client.post(
         f"/v1/capabilities/{entity_id}/artifacts",
-        json={"category": "overview", "body": "v1"},
+        json={"category": "overview", "title": "v1 overview", "body": "v1"},
         headers=auth,
     )
     assert f1.status_code == 201, f1.text
@@ -150,7 +150,7 @@ async def test_delete_entity_soft_deletes_and_cascades(client: TestClient, pg_co
     entity_id = cap.json()["entity_id"]
     f = client.post(
         f"/v1/capabilities/{entity_id}/artifacts",
-        json={"category": "adr", "body": "decide partitioning"},
+        json={"category": "adr", "title": "Partitioning decision", "body": "decide partitioning"},
         headers=auth,
     )
     fact_id = f.json()["fact_id"]

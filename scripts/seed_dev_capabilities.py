@@ -23,10 +23,18 @@ import datetime
 import os
 import sys
 import uuid
+from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+# Ensure the repo root is importable when invoked as a subprocess from
+# arbitrary cwd. Without this, `from registry.X import Y` raises
+# ModuleNotFoundError.
+_REPO_ROOT = Path(__file__).parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
 _DEFAULT_TENANT_SLUG = "dev"
 _DEFAULT_ACTOR_NAME = "dev-admin"

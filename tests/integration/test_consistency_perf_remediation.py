@@ -320,7 +320,7 @@ async def test_create_artifact_consumer_forbidden(cpr_clients) -> None:
     consumer, _, cap_id, _settings = cpr_clients
     resp = await consumer.post(
         f"/v1/capabilities/{cap_id}/artifacts",
-        json={"category": "overview", "body": "denied"},
+        json={"category": "overview", "title": "Denied attempt", "body": "denied"},
     )
     _assert_forbidden(resp)
 
@@ -331,7 +331,11 @@ async def test_create_artifact_producer_succeeds(cpr_clients) -> None:
     _, producer, cap_id, _settings = cpr_clients
     resp = await producer.post(
         f"/v1/capabilities/{cap_id}/artifacts",
-        json={"category": "overview", "body": "producer artifact body"},
+        json={
+            "category": "overview",
+            "title": "Producer Artifact",
+            "body": "producer artifact body",
+        },
     )
     assert resp.status_code == 201, f"expected 201: {resp.text}"
 

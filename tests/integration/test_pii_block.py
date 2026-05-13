@@ -214,7 +214,7 @@ class TestPiiBlockPolicy:
             # POST artifact with CC in body → must be rejected.
             art_r = client.post(
                 f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "body": _BODY_WITH_CC},
+                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
                 headers=auth,
             )
             assert (
@@ -247,7 +247,7 @@ class TestPiiBlockPolicy:
             # Trigger the block (422 expected).
             client.post(
                 f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "body": _BODY_WITH_CC},
+                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
                 headers=auth,
             )
 
@@ -281,7 +281,7 @@ class TestPiiAdvisoryPolicy:
 
             art_r = client.post(
                 f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "body": _BODY_WITH_CC},
+                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
                 headers=auth,
             )
             assert art_r.status_code == 201, f"Advisory policy must allow write, got {art_r.status_code}: {art_r.text}"
@@ -305,7 +305,7 @@ class TestPiiAdvisoryPolicy:
 
             art_r = client.post(
                 f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "body": _BODY_WITH_CC},
+                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
                 headers=auth,
             )
             assert art_r.status_code == 201, art_r.text
@@ -338,7 +338,7 @@ class TestPiiCleanBody:
 
             art_r = client.post(
                 f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "body": _CLEAN_BODY},
+                json={"category": _FACT_CATEGORY, "title": "PII clean artifact", "body": _CLEAN_BODY},
                 headers=auth,
             )
             assert art_r.status_code == 201, art_r.text

@@ -152,6 +152,13 @@ def respx_cassette() -> Callable[[str], respx.MockRouter]:
 def pg_container() -> Iterator[str]:
     """Start a Postgres 16 + pgvector container for the whole test session."""
     container = PostgresContainer(image="pgvector/pgvector:pg16", username="postgres", password="password")
+    # Many integration tests create short-lived AsyncEngines without disposing
+    # them, so the connection pool drifts upward over a long suite run. Bump
+    # Postgres max_connections well above the default 100 so the suite does
+    # not cascade into "sorry, too many clients already" errors mid-run.
+    container = container.with_command(
+        "postgres -c max_connections=500 -c shared_buffers=128MB"
+    )
     container.start()
     try:
         url = _to_async_url(container.get_connection_url())
