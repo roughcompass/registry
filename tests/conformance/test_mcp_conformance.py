@@ -40,6 +40,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, NamedTuple
+from unittest.mock import MagicMock
 
 import pytest
 import pytest_asyncio
@@ -220,6 +221,8 @@ async def mcp_harness(pg_container: str, app_settings: Settings) -> AsyncIterato
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
+        annotation_service=MagicMock(),
+        workspace_service=MagicMock(),
         clock=clock,
     )
 

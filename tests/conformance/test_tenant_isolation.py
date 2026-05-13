@@ -77,6 +77,7 @@ import secrets
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, NamedTuple
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -453,6 +454,8 @@ async def mcp_isolation_harness(pg_container: str, app_settings: Settings) -> As
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
+        annotation_service=MagicMock(),
+        workspace_service=MagicMock(),
         clock=clock,
     )
 

@@ -168,6 +168,8 @@ def _build_mcp(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
+        annotation_service=MagicMock(),
+        workspace_service=MagicMock(),
         clock=clock,
     )
 
@@ -248,6 +250,7 @@ async def test_total_tool_count() -> None:
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
     expected = {
+        # Catalog / retrieval
         "whoami",
         "search_capabilities",
         "get_capability",
@@ -256,6 +259,18 @@ async def test_total_tool_count() -> None:
         "list_capabilities",
         "get_dependents",
         "get_blast_radius",
+        # Annotations (3) — registered unconditionally
+        "submit_annotation",
+        "list_my_annotations",
+        "triage_annotation",
+        # Workspaces (7) — registered unconditionally
+        "create_workspace",
+        "list_workspaces",
+        "get_workspace",
+        "add_workspace_entry",
+        "update_workspace_entry",
+        "search_workspace_entries",
+        "list_workspace_shares",
     }
     assert names == expected, f"tool set mismatch: {names}"
 
