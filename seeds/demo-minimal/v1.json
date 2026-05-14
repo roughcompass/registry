@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "name": "demo-minimal",
+  "description": "Two real-world enterprise capabilities so a fresh dev tenant has something recognisable on first open. Salt Design System gets the package-level metadata; user-preferences stays intentionally thin to give the catalog a clear 'rich vs. minimal' contrast.",
+  "external_systems": [
+    {
+      "slug": "npm",
+      "display_name": "npm registry",
+      "url_template": "https://www.npmjs.com/package/{external_id}"
+    },
+    {
+      "slug": "github",
+      "display_name": "GitHub",
+      "url_template": "https://github.com/{external_id}"
+    }
+  ],
+  "entities": [
+    {
+      "name": "salt-design-system",
+      "entity_type": "capability",
+      "attributes": {
+        "display_name": "Salt Design System",
+        "summary": "JPMorgan Chase's open-source enterprise design system — React component library and design tokens for building accessible, themeable UIs.",
+        "owner": "JPMorgan Chase",
+        "homepage": "https://www.saltdesignsystem.com/",
+        "repo": "https://github.com/jpmorganchase/salt-ds",
+        "lifecycle": {"state": "ga"},
+        "current_version": "1.45.0",
+        "package_name": "@salt-ds/core",
+        "framework": "react",
+        "license": "Apache-2.0",
+        "accessibility_compliance": "WCAG 2.1 AA"
+      },
+      "external_ids": [
+        {
+          "system": "npm",
+          "external_id": "@salt-ds/core",
+          "url": "https://www.npmjs.com/package/@salt-ds/core"
+        },
+        {
+          "system": "github",
+          "external_id": "jpmorganchase/salt-ds",
+          "url": "https://github.com/jpmorganchase/salt-ds"
+        }
+      ]
+    },
+    {
+      "name": "user-preferences",
+      "entity_type": "capability",
+      "attributes": {
+        "display_name": "Enterprise User Preferences Service",
+        "summary": "Stores per-user UI/UX preferences (theme, locale, density, notification opt-ins) with tenant-scoped admin overrides and audit history.",
+        "owner": "Platform Engineering",
+        "lifecycle": {"state": "beta"}
+      }
+    }
+  ]
+}

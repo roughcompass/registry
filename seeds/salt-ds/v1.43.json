@@ -1,0 +1,569 @@
+{
+  "schema_version": 1,
+  "name": "salt-ds-v1.43",
+  "description": "Salt Design System v1.43.0 — initial 1.x stable line. 17 components with full TypeScript interfaces, baseline narrative facts (ADR, security model, theming guide), overview fact, and release note.",
+  "released_at": "2025-09-15T00:00:00Z",
+
+  "vocabulary": [
+    {"kind": "entity_type",   "value": "capability"},
+    {"kind": "entity_type",   "value": "concept"},
+    {"kind": "edge_rel",      "value": "composes"},
+    {"kind": "fact_category", "value": "overview"},
+    {"kind": "fact_category", "value": "release_note"},
+    {"kind": "fact_category", "value": "adr"},
+    {"kind": "fact_category", "value": "security_model"},
+    {"kind": "fact_category", "value": "dev_doc"},
+    {"kind": "lifecycle_state","value": "ga"},
+    {"kind": "visibility",    "value": "private"}
+  ],
+
+  "external_systems": [
+    {
+      "slug": "npm",
+      "display_name": "npm registry",
+      "url_template": "https://www.npmjs.com/package/{external_id}"
+    },
+    {
+      "slug": "github",
+      "display_name": "GitHub",
+      "url_template": "https://github.com/{external_id}"
+    }
+  ],
+
+  "entities": [
+    {
+      "name": "salt-design-system",
+      "entity_type": "capability",
+      "visibility": "private",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Salt Design System",
+        "summary": "JPMorgan Chase's open-source enterprise design system — React component library and design tokens for building accessible, themeable UIs.",
+        "owner": "JPMorgan Chase",
+        "homepage": "https://www.saltdesignsystem.com/",
+        "repo": "https://github.com/jpmorganchase/salt-ds",
+        "lifecycle": {"state": "ga"},
+        "package_name": "@salt-ds/core",
+        "framework": "react",
+        "license": "Apache-2.0",
+        "accessibility_compliance": "WCAG 2.1 AA"
+      },
+      "external_ids": [
+        {
+          "system": "npm",
+          "external_id": "@salt-ds/core",
+          "url": "https://www.npmjs.com/package/@salt-ds/core"
+        },
+        {
+          "system": "github",
+          "external_id": "jpmorganchase/salt-ds",
+          "url": "https://github.com/jpmorganchase/salt-ds"
+        }
+      ]
+    },
+
+    {
+      "name": "salt-button",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Button",
+        "category": "form-controls",
+        "summary": "Standard, accent, and CTA buttons with focus-ring and disabled states.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Button",
+          "props": [
+            {"name": "disabled",             "type": "boolean",                                                  "required": false, "default": "false"},
+            {"name": "focusableWhenDisabled","type": "boolean",                                                  "required": false, "default": "false"},
+            {"name": "variant",             "type": "'primary' | 'secondary' | 'cta'",                          "required": false, "default": "'primary'", "deprecated": "Use appearance + sentiment instead"},
+            {"name": "appearance",          "type": "'solid' | 'bordered' | 'transparent'",                     "required": false, "default": "'solid'"},
+            {"name": "sentiment",           "type": "'accented' | 'neutral' | 'positive' | 'negative' | 'caution'", "required": false, "default": "'neutral'"},
+            {"name": "loading",             "type": "boolean",                                                  "required": false, "default": "false"},
+            {"name": "loadingAnnouncement", "type": "string",                                                   "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-icon-button",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "IconButton",
+        "category": "form-controls",
+        "summary": "Icon-only button for compact toolbars and table actions.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Button",
+          "notes": "Icon-only usage of Button: render a single Salt icon as children and add aria-label for accessibility.",
+          "props": [
+            {"name": "disabled",             "type": "boolean",                                                  "required": false, "default": "false"},
+            {"name": "focusableWhenDisabled","type": "boolean",                                                  "required": false, "default": "false"},
+            {"name": "appearance",          "type": "'solid' | 'bordered' | 'transparent'",                     "required": false, "default": "'transparent'"},
+            {"name": "sentiment",           "type": "'accented' | 'neutral' | 'positive' | 'negative' | 'caution'", "required": false, "default": "'neutral'"},
+            {"name": "aria-label",          "type": "string",                                                   "required": true}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-input",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Input",
+        "category": "form-controls",
+        "summary": "Single-line text input with validation states and adornments.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Input",
+          "props": [
+            {"name": "value",               "type": "string",                                 "required": false},
+            {"name": "defaultValue",        "type": "string",                                 "required": false},
+            {"name": "disabled",            "type": "boolean",                                "required": false, "default": "false"},
+            {"name": "readOnly",            "type": "boolean",                                "required": false, "default": "false"},
+            {"name": "placeholder",         "type": "string",                                 "required": false},
+            {"name": "validationStatus",    "type": "'error' | 'warning' | 'success'",        "required": false},
+            {"name": "variant",             "type": "'primary' | 'secondary'",                "required": false, "default": "'primary'"},
+            {"name": "bordered",            "type": "boolean",                                "required": false, "default": "false"},
+            {"name": "startAdornment",      "type": "ReactNode",                              "required": false},
+            {"name": "endAdornment",        "type": "ReactNode",                              "required": false},
+            {"name": "textAlign",           "type": "'left' | 'center' | 'right'",            "required": false, "default": "'left'"},
+            {"name": "emptyReadOnlyMarker", "type": "string",                                 "required": false, "default": "'—'"},
+            {"name": "inputProps",          "type": "Partial<InputHTMLAttributes<HTMLInputElement>>", "required": false},
+            {"name": "inputRef",            "type": "Ref<HTMLInputElement>",                  "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-checkbox",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Checkbox",
+        "category": "form-controls",
+        "summary": "Tri-state checkbox supporting indeterminate values.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Checkbox",
+          "props": [
+            {"name": "checked",          "type": "boolean",                             "required": false},
+            {"name": "defaultChecked",   "type": "boolean",                             "required": false},
+            {"name": "disabled",         "type": "boolean",                             "required": false, "default": "false"},
+            {"name": "indeterminate",    "type": "boolean",                             "required": false, "default": "false"},
+            {"name": "label",            "type": "ReactNode",                           "required": false},
+            {"name": "name",             "type": "string",                              "required": false},
+            {"name": "value",            "type": "string",                              "required": false},
+            {"name": "onChange",         "type": "ChangeEventHandler<HTMLInputElement>","required": false},
+            {"name": "onBlur",           "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "onFocus",          "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "validationStatus", "type": "'error' | 'warning' | 'success'",    "required": false},
+            {"name": "inputProps",       "type": "Partial<InputHTMLAttributes<HTMLInputElement>>", "required": false},
+            {"name": "inputRef",         "type": "Ref<HTMLInputElement>",               "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-radio-button",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "RadioButton",
+        "category": "form-controls",
+        "summary": "Single-select option, used inside RadioButtonGroup.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "RadioButton",
+          "props": [
+            {"name": "checked",          "type": "boolean",                             "required": false},
+            {"name": "disabled",         "type": "boolean",                             "required": false, "default": "false"},
+            {"name": "readOnly",         "type": "boolean",                             "required": false, "default": "false"},
+            {"name": "label",            "type": "ReactNode",                           "required": false},
+            {"name": "name",             "type": "string",                              "required": false},
+            {"name": "value",            "type": "string",                              "required": false},
+            {"name": "onChange",         "type": "ChangeEventHandler<HTMLInputElement>","required": false},
+            {"name": "onBlur",           "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "onFocus",          "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "validationStatus", "type": "'error' | 'warning' | 'success'",    "required": false},
+            {"name": "inputProps",       "type": "Partial<InputHTMLAttributes<HTMLInputElement>>", "required": false},
+            {"name": "inputRef",         "type": "Ref<HTMLInputElement>",               "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-switch",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Switch",
+        "category": "form-controls",
+        "summary": "Two-state toggle for binary settings.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Switch",
+          "props": [
+            {"name": "checked",        "type": "boolean",                             "required": false},
+            {"name": "defaultChecked", "type": "boolean",                             "required": false},
+            {"name": "disabled",       "type": "boolean",                             "required": false, "default": "false"},
+            {"name": "label",          "type": "ReactNode",                           "required": false},
+            {"name": "name",           "type": "string",                              "required": false},
+            {"name": "value",          "type": "string",                              "required": false},
+            {"name": "onChange",       "type": "ChangeEventHandler<HTMLInputElement>","required": false},
+            {"name": "onBlur",         "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "onFocus",        "type": "FocusEventHandler<HTMLInputElement>", "required": false},
+            {"name": "inputProps",     "type": "Partial<ComponentPropsWithoutRef<'input'>>", "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-combo-box",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "ComboBox",
+        "category": "form-controls",
+        "summary": "Searchable dropdown supporting single + multi-select.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "ComboBox",
+          "props": [
+            {"name": "children",      "type": "ReactNode",  "required": false},
+            {"name": "selectOnTab",   "type": "boolean",    "required": false, "default": "false"},
+            {"name": "value",         "type": "string",     "required": false},
+            {"name": "defaultValue",  "type": "string",     "required": false},
+            {"name": "disabled",      "type": "boolean",    "required": false, "default": "false"},
+            {"name": "readOnly",      "type": "boolean",    "required": false, "default": "false"},
+            {"name": "multiselect",   "type": "boolean",    "required": false, "default": "false"},
+            {"name": "placeholder",   "type": "string",     "required": false},
+            {"name": "onSelectionChange", "type": "(event: SyntheticEvent, selectedItems: Item[]) => void", "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-form-field",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "FormField",
+        "category": "form-controls",
+        "summary": "Wraps inputs with label, helper text, and validation status.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "FormField",
+          "props": [
+            {"name": "disabled",         "type": "boolean",                          "required": false, "default": "false"},
+            {"name": "readOnly",         "type": "boolean",                          "required": false, "default": "false"},
+            {"name": "labelPlacement",   "type": "'top' | 'left' | 'right'",         "required": false, "default": "'top'"},
+            {"name": "necessity",        "type": "'required' | 'optional' | 'asterisk'", "required": false},
+            {"name": "validationStatus", "type": "'error' | 'warning' | 'success'",  "required": false},
+            {"name": "id",               "type": "string",                           "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-card",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Card",
+        "category": "layout",
+        "summary": "Surface primitive for grouped content with optional accent border.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Card",
+          "props": [
+            {"name": "accent",       "type": "'bottom' | 'top' | 'left' | 'right'",          "required": false},
+            {"name": "variant",      "type": "'primary' | 'secondary' | 'tertiary' | 'ghost'","required": false, "default": "'primary'"},
+            {"name": "hoverable",    "type": "boolean",                                       "required": false, "default": "false"},
+            {"name": "disabled",     "type": "boolean",                                       "required": false, "default": "false", "deprecated": "Use InteractableCard instead"},
+            {"name": "interactable", "type": "boolean",                                       "required": false, "default": "false", "deprecated": "Use InteractableCard instead"}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-tabs",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Tabs",
+        "category": "layout",
+        "summary": "Horizontally navigable panels with overflow handling.",
+        "interface": {
+          "package": "@salt-ds/lab",
+          "import_name": "Tabs",
+          "notes": "Tabs lives in @salt-ds/lab (alpha). Promoted from core's TabStrip primitive.",
+          "props": [
+            {"name": "source",               "type": "string[] | TabDescriptor[]",    "required": false},
+            {"name": "defaultActiveTabIndex","type": "number",                         "required": false, "default": "0"},
+            {"name": "activeTabIndex",       "type": "number | null",                  "required": false},
+            {"name": "onActiveChange",       "type": "(tabIndex: number) => void",     "required": false},
+            {"name": "orientation",          "type": "'horizontal' | 'vertical'",      "required": false, "default": "'horizontal'"},
+            {"name": "overflowMenu",         "type": "boolean",                        "required": false, "default": "true"},
+            {"name": "centered",             "type": "boolean",                        "required": false, "default": "false"},
+            {"name": "enableAddTab",         "type": "boolean",                        "required": false, "default": "false"},
+            {"name": "enableRenameTab",      "type": "boolean",                        "required": false, "default": "false"},
+            {"name": "allowDragDrop",        "type": "boolean",                        "required": false, "default": "false"}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-accordion",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Accordion",
+        "category": "layout",
+        "summary": "Vertically stacked, expandable sections.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Accordion",
+          "props": [
+            {"name": "value",            "type": "string",                            "required": true},
+            {"name": "expanded",         "type": "boolean",                           "required": false},
+            {"name": "defaultExpanded",  "type": "boolean",                           "required": false, "default": "false"},
+            {"name": "disabled",         "type": "boolean",                           "required": false, "default": "false"},
+            {"name": "indicatorSide",    "type": "'left' | 'right'",                  "required": false, "default": "'left'"},
+            {"name": "status",           "type": "'error' | 'warning' | 'success'",   "required": false},
+            {"name": "onToggle",         "type": "(event: SyntheticEvent<HTMLButtonElement>) => void", "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-flex-layout",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "FlexLayout",
+        "category": "layout",
+        "summary": "Token-driven flex container with gap + alignment props.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "FlexLayout",
+          "props": [
+            {"name": "align",      "type": "'start' | 'end' | 'center' | 'stretch' | 'baseline'",                            "required": false, "default": "'stretch'"},
+            {"name": "direction",  "type": "'row' | 'column'",                                                               "required": false, "default": "'row'"},
+            {"name": "gap",        "type": "number | string",                                                                "required": false, "default": "3"},
+            {"name": "justify",    "type": "'start' | 'end' | 'center' | 'space-between' | 'space-around' | 'space-evenly'", "required": false, "default": "'start'"},
+            {"name": "wrap",       "type": "boolean",                                                                        "required": false, "default": "false"},
+            {"name": "margin",     "type": "number | string",                                                                "required": false, "default": "0"},
+            {"name": "padding",    "type": "number | string",                                                                "required": false, "default": "0"},
+            {"name": "separators", "type": "'start' | 'center' | 'end' | true",                                              "required": false, "deprecated": "Use StackLayout separators instead"}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-dialog",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Dialog",
+        "category": "overlays",
+        "summary": "Modal dialog with focus trap and configurable widths.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Dialog",
+          "props": [
+            {"name": "open",           "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "onOpenChange",   "type": "(open: boolean) => void",                 "required": false},
+            {"name": "size",           "type": "'small' | 'medium' | 'large'",            "required": false, "default": "'medium'"},
+            {"name": "status",         "type": "'error' | 'warning' | 'success' | 'info'","required": false},
+            {"name": "disableDismiss", "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "disableScrim",   "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "initialFocus",   "type": "number | React.RefObject<HTMLElement>",   "required": false, "default": "0"},
+            {"name": "idProp",         "type": "string",                                  "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-drawer",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Drawer",
+        "category": "overlays",
+        "summary": "Edge-anchored sliding panel for navigation or filters.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Drawer",
+          "props": [
+            {"name": "open",           "type": "boolean",                          "required": false, "default": "false"},
+            {"name": "onOpenChange",   "type": "(newOpen: boolean) => void",       "required": false},
+            {"name": "position",       "type": "'left' | 'top' | 'right' | 'bottom'", "required": false, "default": "'left'"},
+            {"name": "variant",        "type": "'primary' | 'secondary'",           "required": false, "default": "'primary'"},
+            {"name": "disableDismiss", "type": "boolean",                           "required": false, "default": "false"},
+            {"name": "disableScrim",   "type": "boolean",                           "required": false, "default": "false"}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-tooltip",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Tooltip",
+        "category": "overlays",
+        "summary": "Hover/focus-triggered popover for short hints.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Tooltip",
+          "props": [
+            {"name": "children",              "type": "ReactNode",                                                                                          "required": true},
+            {"name": "content",               "type": "ReactNode",                                                                                          "required": true},
+            {"name": "open",                  "type": "boolean",                                                                                            "required": false},
+            {"name": "onOpenChange",          "type": "(open: boolean) => void",                                                                            "required": false},
+            {"name": "placement",             "type": "'top' | 'bottom' | 'left' | 'right' | 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'",     "required": false, "default": "'right'"},
+            {"name": "status",                "type": "'error' | 'warning' | 'success' | 'info'",                                                           "required": false},
+            {"name": "hideArrow",             "type": "boolean",                                                                                            "required": false, "default": "false"},
+            {"name": "hideIcon",              "type": "boolean",                                                                                            "required": false, "default": "false"},
+            {"name": "disabled",              "type": "boolean",                                                                                            "required": false, "default": "false"},
+            {"name": "enterDelay",            "type": "number",                                                                                             "required": false},
+            {"name": "leaveDelay",            "type": "number",                                                                                             "required": false, "default": "300"},
+            {"name": "disableHoverListener",  "type": "boolean",                                                                                            "required": false, "default": "false"},
+            {"name": "disableFocusListener",  "type": "boolean",                                                                                            "required": false, "default": "false"}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-toast",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Toast",
+        "category": "overlays",
+        "summary": "Transient notification surface with success / warning / error variants.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Toast",
+          "props": [
+            {"name": "status", "type": "'error' | 'warning' | 'success' | 'info'", "required": false},
+            {"name": "icon",   "type": "ReactElement<IconProps>",                   "required": false}
+          ]
+        }
+      }
+    },
+
+    {
+      "name": "salt-data-grid",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "attributes": {
+        "display_name": "DataGrid",
+        "category": "data",
+        "summary": "Virtualised, columnar grid with sort, group, and column pinning.",
+        "interface": {
+          "package": "@salt-ds/data-grid",
+          "import_name": "Grid",
+          "notes": "DataGrid is the @salt-ds/data-grid Grid component — a virtualised columnar grid built on top of the Salt design tokens.",
+          "props": [
+            {"name": "rowData",            "type": "T[]",                                     "required": true},
+            {"name": "children",           "type": "ReactNode",                               "required": true,  "notes": "GridColumn or ColumnGroup children"},
+            {"name": "rowKeyGetter",       "type": "(row: T, index: number) => string",        "required": false},
+            {"name": "zebra",              "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "hideHeader",         "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "columnSeparators",   "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "pinnedSeparators",   "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "variant",            "type": "'primary' | 'secondary'",                 "required": false, "default": "'primary'"},
+            {"name": "rowSelectionMode",   "type": "'single' | 'multi' | 'none'",             "required": false, "default": "'none'"},
+            {"name": "onRowSelected",      "type": "(selectedRowIdxs: number[]) => void",     "required": false},
+            {"name": "cellSelectionMode",  "type": "'range' | 'none'",                        "required": false, "default": "'none'"},
+            {"name": "columnMove",         "type": "boolean",                                 "required": false, "default": "false"},
+            {"name": "onColumnMoved",      "type": "(columnId: string, fromIndex: number, toIndex: number) => void", "required": false},
+            {"name": "defaultSelectedRowIdxs", "type": "number[]",                           "required": false},
+            {"name": "selectedRowIdxs",    "type": "number[]",                               "required": false},
+            {"name": "headerIsFocusable",  "type": "boolean",                                "required": false, "default": "false"},
+            {"name": "onVisibleRowRangeChange", "type": "(start: number, end: number) => void", "required": false}
+          ]
+        }
+      }
+    }
+  ],
+
+  "facts": [
+    {
+      "entity": "salt-design-system",
+      "category": "overview",
+      "title": "Overview",
+      "body_format": "markdown",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "body": "Salt is an open-source enterprise design system developed by JPMorgan Chase. It ships a React component library plus design tokens (colour, density, corner radius, typography) themed for both light and dark modes. Salt targets data-dense financial interfaces and ships with WCAG 2.1 AA conformance. Components are tree-shakeable from @salt-ds/core; theming is applied at the <SaltProvider> boundary."
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "adr",
+      "title": "Architectural decision: React, not Web Components",
+      "body_format": "markdown",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "body": "# Status\nAccepted (2025-08-12)\n\n# Context\nEnterprise consumers run a mix of React, Angular, and internal frameworks. A framework-agnostic Web-Components layer was considered to maximise reach.\n\n# Decision\nShip React-first. The team's expertise + the cost of shadow-DOM-aware theming and the lack of native form-association support outweigh the cross-framework upside. We will not block framework-agnostic wrapper packages built by consumers.\n\n# Consequences\nNon-React apps integrate via render-into-element patterns or community wrappers. The team owns React + Tokens; the community owns the bridges."
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "security_model",
+      "title": "Security model",
+      "body_format": "markdown",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "body": "Salt is a client-rendering library; it never makes outbound network calls of its own, never reads/writes local storage by default, and depends on zero runtime-only third-party trackers. CSP-compatible: all styling is via class names against `<style>` blocks generated at build time. No inline `<script>` or runtime `eval()`. Trusted Types compatible — no innerHTML usage. Components MUST receive untrusted text via standard React children; consumers handle HTML-sanitisation upstream if they need it."
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Theming guide",
+      "body_format": "markdown",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "body": "Wrap your app in `<SaltProvider density={...} mode={'light'|'dark'}>`. All components inherit from the provider; nested providers override. Custom themes: extend the default token set via a CSS variable layer (see `@salt-ds/theme`). Density: `low` / `medium` / `high` / `touch` (touch added in v1.45)."
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "release_note",
+      "title": "v1.43.0 release notes",
+      "body_format": "markdown",
+      "valid_from": "2025-09-15T00:00:00Z",
+      "body": "v1.43.0 — Initial 1.x stable line. 17 components ship with WCAG 2.1 AA conformance: Button, IconButton, Input, Checkbox, RadioButton, Switch, ComboBox, FormField, Card, Tabs, Accordion, FlexLayout, Dialog, Drawer, Tooltip, Toast, DataGrid. Tree-shakeable from @salt-ds/core. Theming via `<SaltProvider density={...} mode={'light'|'dark'}>`. DataGrid available as @salt-ds/data-grid.\n\nBreaking changes vs 0.x: SaltProvider API stabilised (props renamed: `appearance` → `mode`, `applyClassesTo` removed). Migration guide at https://www.saltdesignsystem.com/salt/v1-migration."
+    }
+  ]
+}

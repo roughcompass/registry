@@ -130,12 +130,25 @@ openapi-export: ## Regenerate the committed openapi.json from the live app.
 dev-token: ## Mint a dev tenant + token in one shot. TOKEN_OUT=.env.dev to persist.
 	$(PYTHON) scripts/bootstrap_dev_tenant.py $(if $(TOKEN_OUT),--write-env-file $(TOKEN_OUT))
 
-# Follow-up to dev-token: seeds the dev tenant's closed-vocabulary values
-# (entity_type, edge_rel, fact_category, lifecycle_state, visibility, …) and
-# inserts two demo capabilities so GET /v1/capabilities returns something.
-# Idempotent — re-running yields the same entity_ids.
-dev-seed: ## Seed dev-tenant vocabulary + 2 demo capabilities. Idempotent.
+# Follow-up to dev-token: seed the dev tenant from JSON bundles in seeds/.
+# Default loads vocabulary + demo-minimal + salt-ds (all three versions) so
+# GET /v1/capabilities returns something rich. Per-use-case loading lives in
+# dev-seed-usecase below. Idempotent — re-running yields the same entity_ids.
+dev-seed: ## Seed dev-tenant from default bundle set (vocab + demo-minimal + salt-ds). Idempotent.
 	$(PYTHON) scripts/seed_dev_capabilities.py
+
+# Load a single named use case under seeds/, e.g. `make dev-seed-usecase USECASE=salt-ds`.
+# Always loads _vocabulary.json first as a prerequisite, then the named directory.
+dev-seed-usecase: ## Seed one named use case under seeds/. USECASE=<name> required.
+	@if [ -z "$(USECASE)" ]; then \
+		echo "error: USECASE is required, e.g. 'make dev-seed-usecase USECASE=salt-ds'"; \
+		exit 1; \
+	fi
+	$(PYTHON) scripts/seed_dev_capabilities.py --usecase $(USECASE)
+
+# List discoverable use cases (each directory under seeds/ with .json files).
+dev-seed-list: ## List available seed use cases.
+	$(PYTHON) scripts/seed_dev_capabilities.py --list
 
 # -----------------------------------------------------------------------------
 # Release-side targets — the build/package commands. Image push and

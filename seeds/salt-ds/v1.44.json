@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "name": "salt-ds-v1.44",
+  "description": "Salt Design System v1.44.0 — adds FilterBar + StepperInput; Toast gains placement prop; ComboBox value-selection now fires on Enter-when-highlighted.",
+  "released_at": "2025-12-01T00:00:00Z",
+  "entities": [
+    {
+      "name": "salt-filter-bar",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-12-01T00:00:00Z",
+      "attributes": {
+        "display_name": "FilterBar",
+        "category": "data",
+        "summary": "Stackable filter chips with type-ahead value selection for table / list filtering.",
+        "interface": {
+          "package": "@salt-ds/lab",
+          "import_name": "FilterBar",
+          "notes": "Shipped from @salt-ds/lab in v1.44 while the API stabilises; promotion to @salt-ds/core is planned for the 2.0 line.",
+          "props": [
+            {"name": "filters",        "type": "Filter[]",                                 "required": true,  "description": "Filter definitions; each carries a key, label, and value-source."},
+            {"name": "selectedValues", "type": "Record<string, unknown>",                  "required": false, "description": "Controlled selection; pair with onChange."},
+            {"name": "onChange",       "type": "(next: Record<string, unknown>) => void",  "required": false},
+            {"name": "stackingMode",   "type": "'horizontal' | 'wrap'",                    "required": false, "default": "'horizontal'"},
+            {"name": "size",           "type": "'compact' | 'standard'",                   "required": false, "default": "'standard'"},
+            {"name": "clearable",      "type": "boolean",                                  "required": false, "default": "true"},
+            {"name": "disabled",       "type": "boolean",                                  "required": false, "default": "false"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "salt-stepper-input",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2025-12-01T00:00:00Z",
+      "attributes": {
+        "display_name": "StepperInput",
+        "category": "form-controls",
+        "summary": "Numeric input with increment / decrement buttons; honours min/max/step props.",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "StepperInput",
+          "props": [
+            {"name": "value",            "type": "number | string",                          "required": false},
+            {"name": "defaultValue",     "type": "number | string",                          "required": false, "default": "0"},
+            {"name": "min",              "type": "number",                                    "required": false, "default": "-Infinity"},
+            {"name": "max",              "type": "number",                                    "required": false, "default": "Infinity"},
+            {"name": "step",             "type": "number",                                    "required": false, "default": "1"},
+            {"name": "block",            "type": "number",                                    "required": false, "default": "10", "description": "Larger step used when shift-clicking the buttons."},
+            {"name": "decimalPlaces",    "type": "number",                                    "required": false, "default": "0"},
+            {"name": "disabled",         "type": "boolean",                                   "required": false, "default": "false"},
+            {"name": "readOnly",         "type": "boolean",                                   "required": false, "default": "false"},
+            {"name": "validationStatus", "type": "'error' | 'warning' | 'success'",          "required": false},
+            {"name": "onChange",         "type": "(event: ChangeEvent<HTMLInputElement>) => void", "required": false}
+          ]
+        }
+      }
+    }
+  ],
+  "facts": [
+    {
+      "entity": "salt-design-system",
+      "category": "release_note",
+      "title": "v1.44.0 release notes",
+      "body_format": "markdown",
+      "body": "v1.44.0 — Two new components: **FilterBar** (`salt-filter-bar`) for table / list filtering, and **StepperInput** (`salt-stepper-input`) for numeric step controls. Toast gains a `placement` prop (`top-right` | `bottom-right` | `top-center` | `bottom-center`); default `top-right` matches prior visual behaviour.\n\nNon-breaking: ComboBox value-selection events now also fire on Enter-when-highlighted (previously only mouse click + Tab). Existing handlers continue to work; opt out via `selectOnEnter={false}`."
+    }
+  ]
+}

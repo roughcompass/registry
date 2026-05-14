@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "name": "salt-ds-v1.45",
+  "description": "Salt Design System v1.45.0 — DataGrid virtualization + column pinning; Dialog focus-trap fix for nested Drawer; new density-touch token; ComboBox controlled-open. Also defines the package-level interface and the current_version bitemporal history so time-travel queries return the right version label.",
+  "released_at": "2026-01-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "salt-design-system",
+      "entity_type": "capability",
+      "valid_from": "2026-01-15T00:00:00Z",
+      "attributes": {
+        "interface": {
+          "package": "@salt-ds/core",
+          "current_version": "1.45.0",
+          "install": "npm install @salt-ds/core @salt-ds/theme",
+          "peer_dependencies": {
+            "react": ">=18.0.0",
+            "react-dom": ">=18.0.0"
+          },
+          "framework": "react",
+          "language": "typescript",
+          "module_format": ["esm", "cjs"],
+          "tree_shakeable": true,
+          "side_effects": false,
+          "side_packages": [
+            {"name": "@salt-ds/theme", "summary": "Design tokens (colour, density, corner-radius, typography) as CSS variables."},
+            {"name": "@salt-ds/icons", "summary": "Salt icon set — tree-shakeable React components."},
+            {"name": "@salt-ds/lab",   "summary": "Pre-stable components incubating before promotion to @salt-ds/core."}
+          ],
+          "provider": {
+            "name": "SaltProvider",
+            "summary": "Wrap your app to apply tokens and density. Nested providers override.",
+            "props": [
+              {"name": "density", "type": "'low' | 'medium' | 'high' | 'touch'", "required": false, "default": "'medium'"},
+              {"name": "mode",    "type": "'light' | 'dark'",                    "required": false, "default": "'light'"},
+              {"name": "theme",   "type": "string | string[]",                   "required": false, "description": "Theme name(s) loaded from @salt-ds/theme."}
+            ]
+          },
+          "entry_points": [
+            "Button", "IconButton", "Input", "Checkbox", "RadioButton", "Switch",
+            "ComboBox", "FormField", "Card", "Tabs", "Accordion", "FlexLayout",
+            "Dialog", "Drawer", "Tooltip", "Toast", "DataGrid",
+            "FilterBar", "StepperInput"
+          ]
+        }
+      }
+    }
+  ],
+  "facts": [
+    {
+      "entity": "salt-design-system",
+      "category": "release_note",
+      "title": "v1.45.0 release notes",
+      "body_format": "markdown",
+      "body": "v1.45.0 — DataGrid gains column pinning + virtualised row rendering for ≥ 100k-row datasets; Dialog focus-trap fix for nested Drawer composition; new density token `density-touch` for tablet form-factor; ComboBox now exposes a controlled `open` prop. No breaking changes vs 1.44.x."
+    }
+  ],
+  "bitemporal_attributes": [
+    {
+      "entity": "salt-design-system",
+      "key": "current_version",
+      "replace_existing": true,
+      "rows": [
+        {"value": "1.43.0", "valid_from": "2025-09-15T00:00:00Z", "valid_to": "2025-12-01T00:00:00Z"},
+        {"value": "1.44.0", "valid_from": "2025-12-01T00:00:00Z", "valid_to": "2026-01-15T00:00:00Z"},
+        {"value": "1.45.0", "valid_from": "2026-01-15T00:00:00Z", "valid_to": null}
+      ]
+    }
+  ]
+}

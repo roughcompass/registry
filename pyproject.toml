@@ -55,7 +55,23 @@ include = ["registry*", "sync*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# Pin to "session" so the existing module-scoped async fixtures (testcontainers
+# Postgres, MCP harnesses) continue to share their loop with function-scoped
+# tests instead of failing with ScopeMismatch. The fixture's scope still wins
+# when narrower; this only sets the default for fixtures that don't declare one.
+asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
+filterwarnings = [
+    # pytest-asyncio deprecated the event_loop-fixture override pattern; our
+    # custom event_loop fixtures pre-date that deprecation. Suppress the
+    # noise until we migrate to the event_loop_policy fixture form.
+    "ignore:The event_loop fixture provided by pytest-asyncio has been redefined:DeprecationWarning",
+    "ignore::pytest.PytestDeprecationWarning",
+    # Spurious "coroutine was never awaited" warnings emitted by AsyncMock
+    # when production code does not await a return value it never needed
+    # (`session.add` is sync; AsyncMock pretends it might be async).
+    "ignore:coroutine .*_execute_mock_call.* was never awaited:RuntimeWarning",
+]
 
 [tool.ruff]
 line-length = 120
