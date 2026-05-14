@@ -258,6 +258,38 @@ class PurgeResult:
 
 
 # ---------------------------------------------------------------------------
+# Workspace authorization exceptions
+# ---------------------------------------------------------------------------
+
+
+class WorkspaceAuthError(Exception):
+    """Base for workspace authorization failures.
+
+    Routers map subclasses to HTTP status codes — the router never
+    re-evaluates authorization. Raised exclusively by workspace service
+    methods, not by the router or middleware.
+    """
+
+
+class WorkspaceNotFound(WorkspaceAuthError):
+    """The workspace does not exist or is not perceivable to this actor.
+
+    Router maps to HTTP 404. Raised by get_workspace and by any service
+    method that cannot perceive the workspace. Callers must not expose
+    whether the workspace actually exists when raising this exception.
+    """
+
+
+class WorkspaceOperationDenied(WorkspaceAuthError):
+    """The workspace is perceivable but the requested operation is denied.
+
+    Router maps to HTTP 403. Raised only after get_workspace succeeds
+    (perceivability is already confirmed). Never raised for non-perceivable
+    workspaces — those always result in WorkspaceNotFound.
+    """
+
+
+# ---------------------------------------------------------------------------
 # WorkspaceService
 # ---------------------------------------------------------------------------
 
