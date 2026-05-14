@@ -989,7 +989,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Mount MCP server under /mcp — same process, same port, no sidecar.
     from registry.api.routers.annotations import _build_annotation_service  # noqa: PLC0415
-    from registry.api.routers.mcp import create_catalog_mcp_server, create_mcp_app  # noqa: PLC0415
+    from registry.api.routers.mcp import create_registry_mcp_server, create_mcp_app  # noqa: PLC0415
     from registry.api.routers.workspaces import _build_workspace_service  # noqa: PLC0415
 
     annotation_svc = _build_annotation_service(app)
@@ -998,7 +998,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     workspace_svc = _build_workspace_service(app)
     app.state.workspace_service = workspace_svc
 
-    catalog_mcp_server = create_catalog_mcp_server(
+    registry_mcp_server = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -1008,7 +1008,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         annotation_service=annotation_svc,
         workspace_service=workspace_svc,
     )
-    mcp_router = create_mcp_app(server=catalog_mcp_server)
+    mcp_router = create_mcp_app(server=registry_mcp_server)
     app.mount("/mcp", mcp_router)
 
     # ASGI middleware: per-tenant in-process token-bucket rate limiting.

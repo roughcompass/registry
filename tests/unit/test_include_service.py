@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.api.schemas import (
     EntityCollectionExpansion,
     ExternalIdsExpansion,
@@ -552,7 +552,7 @@ def _build_mcp_with_includes(
 
     session_factory = MagicMock()
 
-    mcp = create_catalog_mcp_server(
+    mcp = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,

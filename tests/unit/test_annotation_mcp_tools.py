@@ -26,7 +26,7 @@ import pytest
 from fastapi import HTTPException
 from mcp.server.fastmcp.exceptions import ToolError
 
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.service.annotations import AnnotationRef
 from registry.types import FakeClock, TenantContext
 
@@ -94,7 +94,7 @@ def _build_mcp(annotation_service: Any | None = None) -> Any:
     session_factory = MagicMock()
     workspace_service = MagicMock()
 
-    mcp = create_catalog_mcp_server(
+    mcp = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -657,7 +657,7 @@ async def test_triage_annotation_not_found_raises_tool_error() -> None:
 @pytest.mark.asyncio
 async def test_submit_annotation_tool_registered_when_service_provided() -> None:
     """submit_annotation, list_my_annotations, and triage_annotation are registered
-    in the tool set when annotation_service is provided to create_catalog_mcp_server.
+    in the tool set when annotation_service is provided to create_registry_mcp_server.
     """
     ann_svc = MagicMock()
     mcp = _build_mcp(annotation_service=ann_svc)

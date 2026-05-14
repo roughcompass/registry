@@ -88,7 +88,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from registry.api.auth.tokens import hash_token
 from registry.api.middleware.tenant import get_tenant_context
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.main import create_app
@@ -458,7 +458,7 @@ async def mcp_isolation_harness(pg_container: str, app_settings: Settings) -> As
     embedder = StubEmbedder()
     retrieval = RetrievalService(session_factory, clock, embedder, app_settings)
 
-    mcp = create_catalog_mcp_server(
+    mcp = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,

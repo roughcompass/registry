@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from registry.api.auth.tokens import hash_token
 from registry.api.routers.annotations import _AuditWriterAdapter
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.security.pii_scanner import build_builtin_scanner
@@ -211,7 +211,7 @@ async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> A
         clock=clock,
     )
 
-    mcp_server = create_catalog_mcp_server(
+    mcp_server = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -231,7 +231,7 @@ async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> A
         clock=clock,
     )
 
-    mcp_server_block = create_catalog_mcp_server(
+    mcp_server_block = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -260,7 +260,7 @@ async def test_annotation_tools_in_tool_list(mcp_annotation_harness: dict[str, A
     """The MCP server advertises all three annotation tools.
 
     Calls list_tools() on the live FastMCP instance built from the production
-    create_catalog_mcp_server factory. All three annotation tools must be
+    create_registry_mcp_server factory. All three annotation tools must be
     present — missing registration is a startup wiring bug.
     """
     mcp = mcp_annotation_harness["mcp"]

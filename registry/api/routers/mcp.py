@@ -3,7 +3,8 @@
 Mounts four tools over the Anthropic MCP SDK (FastMCP) as a Starlette
 ASGI sub-application under ``/mcp``.  The parent app mounts it with:
 
-    mcp_router = create_mcp_app(server=catalog_mcp_server)
+    registry_mcp_server = create_registry_mcp_server(...)
+    mcp_router = create_mcp_app(server=registry_mcp_server)
     app.mount("/mcp", mcp_router)
 
 This is the in-process binding pattern.  No sidecar, no stdio transport,
@@ -191,7 +192,7 @@ def _http_exc_to_tool_error(exc: HTTPException) -> ToolError:
 # ---------------------------------------------------------------------------
 
 
-def create_catalog_mcp_server(
+def create_registry_mcp_server(
     retrieval: RetrievalService,
     catalog: CatalogService,
     session_factory: async_sessionmaker[AsyncSession],
@@ -226,7 +227,21 @@ def create_catalog_mcp_server(
     """
     _clock = clock or SystemClock()
 
-    mcp_server = FastMCP("registry")
+    mcp_server = FastMCP(
+        name="digital-enablement-registry",
+        instructions=(
+            "This MCP server exposes tools for the Capability Catalog registry. "
+            "The registry manages two distinct resource types: catalog entities "
+            "(capabilities, interfaces, components) and workspaces. Workspaces "
+            "are collaborative notebooks/memory owned by the registry — they store "
+            "structured entries such as decisions, notes, and saved queries that "
+            "belong to the registry workflow. Workspaces are not VS Code or any IDE "
+            "concept; they have no relation to development environments. Use "
+            "create_workspace / add_workspace_entry / search_workspace_entries for "
+            "registry notebook operations, and search_capabilities / get_capability "
+            "for catalog lookups."
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Tool: whoami
@@ -1175,7 +1190,8 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
 
     Mounts the MCP server in-process:
 
-        mcp_router = create_mcp_app(server=catalog_mcp_server)
+        registry_mcp_server = create_registry_mcp_server(...)
+        mcp_router = create_mcp_app(server=registry_mcp_server)
         app.mount("/mcp", mcp_router)
 
     Transport: SSE (mcp<2.0 only exposes SSE HTTP transport; StreamableHTTP
@@ -1261,6 +1277,6 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
 
 
 __all__ = [
-    "create_catalog_mcp_server",
+    "create_registry_mcp_server",
     "create_mcp_app",
 ]

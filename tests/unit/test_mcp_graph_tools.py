@@ -26,7 +26,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.exceptions import NotFoundError, TenantIsolationError
 from registry.types import (
     EdgeRef,
@@ -164,7 +164,7 @@ def _build_mcp(
 
     ctx = _make_ctx()
 
-    mcp = create_catalog_mcp_server(
+    mcp = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -263,14 +263,13 @@ async def test_total_tool_count() -> None:
         "submit_annotation",
         "list_my_annotations",
         "triage_annotation",
-        # Workspaces (7) — registered unconditionally
+        # Workspaces (6) — registered unconditionally
         "create_workspace",
         "list_workspaces",
         "get_workspace",
         "add_workspace_entry",
         "update_workspace_entry",
         "search_workspace_entries",
-        "list_workspace_shares",
     }
     assert names == expected, f"tool set mismatch: {names}"
 

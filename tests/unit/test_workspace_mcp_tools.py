@@ -30,10 +30,9 @@ import pytest
 from fastapi import HTTPException
 from mcp.server.fastmcp.exceptions import ToolError
 
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.service.workspace import (
     SearchResult,
-    ShareRef,
     WorkspaceEntryRef,
     WorkspaceRef,
 )
@@ -48,7 +47,6 @@ _TENANT_ID = uuid.uuid4()
 _ACTOR_ID = uuid.uuid4()
 _WORKSPACE_ID = uuid.uuid4()
 _ENTRY_ID = uuid.uuid4()
-_SHARE_ID = uuid.uuid4()
 _FAKE_TOKEN = "fake-test-token"
 
 _PATCH_TARGET = "registry.api.routers.mcp._resolve_tenant"
@@ -107,21 +105,6 @@ def _make_entry_ref(
     )
 
 
-def _make_share_ref(
-    share_id: uuid.UUID | None = None,
-    revoked_at: datetime.datetime | None = None,
-) -> ShareRef:
-    return ShareRef(
-        share_id=share_id or _SHARE_ID,
-        workspace_id=_WORKSPACE_ID,
-        grantee_actor_id=uuid.uuid4(),
-        grantee_tenant_id=uuid.uuid4(),
-        role="reader",
-        granted_at=_NOW,
-        revoked_at=revoked_at,
-    )
-
-
 def _build_mcp(workspace_service: Any | None = None) -> Any:
     """Build a FastMCP server with mocked dependencies.
 
@@ -141,7 +124,7 @@ def _build_mcp(workspace_service: Any | None = None) -> Any:
     annotation_service.list_annotations = AsyncMock()
     annotation_service.triage_annotation = AsyncMock()
 
-    mcp = create_catalog_mcp_server(
+    mcp = create_registry_mcp_server(
         retrieval=retrieval,
         catalog=catalog,
         session_factory=session_factory,
@@ -173,7 +156,7 @@ async def _call(mcp: Any, tool: str, args: dict[str, Any]) -> Any:
 
 @pytest.mark.asyncio
 async def test_workspace_tools_registered() -> None:
-    """All seven workspace tools are registered in the MCP server tool list."""
+    """All six workspace tools are registered in the MCP server tool list."""
     ws_svc = MagicMock()
     mcp = _build_mcp(workspace_service=ws_svc)
     tools = await mcp.list_tools()
@@ -185,9 +168,9 @@ async def test_workspace_tools_registered() -> None:
         "add_workspace_entry",
         "update_workspace_entry",
         "search_workspace_entries",
-        "list_workspace_shares",
     }
     assert expected.issubset(names), f"Missing tools: {expected - names}"
+    assert "list_workspace_shares" not in names, "Deleted tool must not be re-registered"
 
 
 # ---------------------------------------------------------------------------
@@ -422,89 +405,7 @@ async def test_get_workspace_happy_path() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (d) list_workspace_shares — returns only active shares
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_list_workspace_shares_returns_only_active_shares() -> None:
-    """list_workspace_shares returns only active (non-revoked) shares.
-
-    The service applies the revoked_at IS NULL filter before returning rows;
-    this test pins that the tool forwards the service result as-is without
-    re-filtering, and that all returned shares have no revoked_at set.
-    """
-    active_share_1 = _make_share_ref()
-    active_share_2 = _make_share_ref(share_id=uuid.uuid4())
-
-    ws_svc = MagicMock()
-    ws_svc.list_shares = AsyncMock(return_value=[active_share_1, active_share_2])
-    mcp = _build_mcp(workspace_service=ws_svc)
-    ctx = _make_ctx()
-
-    with patch(_PATCH_TARGET, new=AsyncMock(return_value=ctx)):
-        raw = await _call(
-            mcp, "list_workspace_shares", {"workspace_id": str(_WORKSPACE_ID)}
-        )
-
-    shares = json.loads(raw)
-    assert len(shares) == 2
-    # All returned shares are active (revoked_at is None).
-    for share in shares:
-        assert share["revoked_at"] is None
-
-    ws_svc.list_shares.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_list_workspace_shares_403_raises_tool_error() -> None:
-    """list_workspace_shares raises ToolError with context message when service returns 403."""
-    ws_svc = MagicMock()
-    ws_svc.list_shares = AsyncMock(
-        side_effect=HTTPException(
-            status_code=403,
-            detail=f"Actor {_ACTOR_ID} is not authorized to list shares on workspace {_WORKSPACE_ID}.",
-        )
-    )
-    mcp = _build_mcp(workspace_service=ws_svc)
-    ctx = _make_ctx()
-
-    with patch(_PATCH_TARGET, new=AsyncMock(return_value=ctx)):
-        with pytest.raises(ToolError) as exc_info:
-            await _call(
-                mcp, "list_workspace_shares", {"workspace_id": str(_WORKSPACE_ID)}
-            )
-
-    msg = str(exc_info.value)
-    assert "Not authorized to list shares for workspace" in msg
-    assert str(_WORKSPACE_ID) in msg
-
-
-@pytest.mark.asyncio
-async def test_list_workspace_shares_404_raises_tool_error() -> None:
-    """list_workspace_shares raises ToolError with not-found message when service returns 404."""
-    missing_id = uuid.uuid4()
-    ws_svc = MagicMock()
-    ws_svc.list_shares = AsyncMock(
-        side_effect=HTTPException(
-            status_code=404,
-            detail=f"Workspace {missing_id} not found.",
-        )
-    )
-    mcp = _build_mcp(workspace_service=ws_svc)
-    ctx = _make_ctx()
-
-    with patch(_PATCH_TARGET, new=AsyncMock(return_value=ctx)):
-        with pytest.raises(ToolError) as exc_info:
-            await _call(
-                mcp, "list_workspace_shares", {"workspace_id": str(missing_id)}
-            )
-
-    assert f"Workspace {missing_id} not found." in str(exc_info.value)
-
-
-# ---------------------------------------------------------------------------
-# (e) search_workspace_entries — scopes to visible workspaces
+# (d) search_workspace_entries — scopes to visible workspaces
 # ---------------------------------------------------------------------------
 
 

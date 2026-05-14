@@ -27,7 +27,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from registry.api.auth.tokens import hash_token
-from registry.api.routers.mcp import _request_token, create_catalog_mcp_server
+from registry.api.routers.mcp import _request_token, create_registry_mcp_server
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.service.catalog import CatalogService
@@ -160,7 +160,7 @@ async def test_mcp_list_capabilities(pg_container: str, app_settings: Settings) 
     catalog_svc = CatalogService(session_factory, clock, vocabulary, schema)
     retrieval_svc = RetrievalService(session_factory, clock, embedder, stub_settings)
 
-    mcp_server = create_catalog_mcp_server(
+    mcp_server = create_registry_mcp_server(
         retrieval=retrieval_svc,
         catalog=catalog_svc,
         session_factory=session_factory,
@@ -254,7 +254,7 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
     embedder = StubEmbedder()
     retrieval_svc = RetrievalService(session_factory2, fake_clock, embedder, stub_settings)
     catalog_svc2 = CatalogService(session_factory2, fake_clock, vocabulary, schema)
-    mcp_server = create_catalog_mcp_server(
+    mcp_server = create_registry_mcp_server(
         retrieval=retrieval_svc,
         catalog=catalog_svc2,
         session_factory=session_factory2,
