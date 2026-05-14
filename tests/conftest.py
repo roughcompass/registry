@@ -111,3 +111,22 @@ def event_loop() -> Iterator[asyncio.AbstractEventLoop]:
         yield loop
     finally:
         loop.close()
+
+
+@pytest.fixture
+def mock_entitlement_service():
+    """Yield a respx MockRouter scoped to the entitlement service base URL.
+
+    Tests opt in by depending on this fixture and registering route
+    expectations on the yielded router (e.g. `mock_entitlement_service.get(
+    url__regex=r"/api/v1/ldap-entitlements.*").respond(200, json=...)`).
+
+    The base URL matches the canonical test value used in jwt_factory.py
+    and the new entitlement code paths. Override the URL in a more specific
+    fixture if a test needs a different one.
+    """
+    import respx  # local import: respx is a dev-only dep
+
+    base_url = "https://entitlement.test.local"
+    with respx.mock(base_url=base_url, assert_all_called=False) as router:
+        yield router
