@@ -1,0 +1,207 @@
+# capability.template.yaml — fill this in for one capability.
+#
+# Drop a filled copy into seeds/NN-<your-slug>/01-baseline.json (after
+# JSON-converting it) to register the capability, or commit it as
+# `capability.yaml` in your service repo for a sync connector to ingest.
+#
+# Validation: the `attributes` block is validated against
+# seeds/_templates/capability-schema.json by SchemaService.validate_capability
+# at write time. Fields marked REQUIRED block publication. Fields marked
+# OPTIONAL are recommended — they don't fail validation but they're
+# surfaced as 'completeness' on the catalog dashboard, and several
+# catalog features (dependency graph, change preview, agent discovery)
+# only work for capabilities that have populated them.
+#
+# Closed-vocabulary values (entity_type, visibility, lifecycle.state,
+# fact category, edge rel) must exist in the target tenant's vocabulary
+# — see seeds/00-core/01-vocabulary.json for the canonical list.
+
+# ---------------------------------------------------------------------------
+# Entity row (top-level columns on the `entities` table)
+# ---------------------------------------------------------------------------
+
+name: my-capability                  # REQUIRED. kebab-case slug, unique within the tenant.
+                                     # Becomes the catalog URL. entity_id is UUIDv5 over (tenant_id, name).
+
+entity_type: capability              # REQUIRED. Always 'capability' for this file.
+
+visibility: public                   # REQUIRED. private | tenant-shared | public.
+                                     # Default 'private'. Flip to public when the capability
+                                     # is intended for cross-tenant adoption.
+
+# ---------------------------------------------------------------------------
+# Attributes — validated against capability-schema.json
+# ---------------------------------------------------------------------------
+
+attributes:
+
+  # ----- REQUIRED -----
+
+  display_name: My Capability        # 2-80 chars. Title Case, no trailing punctuation.
+
+  summary: >                         # 20-280 chars. One or two sentences.
+    What this capability is and who consumes it. Appears in every
+    list view, search result, and dependency graph node — write it for
+    a reader who has never heard of this service.
+
+  owner: Core Services               # REQUIRED. Owning team name — NOT a person.
+                                     # Use `owned_by` / `product_owned_by` edges below
+                                     # to point to individual people.
+
+  lifecycle:
+    state: ga                        # alpha | beta | ga | deprecated | retired
+    since: 2026-05-14                # OPTIONAL. ISO date the capability entered this state.
+    # deprecation_notice_url: ...    # OPTIONAL. Required to be a URL if present.
+    # successor: my-capability-v2    # REQUIRED iff state in (deprecated, retired).
+                                     # Slug of the capability that replaces this one.
+
+  # ----- OPTIONAL but strongly recommended -----
+
+  description: >                     # Longer prose. For structured documents
+    (overview / dev_doc / security_model / runbook), prefer the `facts`
+    array below — those carry bi-temporal history and an authoritative flag.
+
+  current_version: 0.1.0             # Semver. Omit for capabilities that aren't
+                                     # versioned units (runtime platforms, composites).
+                                     # Version *history* goes in bitemporal_attributes,
+                                     # not here — this is just the current pin.
+
+  package_name: "@my-org/my-capability"
+  repository_url: https://github.com/my-org/my-capability
+  documentation_url: https://docs.example.com/my-capability
+
+  # Programmatic surface — include iff this capability has callers.
+  # Omit entirely for design-only capabilities, internal libraries with
+  # no public API, or composites that only aggregate other capabilities.
+  interface:
+    kind: rest-api                   # rest-api | graphql | grpc | library-api |
+                                     # library-package | typescript-sdk | cli |
+                                     # event-stream | ui-component
+    base_url: https://my-capability.platform.example.com
+    auth: "bearer-token (Identity-issued)"
+    spec_url: https://github.com/my-org/my-capability/blob/main/openapi.json
+                                     # Preferred over inline endpoints. Sync connectors
+                                     # pull from spec_url and treat it as the source of truth.
+    # endpoints:                     # Inline list — only when no spec_url exists.
+    #   - method: GET
+    #     path: /v1/things/{id}
+    #     summary: Return a thing by id.
+    #     auth_required: true
+
+  # Sensitivity drives downstream security review requirements + PII scanning.
+  data_classification: internal      # public | internal | confidential | restricted | pii-low | pii-high
+
+  slos:
+    - { name: read_p99,     target: 50,    window: 30d }   # latency in ms
+    - { name: write_p99,    target: 150,   window: 30d }
+    - { name: availability, target: 0.999, window: 30d }   # 0-1 fraction
+
+# ---------------------------------------------------------------------------
+# Facts — long-form artifacts attached to this capability
+# ---------------------------------------------------------------------------
+# Each fact becomes a row in the `facts` table, bi-temporal, with the
+# is_authoritative flag set true. Idempotency key is (entity, category, title)
+# — re-running with the same title updates the body in place.
+#
+# Category must come from the `fact_category` vocabulary. Common values:
+#   overview, dev_doc, security_model, faq, adr, release_note,
+#   migration_guide, limits, pricing, concept_glossary
+
+facts:
+  - category: overview
+    title: Overview
+    body_format: markdown            # markdown | html | plain
+    body: |
+      One or two paragraphs explaining what this capability does, the
+      mental model a consumer should hold, and the typical call pattern.
+      This is what shows up at the top of the catalog detail page.
+
+  - category: overview
+    title: Getting Started
+    body_format: markdown            # markdown | html | plain
+    body: |
+      One or two paragraphs explaining how to get started — the
+      minimum a consumer needs to make their first successful call
+      (resource id to request, scopes to ask for, an example request).
+
+  # - category: security_model
+  #   title: Security model
+  #   body_format: markdown
+  #   body: |
+  #     Auth requirements, sensitive data handling, PII surface.
+
+  # - category: dev_doc
+  #   title: Reading from a web app
+  #   body_format: markdown
+  #   body: |
+  #     Concrete how-to snippet for a typical consumer.
+
+# ---------------------------------------------------------------------------
+# External IDs — pointers to this capability in other systems
+# ---------------------------------------------------------------------------
+# Each entry requires `system` to be a registered external_system slug
+# in the tenant (npm, github, pagerduty, grafana, backstage, …).
+
+external_ids:
+  - system: github
+    external_id: my-org/my-capability
+    url: https://github.com/my-org/my-capability
+  # - system: npm
+  #   external_id: "@my-org/my-capability"
+  #   url: https://www.npmjs.com/package/@my-org/my-capability
+
+# ---------------------------------------------------------------------------
+# Edges — relationships to other entities
+# ---------------------------------------------------------------------------
+# `src` and `dst` are entity name slugs in the same tenant. Both must
+# already exist when the edge is inserted (loader fails loudly otherwise).
+# `rel` must be in the `edge_rel` vocabulary.
+#
+# Common edge rels for a capability:
+#   depends_on        — runtime dependency on another capability
+#   integrates_with   — bidirectional integration (no consumer/provider asymmetry)
+#   requires          — declared but not enforced (e.g. requires a feature flag)
+#   replaced_by       — successor pointer (mirrors lifecycle.successor)
+#   composes          — parent → child (set via top-level `parent` instead)
+#   owned_by          — capability → person/team entity (structured ownership)
+#   product_owned_by  — capability → person entity (PM ownership)
+#
+# `provides_to` is reserved for the adoptions flow — do NOT use it here.
+
+edges:
+
+  - src: my-capability
+    rel: depends_on
+    dst: identity                    # must be an existing capability/system slug
+    properties:
+      reason: "Every endpoint requires an Identity-issued bearer token."
+      version_pin: ">=4.0.0"
+      criticality: hard              # hard | soft — drives blast-radius queries
+
+  # Access grant — REQUIRED for deployed-service capabilities
+  # (interface.kind in rest-api, graphql, grpc, event-stream).
+  # Tells consumers how to obtain credentials to call this service:
+  #   - `resource_id`         — what consumers request a token for
+  #   - `scopes`              — what permissions the token can carry
+  #   - `client_id_required`  — true means each consumer must register
+  #                             their own client_id with Identity before
+  #                             they can request a token
+  # Omit this edge entirely for library / design-only / composite
+  # capabilities that have no network surface.
+  - src: my-capability
+    rel: requires
+    dst: identity
+    properties:
+      kind: access-grant
+      access_type: oauth2-client-credentials   # oauth2-client-credentials | oidc | mtls | api-key
+      resource_id: "urn:platform:my-capability"
+      scopes:
+        - my-capability:read
+        - my-capability:write
+      client_id_required: true
+
+  # - src: my-capability
+  #   rel: owned_by
+  #   dst: jane-doe                  # person entity slug
+  #   properties:
+  #     role: tech-lead

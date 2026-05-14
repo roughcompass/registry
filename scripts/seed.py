@@ -57,6 +57,7 @@ class LoadCounts:
     role_grants_created: int = 0
     adoptions_created: int = 0
     progression_definitions_created: int = 0
+    capability_type_schemas_created: int = 0
     visibility_changes: int = 0
     per_entity: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -80,6 +81,7 @@ class SeedBundle:
     edges: list[dict[str, Any]]
     adoptions: list[dict[str, Any]]
     progression_definitions: list[dict[str, Any]]
+    capability_type_schemas: list[dict[str, Any]]
 
 
 _ALLOWED_TOP_LEVEL: frozenset[str] = frozenset(
@@ -99,6 +101,7 @@ _ALLOWED_TOP_LEVEL: frozenset[str] = frozenset(
         "edges",
         "adoptions",
         "progression_definitions",
+        "capability_type_schemas",
     ]
 )
 
@@ -156,6 +159,7 @@ def load_bundle(path: Path) -> SeedBundle:
         edges=raw.get("edges") or [],
         adoptions=raw.get("adoptions") or [],
         progression_definitions=raw.get("progression_definitions") or [],
+        capability_type_schemas=raw.get("capability_type_schemas") or [],
     )
 
 
@@ -1019,6 +1023,97 @@ async def _apply_progression_definitions(
         counts.progression_definitions_created += 1
 
 
+async def _apply_capability_type_schemas(
+    session: Any,
+    rows: list[dict[str, Any]],
+    registry: TenantRegistry,
+    target_slug: str,
+    bundle_path: Path,
+    counts: LoadCounts,
+    now: datetime.datetime,
+) -> None:
+    """Insert capability_type_schemas rows. One active row per (tenant, type_name).
+
+    Each row in the bundle either embeds the JSON Schema inline under
+    ``json_schema`` or points at a file under ``seeds/`` via ``schema_file``
+    (relative path). The file form is preferred — it keeps the schema in
+    one place under ``seeds/_templates/`` so producer tooling and the
+    registry both consume the same source.
+
+    Idempotency mirrors ``_apply_progression_definitions``: if a live row
+    exists for (tenant, type_name) and the json_schema matches, skip. If
+    the schema has drifted, invalidate the live row and insert a fresh
+    one — bi-temporal supersession.
+    """
+    tenant_id = registry.tenant_id(target_slug)
+    seeds_root = bundle_path.parent.parent
+
+    for row in rows:
+        type_name = row["type_name"]
+        is_advisory = bool(row.get("is_advisory", True))
+
+        if "schema_file" in row:
+            schema_path = (seeds_root / row["schema_file"]).resolve()
+            if not schema_path.is_file():
+                raise ValueError(
+                    f"{bundle_path}: capability_type_schemas[{type_name!r}].schema_file "
+                    f"resolves to {schema_path}, which is not a file."
+                )
+            json_schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        elif "json_schema" in row:
+            json_schema = row["json_schema"]
+        else:
+            raise ValueError(
+                f"{bundle_path}: capability_type_schemas[{type_name!r}] must "
+                f"provide either `schema_file` or `json_schema`."
+            )
+
+        existing = (
+            await session.execute(
+                text(
+                    "SELECT schema_id, json_schema::text, is_advisory "
+                    "FROM capability_type_schemas "
+                    "WHERE tenant_id = :tid AND type_name = :tname "
+                    "AND t_invalidated_at IS NULL"
+                ),
+                {"tid": tenant_id, "tname": type_name},
+            )
+        ).first()
+
+        new_schema_text = json.dumps(json_schema, sort_keys=True)
+        if existing is not None:
+            existing_schema_text = json.dumps(json.loads(existing[1]), sort_keys=True)
+            existing_advisory = bool(existing[2])
+            if existing_schema_text == new_schema_text and existing_advisory == is_advisory:
+                continue
+            # Schema content or advisory flag drifted — invalidate the live row.
+            await session.execute(
+                text(
+                    "UPDATE capability_type_schemas "
+                    "SET t_invalidated_at = :now WHERE schema_id = :sid"
+                ),
+                {"now": now, "sid": existing[0]},
+            )
+
+        await session.execute(
+            text(
+                "INSERT INTO capability_type_schemas "
+                "(schema_id, tenant_id, type_name, json_schema, is_advisory, "
+                " t_valid_from, t_valid_to, t_ingested_at, t_invalidated_at) "
+                "VALUES (gen_random_uuid(), :tid, :tname, CAST(:schema AS JSONB), :adv, "
+                "        :now, NULL, :now, NULL)"
+            ),
+            {
+                "tid": tenant_id,
+                "tname": type_name,
+                "schema": new_schema_text,
+                "adv": is_advisory,
+                "now": now,
+            },
+        )
+        counts.capability_type_schemas_created += 1
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -1084,6 +1179,10 @@ async def apply_bundles(
         if bundle.progression_definitions:
             await _apply_progression_definitions(
                 session, bundle.progression_definitions, registry, target_slug, counts, now
+            )
+        if bundle.capability_type_schemas:
+            await _apply_capability_type_schemas(
+                session, bundle.capability_type_schemas, registry, target_slug, bundle.path, counts, now
             )
 
     return counts
@@ -1215,6 +1314,8 @@ def _emit_summary(
         print(f"  {dim('Adoptions')}: {counts.adoptions_created} cross-tenant adoption(s)")
     if counts.progression_definitions_created:
         print(f"  {dim('Progression')}: " f"{counts.progression_definitions_created} definition(s) installed")
+    if counts.capability_type_schemas_created:
+        print(f"  {dim('Type schemas')}: " f"{counts.capability_type_schemas_created} capability schema row(s) installed")
     print()
     print(bold("Try it:"))
     print("  curl -H 'Authorization: Bearer <token>' http://localhost:8000/v1/capabilities")

@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://capability-catalog/schemas/capability.attributes.v1.json",
+  "title": "Capability — attributes block",
+  "description": "Validation contract for the `attributes` dict on an Entity row where entity_type='capability'. Register this against capability_type_schemas.type_name='capability' to have SchemaService.validate_capability enforce it. Required fields are the minimum every capability MUST publish; optional fields are recommended and surfaced as 'completeness' on the catalog dashboard. Closed-vocabulary values (lifecycle.state, data_classification) align with seeds/00-core/01-vocabulary.json — the loader will reject values outside vocabulary regardless of what this schema allows.",
+  "type": "object",
+  "required": ["display_name", "summary", "owner", "lifecycle"],
+  "additionalProperties": true,
+  "properties": {
+    "display_name": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 80,
+      "description": "Human title shown in catalog UI. Title Case, no trailing punctuation."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 20,
+      "maxLength": 280,
+      "description": "One or two sentences: what this is and who consumes it. Appears in list views, search results, dependency graphs."
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80,
+      "description": "Owning team name (e.g. 'Core Services', 'Platform Engineering'). Not a person — use `owned_by` / `product_owned_by` edges to point to individuals. Free-form display string."
+    },
+    "lifecycle": {
+      "type": "object",
+      "required": ["state"],
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "enum": ["alpha", "beta", "ga", "deprecated", "retired"],
+          "description": "Must also exist in the `lifecycle_state` vocabulary for this tenant."
+        },
+        "since": {
+          "type": "string",
+          "format": "date",
+          "description": "Date the capability entered the current state."
+        },
+        "deprecation_notice_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "successor": {
+          "type": "string",
+          "description": "Slug of the capability that replaces this one. Required when state in ('deprecated','retired'). The `replaced_by` edge is the structured form of this pointer."
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "state": { "enum": ["deprecated", "retired"] } }, "required": ["state"] },
+          "then": { "required": ["successor"] }
+        }
+      ]
+    },
+
+    "description": {
+      "type": "string",
+      "maxLength": 4000,
+      "description": "Longer-form prose. Prefer attaching structured documents as `facts` (category='overview' | 'dev_doc' | 'security_model' | …) — use this field for short metadata blurbs only."
+    },
+    "current_version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+([-+][0-9A-Za-z.-]+)?$",
+      "description": "Semver. Only for capabilities that are versioned units (libraries, services with a published API contract). Omit for runtime platforms or composite capabilities. Version history lives in `bitemporal_attributes`, not here."
+    },
+    "package_name": {
+      "type": "string",
+      "description": "Package coordinate (npm scope, pypi name, maven GA). Omit if not a distributable package."
+    },
+    "repository_url": { "type": "string", "format": "uri" },
+    "documentation_url": { "type": "string", "format": "uri" },
+
+    "interface": {
+      "type": "object",
+      "description": "Programmatic surface this capability exposes. Present iff the capability has callers — omit for design-only capabilities, runtime platforms without an API, or composites.",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "rest-api",
+            "graphql",
+            "grpc",
+            "library-api",
+            "library-package",
+            "typescript-sdk",
+            "cli",
+            "event-stream",
+            "ui-component"
+          ],
+          "description": "What kind of programmatic surface this capability exposes. `library-package` for npm/pypi-style libraries described by entry points + install + peer deps (no calling surface itself); `library-api` for the calling surface of a library; `typescript-sdk` for language-specific SDKs that wrap one or more APIs."
+        },
+        "base_url": { "type": "string", "format": "uri" },
+        "auth": { "type": "string", "description": "Free-form auth description (e.g., 'bearer-token (Identity-issued)')." },
+        "spec_url": {
+          "type": "string",
+          "format": "uri",
+          "description": "Pointer to the authoritative spec (OpenAPI, GraphQL SDL, .proto). Preferred over inline endpoints — the registry treats the spec as the source of truth."
+        },
+        "endpoints": {
+          "type": "array",
+          "description": "Inline endpoint list. Use only when no spec_url exists. The catalog will sync from spec_url when both are present and inline endpoints become advisory.",
+          "items": {
+            "type": "object",
+            "required": ["method", "path", "summary"],
+            "additionalProperties": true,
+            "properties": {
+              "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+              "path": { "type": "string", "pattern": "^/" },
+              "summary": { "type": "string", "minLength": 10 },
+              "auth_required": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+
+    "data_classification": {
+      "enum": ["public", "internal", "confidential", "restricted", "pii-low", "pii-high"],
+      "description": "Sensitivity of the data this capability handles. Drives downstream security review requirements and PII scanning policy."
+    },
+    "slos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "target", "window"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string" },
+          "target": { "type": ["number", "string"], "description": "Number for latencies (ms) and availability (0-1); string allowed for budget descriptions." },
+          "window": { "type": "string", "pattern": "^\\d+[dhm]$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "name": "core-capability-schema",
+  "description": "Registers the JSON Schema that validates the `attributes` block of every entity with entity_type='capability'. The schema file lives under seeds/_templates/ as the single source of truth; this bundle is what makes it enforce at write time. Starts as advisory so existing seeds keep loading; flip is_advisory to false once `make seeds-validate` is green.",
+  "capability_type_schemas": [
+    {
+      "type_name": "capability",
+      "schema_file": "_templates/capability-schema.json",
+      "is_advisory": true
+    }
+  ]
+}

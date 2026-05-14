@@ -14,3 +14,8 @@ build/
 
 # OS
 .DS_Store
+
+# Local env (operator-provided secrets). .env.example is the tracked spec.
+.env
+.env.*
+!.env.example

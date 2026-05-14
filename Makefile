@@ -51,7 +51,7 @@ TEST_ROOT   := tests
 
 .PHONY: help install-dev lint format format-check typecheck doc-refs test-hygiene \
         test-unit test-integration test-conformance test-perf test all \
-        migrate openapi-export dev-token dev-seed clean \
+        migrate openapi-export dev-token dev-seed seeds-validate clean \
         build-docker helm-package
 
 # -----------------------------------------------------------------------------
@@ -135,6 +135,12 @@ dev-token: ## Mint a dev tenant + token in one shot. TOKEN_OUT=.env.dev to persi
 # demo. Idempotent — re-running yields the same entity_ids.
 dev-seed: ## Seed dev tenant from every bundle under seeds/. Idempotent.
 	$(PYTHON) scripts/seed.py
+
+# Validate every capability entity in seeds/ against the capability JSON
+# Schema (seeds/_templates/capability-schema.json). Operates on the merged
+# attribute state across bundles — runs without a database so it can gate CI.
+seeds-validate: ## Validate seeds/ capabilities against the capability JSON Schema.
+	$(PYTHON) scripts/validate_seeds.py
 
 # -----------------------------------------------------------------------------
 # Release-side targets — the build/package commands. Image push and

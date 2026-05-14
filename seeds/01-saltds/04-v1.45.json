@@ -10,6 +10,7 @@
       "valid_from": "2026-01-15T00:00:00Z",
       "attributes": {
         "interface": {
+          "kind": "library-package",
           "package": "@salt-ds/core",
           "current_version": "1.45.0",
           "install": "npm install @salt-ds/core @salt-ds/theme",
