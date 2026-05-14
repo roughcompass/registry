@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "name": "_vocabulary",
+  "name": "vocabulary",
   "description": "Closed-vocabulary values the dev tenant needs before any capability insert. Mirrors what Alembic seeds for the 'default' tenant; runtime tenants don't inherit those, so the seed loader applies them per tenant.",
   "vocabulary": [
     {"kind": "entity_type", "value": "capability"},
@@ -22,6 +22,7 @@
     {"kind": "fact_category", "value": "dev_doc"},
     {"kind": "fact_category", "value": "api_doc"},
     {"kind": "fact_category", "value": "catalog_entry"},
+    {"kind": "fact_category", "value": "migration_guide"},
 
     {"kind": "edge_rel", "value": "concept_of"},
     {"kind": "edge_rel", "value": "operation_of"},
@@ -34,6 +35,8 @@
     {"kind": "edge_rel", "value": "conflicts_with"},
     {"kind": "edge_rel", "value": "composes"},
     {"kind": "edge_rel", "value": "provides_to"},
+    {"kind": "edge_rel", "value": "owned_by"},
+    {"kind": "edge_rel", "value": "product_owned_by"},
 
     {"kind": "lifecycle_state", "value": "alpha"},
     {"kind": "lifecycle_state", "value": "beta"},

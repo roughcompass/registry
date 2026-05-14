@@ -1,0 +1,188 @@
+{
+  "schema_version": 1,
+  "name": "web-sdk-v3.0",
+  "description": "Web SDK v3.0 — breaking-change release. Owns the bitemporal `interface` attribute with BOTH v2 and v3 shapes so `?as_of=` queries return the correct contract for the requested time. Also carries the v3 release note + migration guide.",
+  "released_at": "2026-02-01T00:00:00Z",
+  "facts": [
+    {
+      "entity": "web-sdk",
+      "category": "release_note",
+      "title": "v3.0.0 release notes",
+      "body_format": "markdown",
+      "body": "**v3.0.0 — Breaking-change release**. Headline changes:\n\n- `auth.getUserIdentity()` is now **async** and returns a **richer shape** including `roles`, `scopes`, `entitlements`, and `tokenExpiresAt`. Unauthenticated callers now get a thrown `UnauthenticatedError` instead of a `null` return.\n- All read APIs are now Promise-returning. `prefs.get` and `auth.isSignedIn` lost their sync variants.\n- New `runtime` module: integrates with Web Runtime to expose zone configs, slot replacements, and entitlement checks.\n- `init()` is now async and returns the SDK instance; the singleton import (`import { sdk } from '@digital-platform/web-sdk'`) is still available for code that prefers it.\n- Peer-dep bump: React 18.0+ required (React 17 is dropped).\n\nFull migration steps are in the `migration_guide` fact on this capability."
+    },
+    {
+      "entity": "web-sdk",
+      "category": "migration_guide",
+      "title": "Migrating from Web SDK v2 to v3",
+      "body_format": "markdown",
+      "body": "# Migrating @digital-platform/web-sdk v2 → v3\n\n## TL;DR\n\nThe SDK's read APIs went from mixed-sync-and-async to **all async**. The user-identity shape grew from 4 fields to 9. If your code currently does `const u = webSdk.auth.getUserIdentity()` and dereferences `u.email`, it will need an `await` and a try/catch.\n\n## getUserIdentity — the headline change\n\n**Before (v2):**\n\n```ts\nconst u = webSdk.auth.getUserIdentity();\nif (u === null) {\n  redirectToSignIn();\n  return;\n}\nconsole.log(u.userId, u.email);\n```\n\n**After (v3):**\n\n```ts\ntry {\n  const u = await webSdk.auth.getUserIdentity();\n  console.log(u.userId, u.email);\n  // NEW fields available in v3:\n  console.log(u.roles, u.entitlements, u.tokenExpiresAt);\n} catch (e) {\n  if (e instanceof UnauthenticatedError) {\n    redirectToSignIn();\n    return;\n  }\n  throw e;\n}\n```\n\nWhy: in v2, `getUserIdentity` returned whatever happened to be in the in-memory session cache. That worked but it could return *stale* identities — e.g. an entitlement granted server-side wouldn't appear until the user signed out + back in. v3's async signature lets the SDK refresh the identity (optionally — pass `force_refresh: true` to require a server round-trip) and surface richer claims (roles + entitlements + scopes) that Web Runtime needs.\n\n## isSignedIn and prefs.get\n\nSame shape of change: now async. Replace `if (webSdk.auth.isSignedIn())` with `if (await webSdk.auth.isSignedIn())`, replace `webSdk.prefs.get('language')` with `await webSdk.prefs.get('language')`.\n\n## init()\n\nIs now async. Most apps already wrapped `init()` in a top-level `async function bootstrap()` so this is usually a no-op edit:\n\n**Before:**\n\n```ts\nwebSdk.init({tenant_id, client_id});\nrenderApp();\n```\n\n**After:**\n\n```ts\nawait webSdk.init({tenant_id, client_id});\nrenderApp();\n```\n\n## React peer-dep bump\n\nv3 requires React 18+. If you're on React 17, plan that upgrade first — Salt Design System v1.43+ already requires React 18, so the React bump is a one-time platform-wide step.\n\n## New `runtime` module — optional but recommended\n\nv3 introduces `webSdk.runtime.*` which integrates Web Runtime config. Web Runtime now defaults to using `@digital-platform/web-sdk@^3.0.0` as its host SDK (configured via Web Runtime's `host_sdk` config). If you're not using Web Runtime, ignore this module — it's lazy-loaded and adds no overhead at runtime when `runtime.enabled` is left at its default.\n\n## Rollout checklist\n\n1. Bump React to 18 across your app.\n2. Bump `@digital-platform/web-sdk` to `^3.0.0`.\n3. Add `await` + try/catch around every `getUserIdentity()` call. The TypeScript types will surface the breaking change at compile time — `tsc --noEmit` is your friend.\n4. If you read prefs synchronously anywhere (`webSdk.prefs.get`), add `await` there too.\n5. Test in staging — the runtime config fetch adds ~200ms to first paint; pre-warm via SSR or render a skeleton if you're sensitive to that."
+    }
+  ],
+  "bitemporal_attributes": [
+    {
+      "entity": "web-sdk",
+      "key": "interface",
+      "replace_existing": true,
+      "rows": [
+        {
+          "valid_from": "2025-09-15T00:00:00Z",
+          "valid_to": "2026-02-01T00:00:00Z",
+          "value": {
+            "kind": "typescript-sdk",
+            "package": "@digital-platform/web-sdk",
+            "version_range": "2.0.0 — 2.4.0",
+            "install": "npm install @digital-platform/web-sdk@^2.0.0",
+            "peer_dependencies": {"react": ">=17.0.0", "react-dom": ">=17.0.0"},
+            "entrypoint": {
+              "name": "init",
+              "signature": "init(config: SdkConfig): void",
+              "description": "Synchronous boot. Call once at app startup before any other SDK call.",
+              "params": {
+                "config": {
+                  "type": "SdkConfig",
+                  "fields": {
+                    "tenant_id": {"type": "string", "required": true},
+                    "client_id": {"type": "string", "required": true},
+                    "identity_endpoint": {"type": "string (URL)", "required": false, "default": "https://identity.platform.example.com"}
+                  }
+                }
+              }
+            },
+            "modules": [
+              {
+                "name": "auth",
+                "members": [
+                  {"name": "signIn", "signature": "signIn(opts?: {redirect_uri?: string}): void", "description": "Trigger the OIDC redirect flow."},
+                  {"name": "signOut", "signature": "signOut(): void", "description": "Revoke local session + redirect to signout."},
+                  {
+                    "name": "getUserIdentity",
+                    "signature": "getUserIdentity(): UserIdentity | null",
+                    "description": "Synchronous-style call returning a SLIM user-identity from the cached session, or `null` when not signed in. No network round-trip.",
+                    "returns": {
+                      "type": "UserIdentity | null",
+                      "shape": {
+                        "userId": {"type": "string (UUID)"},
+                        "tenantId": {"type": "string (UUID)"},
+                        "displayName": {"type": "string"},
+                        "email": {"type": "string"}
+                      }
+                    }
+                  },
+                  {"name": "isSignedIn", "signature": "isSignedIn(): boolean", "description": "Synchronous check against the cached session."}
+                ]
+              },
+              {
+                "name": "prefs",
+                "members": [
+                  {"name": "get", "signature": "get(key: string): any | undefined", "description": "Synchronous read from the in-memory cache."},
+                  {"name": "set", "signature": "set(key: string, value: any): Promise<void>"},
+                  {"name": "load", "signature": "load(): Promise<void>", "description": "Fetch the full preference set into the cache."},
+                  {"name": "onChange", "signature": "onChange(handler): Unsubscribe"}
+                ]
+              },
+              {
+                "name": "notifications",
+                "members": [
+                  {"name": "inbox", "signature": "inbox(opts?): Promise<InboxMessage[]>"},
+                  {"name": "subscribe", "signature": "subscribe(handler): Unsubscribe"},
+                  {"name": "markRead", "signature": "markRead(messageId: string): Promise<void>"}
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "valid_from": "2026-02-01T00:00:00Z",
+          "valid_to": null,
+          "value": {
+            "kind": "typescript-sdk",
+            "package": "@digital-platform/web-sdk",
+            "version_range": "3.0.0 — current",
+            "install": "npm install @digital-platform/web-sdk@^3.0.0",
+            "peer_dependencies": {"react": ">=18.0.0", "react-dom": ">=18.0.0"},
+            "entrypoint": {
+              "name": "init",
+              "signature": "init(config: SdkConfig): Promise<SdkInstance>",
+              "description": "ASYNC boot in v3 (was sync in v2). Resolves once the SDK has loaded the session, primed the preferences cache, and — when `runtime.enabled` is true — fetched the Web Runtime config.",
+              "params": {
+                "config": {
+                  "type": "SdkConfig",
+                  "fields": {
+                    "tenant_id": {"type": "string", "required": true},
+                    "client_id": {"type": "string", "required": true},
+                    "identity_endpoint": {"type": "string (URL)", "required": false, "default": "https://identity.platform.example.com"},
+                    "runtime": {
+                      "type": "{enabled: boolean, endpoint?: string}",
+                      "required": false,
+                      "default": {"enabled": true, "endpoint": "https://web-runtime.platform.example.com"},
+                      "description": "NEW IN v3. When enabled, the SDK fetches Web Runtime config at boot and exposes it via `sdk.runtime.*`."
+                    }
+                  }
+                }
+              }
+            },
+            "modules": [
+              {
+                "name": "auth",
+                "members": [
+                  {"name": "signIn", "signature": "signIn(opts?: {redirect_uri?: string}): Promise<void>", "description": "Now returns a Promise resolving after the OIDC redirect (v2 returned void)."},
+                  {"name": "signOut", "signature": "signOut(): Promise<void>", "description": "Now async."},
+                  {
+                    "name": "getUserIdentity",
+                    "signature": "getUserIdentity(opts?: {force_refresh?: boolean}): Promise<UserIdentity>",
+                    "description": "**BREAKING in v3**: now async. Returns a Promise resolving to the **rich** UserIdentity (was a slim sync return in v2). Rejects with `UnauthenticatedError` when not signed in (v2 returned `null`). Pass `force_refresh: true` for a server round-trip.",
+                    "returns": {
+                      "type": "Promise<UserIdentity>",
+                      "shape": {
+                        "userId": {"type": "string (UUID)"},
+                        "tenantId": {"type": "string (UUID)"},
+                        "tenantSlug": {"type": "string", "description": "NEW in v3."},
+                        "displayName": {"type": "string"},
+                        "email": {"type": "string"},
+                        "roles": {"type": "string[]", "description": "NEW in v3."},
+                        "scopes": {"type": "string[]", "description": "NEW in v3."},
+                        "entitlements": {"type": "string[]", "description": "NEW in v3. Names of entitlements granted via Web Runtime's audience-segmentation."},
+                        "tokenExpiresAt": {"type": "string (ISO-8601)", "description": "NEW in v3."}
+                      }
+                    },
+                    "throws": [
+                      {"type": "UnauthenticatedError", "when": "User is not signed in. v2 equivalent: a `null` return."},
+                      {"type": "NetworkError", "when": "Identity service unreachable and the cached identity is stale."}
+                    ]
+                  },
+                  {"name": "isSignedIn", "signature": "isSignedIn(): Promise<boolean>", "description": "**BREAKING in v3**: now async (was sync)."}
+                ]
+              },
+              {
+                "name": "prefs",
+                "members": [
+                  {"name": "get", "signature": "get(key: string): Promise<any | undefined>", "description": "**BREAKING in v3**: now async."},
+                  {"name": "set", "signature": "set(key: string, value: any): Promise<void>", "description": "Unchanged from v2."},
+                  {"name": "onChange", "signature": "onChange(handler): Unsubscribe", "description": "Unchanged from v2."}
+                ]
+              },
+              {
+                "name": "notifications",
+                "members": [
+                  {"name": "inbox", "signature": "inbox(opts?): Promise<InboxMessage[]>", "description": "Unchanged from v2."},
+                  {"name": "subscribe", "signature": "subscribe(handler): Unsubscribe", "description": "Unchanged from v2."},
+                  {"name": "markRead", "signature": "markRead(messageId: string): Promise<void>", "description": "Unchanged from v2."}
+                ]
+              },
+              {
+                "name": "runtime",
+                "description": "NEW MODULE IN v3. Exposes Web Runtime config: zones, slots, menus, entitlement checks.",
+                "members": [
+                  {"name": "config", "signature": "config(): Promise<RuntimeConfig>", "description": "Return the runtime config the platform resolved for this user + tenant + audience match."},
+                  {"name": "zone", "signature": "zone(name: string): Promise<ZoneConfig | null>", "description": "Return a specific zone's config (header, sidebar, content-frame, footer)."},
+                  {"name": "hasEntitlement", "signature": "hasEntitlement(name: string): Promise<boolean>", "description": "Check whether the current user has a named entitlement."}
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

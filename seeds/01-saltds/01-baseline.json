@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "name": "demo-minimal",
-  "description": "Two real-world enterprise capabilities so a fresh dev tenant has something recognisable on first open. Salt Design System gets the package-level metadata; user-preferences stays intentionally thin to give the catalog a clear 'rich vs. minimal' contrast.",
+  "name": "saltds-baseline",
+  "description": "Foundation entities for the Salt Design System demo: the `salt-design-system` parent capability (with package-level metadata and external-system mappings) and the `npm` + `github` external systems that the per-version component bundles reference via their `external_ids`.",
   "external_systems": [
     {
       "slug": "npm",
@@ -43,16 +43,6 @@
           "url": "https://github.com/jpmorganchase/salt-ds"
         }
       ]
-    },
-    {
-      "name": "user-preferences",
-      "entity_type": "capability",
-      "attributes": {
-        "display_name": "Enterprise User Preferences Service",
-        "summary": "Stores per-user UI/UX preferences (theme, locale, density, notification opt-ins) with tenant-scoped admin overrides and audit history.",
-        "owner": "Platform Engineering",
-        "lifecycle": {"state": "beta"}
-      }
     }
   ]
 }

@@ -1,0 +1,305 @@
+{
+  "schema_version": 1,
+  "name": "web-runtime-baseline",
+  "description": "Web Runtime: configuration platform for the experience-frame (chrome). Tenants register zone replacements (swap the platform header for their own), slot replacements (replace one component inside a zone), menus, and entitlements bound to audience segments. Defaults to Web SDK v3 as the host SDK; the SDK's `runtime` module is the consumer surface.",
+  "released_at": "2025-09-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "web-runtime",
+      "entity_type": "capability",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Web Runtime",
+        "summary": "Experience-frame configuration: zones, slots, menus, entitlements, audience segmentation. Consumed by web apps via the Web SDK's `runtime` module (v3+).",
+        "owner": "Platform Engineering",
+        "lifecycle": {"state": "ga"},
+        "current_version": "1.2.0",
+        "package_name": "@digital-platform/web-runtime",
+        "license": "proprietary",
+        "host_sdk": {
+          "package": "@digital-platform/web-sdk",
+          "default_version": "^3.0.0",
+          "minimum_version": "3.0.0",
+          "description": "Web Runtime ships configured to be consumed via Web SDK v3+. Apps on Web SDK v2 cannot reach the runtime config endpoints — they'll receive HTTP 406 with the upgrade hint."
+        },
+        "interface": {
+          "kind": "rest-api",
+          "base_url": "https://web-runtime.platform.example.com",
+          "auth": "bearer-token (Identity-issued)",
+          "endpoints": [
+            {
+              "method": "GET",
+              "path": "/v1/runtime/config",
+              "summary": "Return the resolved runtime config for the calling user + tenant. Resolution: platform defaults, then tenant overrides, then audience-segment-conditional overrides matched against the caller's identity claims.",
+              "auth_required": true,
+              "response": {
+                "200": {
+                  "schema": {
+                    "tenant_id": "string (UUID)",
+                    "resolved_for_user": "string (UUID)",
+                    "matched_audiences": "string[]",
+                    "zones": "Record<ZoneName, ZoneConfig>",
+                    "menus": "Record<MenuName, MenuConfig>",
+                    "entitlements": "string[]"
+                  }
+                }
+              }
+            },
+            {
+              "method": "GET",
+              "path": "/v1/runtime/zones",
+              "summary": "List all zones registered for this tenant.",
+              "auth_required": true,
+              "response": {"200": {"schema": {"zones": "ZoneConfig[]"}}}
+            },
+            {
+              "method": "PUT",
+              "path": "/v1/runtime/zones/{zone_name}",
+              "summary": "Register or replace a zone wholesale. Requires `admin` role. zone_name must be in the platform's named-zone set: 'header', 'sidebar', 'content-frame', 'footer'.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "replacement": {
+                    "type": "ZoneReplacement",
+                    "fields": {
+                      "kind": {"type": "'full' | 'composite'", "required": true, "description": "'full' means the tenant supplies a whole React component to render instead of the platform default. 'composite' means the platform shell renders + the tenant slots in components per slot (see /slots)."},
+                      "component_ref": {"type": "string", "required": true, "description": "Module-federation reference, e.g. 'tenant-acme/HeaderShell' or a CDN URL. Must be served from a tenant-trusted origin."},
+                      "props": {"type": "object", "required": false}
+                    }
+                  },
+                  "audience_segment": {"type": "string", "required": false, "description": "Apply only when caller matches the named audience. Omit for org-wide."}
+                }
+              },
+              "response": {
+                "200": {"schema": {"zone_name": "string", "replacement_id": "string (UUID)"}},
+                "422": {"schema": {"error": "invalid_component_ref"}}
+              }
+            },
+            {
+              "method": "PATCH",
+              "path": "/v1/runtime/zones/{zone_name}/slots/{slot_name}",
+              "summary": "Replace ONE slot inside a zone. Use when you want to keep the platform shell for a zone but swap a specific component inside (e.g. replace the default search with a tenant-supplied search). Slot names per zone are platform-defined; see /v1/runtime/slots.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "component_ref": {"type": "string", "required": true},
+                  "props": {"type": "object", "required": false},
+                  "audience_segment": {"type": "string", "required": false}
+                }
+              },
+              "response": {"200": {"schema": {"slot_id": "string (UUID)"}}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/runtime/slots",
+              "summary": "List slot names available in each platform-defined zone. Useful for the admin UI to surface what's replaceable.",
+              "auth_required": true,
+              "response": {
+                "200": {
+                  "schema": {
+                    "zones": {
+                      "header": ["branding", "search", "user-menu", "notifications-bell", "help"],
+                      "sidebar": ["primary-nav", "tenant-extensions"],
+                      "content-frame": ["page-title", "breadcrumbs", "actions-toolbar"],
+                      "footer": ["legal-links", "version", "support"]
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "method": "DELETE",
+              "path": "/v1/runtime/zones/{zone_name}",
+              "summary": "Revert a zone to the platform default. Idempotent.",
+              "auth_required": true,
+              "response": {"204": {}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/runtime/menus",
+              "summary": "List all menus this tenant has registered.",
+              "auth_required": true,
+              "response": {"200": {"schema": {"menus": "MenuConfig[]"}}}
+            },
+            {
+              "method": "PUT",
+              "path": "/v1/runtime/menus/{menu_id}",
+              "summary": "Register or replace a menu. Menus are trees of items; each item has an audience-segment + entitlement gate so the rendered menu adapts per user.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "name": "string",
+                  "anchor": {"type": "'primary-nav' | 'user-menu' | 'help'", "description": "Where this menu attaches in the shell."},
+                  "items": {
+                    "type": "MenuItem[]",
+                    "fields_per_item": {
+                      "label": "string",
+                      "icon": "string | null",
+                      "href": "string | null",
+                      "action": {"type": "string | null", "description": "Optional client-side action handler name. Mutually exclusive with `href`."},
+                      "audience_segment": {"type": "string | null", "description": "Only render this item when caller matches."},
+                      "required_entitlement": {"type": "string | null", "description": "Only render when caller has this entitlement."},
+                      "children": {"type": "MenuItem[]", "description": "Sub-items, same shape recursively."}
+                    }
+                  }
+                }
+              },
+              "response": {"200": {"schema": {"menu_id": "string"}}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/runtime/audiences",
+              "summary": "List audience segments registered for this tenant.",
+              "auth_required": true,
+              "response": {"200": {"schema": {"audiences": "Audience[]"}}}
+            },
+            {
+              "method": "POST",
+              "path": "/v1/runtime/audiences",
+              "summary": "Define an audience segment. Segments are evaluated against identity claims + preferences at config-resolution time.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "name": {"type": "string", "required": true, "description": "Tenant-unique slug, e.g. 'fixed-income-traders' or 'pilot-cohort-2026q1'."},
+                  "description": {"type": "string", "required": false},
+                  "match": {
+                    "type": "MatchExpr",
+                    "required": true,
+                    "description": "Boolean expression over the caller's identity claims + entitlements. Example: `{all: [{claim: 'roles', contains: 'trader'}, {claim: 'tenant_id', equals: '...'}]}`. Supports `all` / `any` / `not` / leaf predicates (`equals`, `contains`, `in`, `matches`)."
+                  }
+                }
+              },
+              "response": {"201": {"schema": {"audience_id": "string (UUID)", "name": "string"}}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/runtime/entitlements",
+              "summary": "List entitlements registered for this tenant + the audience segments that grant them.",
+              "auth_required": true,
+              "response": {
+                "200": {
+                  "schema": {
+                    "entitlements": {
+                      "type": "Entitlement[]",
+                      "fields": {
+                        "name": "string",
+                        "description": "string",
+                        "granted_to_audiences": "string[]"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "method": "POST",
+              "path": "/v1/runtime/entitlements",
+              "summary": "Register an entitlement and the audiences it's granted to.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "name": {"type": "string", "required": true},
+                  "description": {"type": "string", "required": false},
+                  "granted_to_audiences": {"type": "string[]", "required": true}
+                }
+              },
+              "response": {"201": {"schema": {"entitlement_id": "string (UUID)"}}}
+            }
+          ],
+          "named_zones": [
+            {"name": "header", "description": "Top app bar. Hosts branding, search, user menu, notifications bell, help."},
+            {"name": "sidebar", "description": "Primary navigation rail. Tenant extensions can append items below the platform primary-nav."},
+            {"name": "content-frame", "description": "Page-content wrapper. Hosts page title, breadcrumbs, actions toolbar above the route's component tree."},
+            {"name": "footer", "description": "Bottom bar with legal links, build version, support link."}
+          ],
+          "replacement_semantics": {
+            "full_zone": "Tenant supplies the entire zone's React component tree. The platform shell renders the tenant's component as the zone — no platform UI in that zone. Use when the tenant needs full visual control (e.g. a custom-branded header that doesn't share Salt tokens).",
+            "slot_replacement": "Tenant supplies ONE component for ONE slot within an otherwise-platform-rendered zone. Platform owns layout, density, and the surrounding chrome; tenant owns just that slot's render. Most common for `header.search` (replace platform search with a tenant component that knows tenant-specific entities).",
+            "audience_conditional": "Both zone and slot replacements can be conditioned on an audience-segment match. Resolution at request time: evaluate every replacement's `audience_segment` against caller identity; most-specific match wins, ties broken by registration recency."
+          },
+          "audience_match_grammar": {
+            "leaf_predicates": [
+              {"name": "equals", "shape": "{claim: string, equals: any}"},
+              {"name": "in", "shape": "{claim: string, in: any[]}"},
+              {"name": "contains", "shape": "{claim: string, contains: any}", "description": "Caller's claim is an array; contains the given value."},
+              {"name": "matches", "shape": "{claim: string, matches: string}", "description": "Regex match (safe subset)."}
+            ],
+            "combinators": [
+              {"name": "all", "shape": "{all: MatchExpr[]}"},
+              {"name": "any", "shape": "{any: MatchExpr[]}"},
+              {"name": "not", "shape": "{not: MatchExpr}"}
+            ]
+          }
+        }
+      },
+      "facts": [
+        {
+          "category": "overview",
+          "title": "Overview",
+          "body_format": "markdown",
+          "body": "Web Runtime is the configuration platform that drives every web app's experience frame. Tenants register zone replacements (swap the platform header for their own), slot replacements (swap one component inside a zone — e.g. replace search), menus, and entitlements bound to audience segments. The runtime evaluates audience-match expressions against each caller's identity claims + entitlements; the resolved config is what Web SDK v3+'s `runtime` module returns to the app at boot. Web apps consume this exclusively through the Web SDK — there is no direct browser-to-Web-Runtime call path."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Registering a full-zone replacement",
+          "body_format": "markdown",
+          "body": "To replace the platform header with your tenant's branded header:\n\n```ts\nawait fetch('/v1/runtime/zones/header', {\n  method: 'PUT',\n  headers: {'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json'},\n  body: JSON.stringify({\n    replacement: {\n      kind: 'full',\n      component_ref: 'tenant-acme/HeaderShell@1.4.0',\n      props: {branding_tier: 'corporate'}\n    }\n  })\n})\n```\n\nThe `component_ref` is a module-federation reference — your component must be served from an origin in the tenant-trusted-origins allow-list (configured at tenant onboarding). The platform shell loads your component dynamically; if it fails to load, the platform reverts to its default header for that session and emits a runtime-error notification to your admin inbox."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Slot replacements vs full-zone replacements",
+          "body_format": "markdown",
+          "body": "Most tenant customization wants **slot replacement**, not full-zone replacement. Slot replacement keeps the platform's layout, density tokens, and accessibility behaviour — you just supply one component for one slot.\n\nExample: replace the platform's generic search component in the header with a tenant-specific search that knows your domain entities:\n\n```ts\nawait fetch('/v1/runtime/zones/header/slots/search', {\n  method: 'PATCH',\n  body: JSON.stringify({\n    component_ref: 'tenant-acme/SymbolSearch@2.1.0',\n    audience_segment: 'fixed-income-traders'\n  })\n})\n```\n\nThe `audience_segment` makes this slot replacement conditional — only members of `fixed-income-traders` see the tenant's symbol-search; everyone else gets the platform default. Define audiences via `POST /v1/runtime/audiences`."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Audience segmentation + entitlements",
+          "body_format": "markdown",
+          "body": "Audiences are predicates over the caller's identity claims. They drive both runtime config resolution (which zone/slot replacement wins) and entitlement grants.\n\n```json\nPOST /v1/runtime/audiences\n{\n  \"name\": \"fixed-income-traders\",\n  \"description\": \"Users who hold a trader role and are in the fixed-income desk org unit.\",\n  \"match\": {\n    \"all\": [\n      {\"claim\": \"roles\", \"contains\": \"trader\"},\n      {\"claim\": \"org_unit\", \"in\": [\"fixed-income\", \"credit-trading\"]}\n    ]\n  }\n}\n```\n\nEntitlements name what a user can do. They're granted to one or more audiences:\n\n```json\nPOST /v1/runtime/entitlements\n{\n  \"name\": \"view_order_book\",\n  \"description\": \"Can view the institutional order book.\",\n  \"granted_to_audiences\": [\"fixed-income-traders\", \"compliance-officers\"]\n}\n```\n\nIn the SDK, check entitlements client-side: `await webSdk.runtime.hasEntitlement('view_order_book')`. The check evaluates against the user's cached identity — no extra round-trip."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Menus that adapt per user",
+          "body_format": "markdown",
+          "body": "Menus are trees of items, with each item optionally gated by an audience segment or an entitlement. The runtime returns only items the caller is allowed to see — your app doesn't need to filter client-side.\n\n```json\nPUT /v1/runtime/menus/main\n{\n  \"name\": \"main\",\n  \"anchor\": \"primary-nav\",\n  \"items\": [\n    {\"label\": \"Dashboard\", \"href\": \"/dashboard\"},\n    {\"label\": \"Trade\", \"href\": \"/trade\", \"required_entitlement\": \"submit_orders\"},\n    {\"label\": \"Admin\", \"href\": \"/admin\", \"audience_segment\": \"tenant-admins\",\n     \"children\": [\n       {\"label\": \"Users\", \"href\": \"/admin/users\"},\n       {\"label\": \"Audit\", \"href\": \"/admin/audit\", \"required_entitlement\": \"read_audit_log\"}\n     ]}\n  ]\n}\n```\n\nThe rendered menu adapts per user: a non-admin sees just Dashboard + Trade (if entitled); an admin sees the Admin tree, with Audit hidden unless they have `read_audit_log`."
+        },
+        {
+          "category": "security_model",
+          "title": "Security model",
+          "body_format": "markdown",
+          "body": "Component refs (the `component_ref` field on zone + slot replacements) are gated by a per-tenant trusted-origin allow-list, configured at tenant onboarding. The platform shell rejects refs from non-allow-listed origins at load time. Audience-match expressions are evaluated server-side at config-resolution time; clients NEVER receive the match grammar, only the resolved entitlement list — so an attacker inspecting client traffic can't learn the segmentation rules. Entitlement checks via `webSdk.runtime.hasEntitlement` are advisory on the client (UX); every server endpoint MUST also enforce its own entitlement check via the Identity claim set — the client-side check is for hiding affordances, not authorization."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "src": "web-runtime",
+      "rel": "depends_on",
+      "dst": "web-sdk",
+      "properties": {
+        "reason": "Web apps consume Web Runtime exclusively through the Web SDK's `runtime` module. Web Runtime ships configured to require Web SDK v3.0+ as the host SDK.",
+        "version_pin": "^3.0.0",
+        "is_default_host_sdk": true
+      }
+    },
+    {
+      "src": "web-runtime",
+      "rel": "depends_on",
+      "dst": "identity",
+      "properties": {
+        "reason": "Audience-match expressions are evaluated against the caller's identity claims (roles, scopes, org_unit, …). Entitlement grants resolve through identity-claim membership.",
+        "version_pin": ">=4.0.0"
+      }
+    },
+    {
+      "src": "web-runtime",
+      "rel": "depends_on",
+      "dst": "prefs",
+      "properties": {
+        "reason": "User-driven runtime preferences (density, theme) feed into the resolved config alongside tenant configuration.",
+        "version_pin": ">=2.0.0"
+      }
+    }
+  ]
+}

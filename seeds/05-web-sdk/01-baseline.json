@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "name": "web-sdk-baseline",
+  "description": "Web SDK capability stub — the TypeScript SDK web apps consume to talk to Identity, Preferences, Notifications, and (since v3) Web Runtime. Per-version interfaces live in 02-v2.0.json and 03-v3.0.json. The bitemporal `current_version` history defined here makes time-travel queries return the correct shape for `?as_of=…`.",
+  "released_at": "2025-09-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "web-sdk",
+      "entity_type": "capability",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Web SDK",
+        "summary": "TypeScript/JavaScript SDK that web apps consume to interact with the platform's Identity, Preferences, Notifications, and Web Runtime services. The default runtime SDK referenced by Web Runtime since v3.",
+        "owner": "Platform Engineering",
+        "homepage": "https://docs.platform.example.com/web-sdk",
+        "lifecycle": {"state": "ga"},
+        "package_name": "@digital-platform/web-sdk",
+        "language": "typescript",
+        "framework": "react",
+        "module_format": ["esm"],
+        "license": "proprietary"
+      },
+      "external_ids": [
+        {"system": "npm", "external_id": "@digital-platform/web-sdk", "url": "https://www.npmjs.com/package/@digital-platform/web-sdk"},
+        {"system": "github", "external_id": "digital-platform/web-sdk", "url": "https://github.com/digital-platform/web-sdk"}
+      ],
+      "facts": [
+        {
+          "category": "overview",
+          "title": "Overview",
+          "body_format": "markdown",
+          "body": "The Web SDK is the canonical client library for browser apps building on the platform. It wraps Identity (auth + session), Preferences (per-user settings), Notifications (in-app inbox + send), and — since v3 — Web Runtime (zones, slots, menus, entitlements). Apps integrate by installing `@digital-platform/web-sdk` from npm and calling `init()` once at boot. The SDK handles token caching, refresh, and silent re-auth; consumers never see a raw JWT. Two major versions ship in this seed — v2.4.0 (in use until 2026-02-01) and v3.0.0 (current). The v2→v3 jump is a breaking change; see the migration guide fact under v3."
+        }
+      ]
+    }
+  ],
+  "bitemporal_attributes": [
+    {
+      "entity": "web-sdk",
+      "key": "current_version",
+      "replace_existing": true,
+      "rows": [
+        {"value": "2.4.0", "valid_from": "2025-09-15T00:00:00Z", "valid_to": "2026-02-01T00:00:00Z"},
+        {"value": "3.0.0", "valid_from": "2026-02-01T00:00:00Z", "valid_to": null}
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "src": "web-sdk",
+      "rel": "depends_on",
+      "dst": "identity",
+      "properties": {"reason": "Authentication, session lifecycle, identity claims."}
+    },
+    {
+      "src": "web-sdk",
+      "rel": "depends_on",
+      "dst": "prefs",
+      "properties": {"reason": "Read + write user preferences via `webSdk.prefs.*`."}
+    },
+    {
+      "src": "web-sdk",
+      "rel": "depends_on",
+      "dst": "notifications",
+      "properties": {"reason": "In-app inbox subscription via `webSdk.notifications.subscribe`."}
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+{
+  "schema_version": 1,
+  "name": "prefs-baseline",
+  "description": "User Preferences service. Stores per-user UI/UX preferences with platform-provided keys (language, timezone, density, theme, notification opt-ins) plus per-tenant custom keys that tenants register with their own validation schema. Depends on Identity for user scope. Adopted by Web SDK and Web Runtime.",
+  "released_at": "2025-09-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "prefs",
+      "entity_type": "capability",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Preferences",
+        "summary": "Per-user preference store with platform-provided keys + tenant-registered custom keys. Web apps read prefs via the Web SDK; backend services hit the REST API directly.",
+        "owner": "Platform Engineering",
+        "lifecycle": {"state": "ga"},
+        "current_version": "2.3.0",
+        "package_name": "@digital-platform/prefs",
+        "license": "proprietary",
+        "interface": {
+          "kind": "rest-api",
+          "base_url": "https://prefs.platform.example.com",
+          "auth": "bearer-token (Identity-issued)",
+          "endpoints": [
+            {
+              "method": "GET",
+              "path": "/v1/preferences/me",
+              "summary": "Return the calling user's preference values, merged from platform defaults + tenant defaults + user overrides.",
+              "auth_required": true,
+              "query_params": {
+                "keys": {"type": "string[]", "description": "Optional comma-separated key filter. Omit to return all keys the user has visibility into."}
+              },
+              "response": {
+                "200": {
+                  "schema": {
+                    "user_id": "string (UUID)",
+                    "tenant_id": "string (UUID)",
+                    "preferences": {
+                      "type": "object",
+                      "description": "Map of key → resolved value. Each value carries provenance.",
+                      "example": {
+                        "language": {"value": "en-GB", "source": "user", "key_type": "string"},
+                        "timezone": {"value": "Europe/London", "source": "user", "key_type": "string"},
+                        "density": {"value": "medium", "source": "tenant_default", "key_type": "enum"}
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "method": "PUT",
+              "path": "/v1/preferences/me",
+              "summary": "Bulk-update the calling user's preferences. Body is a map of key → value; unspecified keys are left unchanged. Returns the new full preference set.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "preferences": {
+                    "type": "object",
+                    "example": {"language": "fr-FR", "timezone": "Europe/Paris"}
+                  }
+                }
+              },
+              "response": {
+                "200": {"description": "Same shape as GET /v1/preferences/me"},
+                "422": {"schema": {"error": "validation_failed", "violations": "{key, message}[]"}}
+              }
+            },
+            {
+              "method": "PATCH",
+              "path": "/v1/preferences/me/{key}",
+              "summary": "Set a single preference key. Useful for incremental UI updates.",
+              "auth_required": true,
+              "request": {"schema": {"value": "any (matches the key's registered schema)"}},
+              "response": {
+                "200": {"schema": {"key": "string", "value": "any", "source": "'user'"}},
+                "404": {"schema": {"error": "unknown_key", "key": "string"}},
+                "422": {"schema": {"error": "validation_failed", "violations": "{message}[]"}}
+              }
+            },
+            {
+              "method": "DELETE",
+              "path": "/v1/preferences/me/{key}",
+              "summary": "Clear the user's override for a key. The key reverts to tenant default or platform default.",
+              "auth_required": true,
+              "response": {"204": {}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/preferences/users/{user_id}",
+              "summary": "Admin: read another user's preferences. Requires the `admin` role in the user's tenant.",
+              "auth_required": true,
+              "response": {"200": {"description": "Same shape as GET /v1/preferences/me"}, "403": {"schema": {"error": "forbidden"}}}
+            },
+            {
+              "method": "GET",
+              "path": "/v1/preferences/keys",
+              "summary": "List all registered preference keys (platform-provided + this tenant's custom keys).",
+              "auth_required": true,
+              "query_params": {
+                "scope": {"type": "'platform' | 'tenant' | 'all'", "default": "'all'"}
+              },
+              "response": {
+                "200": {
+                  "schema": {
+                    "keys": "PrefKey[]"
+                  }
+                }
+              }
+            },
+            {
+              "method": "POST",
+              "path": "/v1/preferences/keys",
+              "summary": "Register a custom preference key for this tenant. Requires the `admin` role.",
+              "auth_required": true,
+              "request": {
+                "schema": {
+                  "name": {"type": "string", "required": true, "description": "kebab-case slug, unique within the tenant + platform key set."},
+                  "type": {"type": "'string' | 'number' | 'boolean' | 'enum' | 'object'", "required": true},
+                  "default": {"type": "any", "required": false},
+                  "enum_values": {"type": "string[]", "required": false, "description": "Required when type='enum'."},
+                  "validation_pattern": {"type": "string (regex)", "required": false, "description": "Optional. Applies when type='string'."},
+                  "description": {"type": "string", "required": false}
+                }
+              },
+              "response": {
+                "201": {"schema": {"key": "PrefKey"}},
+                "409": {"schema": {"error": "key_exists", "key": "string"}}
+              }
+            },
+            {
+              "method": "DELETE",
+              "path": "/v1/preferences/keys/{name}",
+              "summary": "Unregister a tenant's custom key. Platform-provided keys cannot be deleted. Deleting also clears every user's value for that key.",
+              "auth_required": true,
+              "response": {"204": {}}
+            },
+            {
+              "method": "PUT",
+              "path": "/v1/preferences/tenant-defaults/{key}",
+              "summary": "Set the tenant-default value for a key. Tenant admins use this to override the platform default org-wide.",
+              "auth_required": true,
+              "request": {"schema": {"value": "any (matches the key's schema)"}},
+              "response": {"200": {"schema": {"key": "string", "tenant_default": "any"}}}
+            }
+          ],
+          "platform_keys": [
+            {"name": "language", "type": "string", "default": "en-US", "description": "BCP-47 language tag, e.g. 'en-US', 'fr-FR', 'ja-JP'."},
+            {"name": "timezone", "type": "string", "default": "UTC", "description": "IANA timezone name, e.g. 'Europe/London', 'America/New_York'."},
+            {"name": "date_format", "type": "enum", "enum_values": ["YYYY-MM-DD", "DD/MM/YYYY", "MM/DD/YYYY"], "default": "YYYY-MM-DD"},
+            {"name": "number_format", "type": "enum", "enum_values": ["1,234.56", "1.234,56", "1 234.56"], "default": "1,234.56"},
+            {"name": "density", "type": "enum", "enum_values": ["low", "medium", "high", "touch"], "default": "medium", "description": "Maps directly to the Salt SaltProvider density prop."},
+            {"name": "theme", "type": "enum", "enum_values": ["light", "dark", "system"], "default": "system"},
+            {"name": "notification_opt_ins.email", "type": "boolean", "default": true},
+            {"name": "notification_opt_ins.sms", "type": "boolean", "default": false},
+            {"name": "notification_opt_ins.web", "type": "boolean", "default": true},
+            {"name": "accessibility.reduce_motion", "type": "boolean", "default": false},
+            {"name": "accessibility.high_contrast", "type": "boolean", "default": false}
+          ],
+          "resolution_order": [
+            "1. User override (if set)",
+            "2. Tenant default (if the tenant has set one)",
+            "3. Platform default (always defined for platform keys)"
+          ]
+        }
+      },
+      "facts": [
+        {
+          "category": "overview",
+          "title": "Overview",
+          "body_format": "markdown",
+          "body": "Preferences stores per-user settings with a clean three-layer resolution: user override > tenant default > platform default. Eleven platform-provided keys cover language, timezone, formatting, density, theme, notification opt-ins, and accessibility. Tenants can register custom keys via `POST /v1/preferences/keys` — bring your own validation schema (regex / enum / type) and the service enforces it on writes. Reads always return values with provenance (`source: 'user' | 'tenant_default' | 'platform_default'`) so consumers can show 'set by you' vs 'set by your org' affordances."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Registering a tenant-custom preference key",
+          "body_format": "markdown",
+          "body": "Tenants register custom keys via `POST /v1/preferences/keys` (requires `admin` role). The key participates in the same resolution chain as platform keys: user override > tenant default > the `default` you set at registration time. Keys are tenant-scoped — `acme-trading`'s `experimental_features.dark_pool_view` is invisible to `beta-research`. Validation runs on every write: a regex-validated key rejects non-matching values with HTTP 422 and the offending key + message. Deleting a custom key cascades — every user's value for that key is purged in the same transaction."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Reading preferences from a web app",
+          "body_format": "markdown",
+          "body": "Use the Web SDK's prefs module — it caches values per session and emits change events when the user updates a setting in another tab. Direct REST calls work too but force the consumer to handle the caching and the user-vs-tenant-default resolution surface. A typical web app reads `density` and `theme` at boot, then subscribes to changes to react to the user toggling a setting elsewhere in the app."
+        },
+        {
+          "category": "security_model",
+          "title": "Security model",
+          "body_format": "markdown",
+          "body": "All endpoints require Identity-issued bearer tokens. `GET/PUT/PATCH/DELETE /v1/preferences/me` are user-scoped — the token's `sub` claim determines the user. `GET /v1/preferences/users/{user_id}` requires `admin` role in the user's tenant. `POST /v1/preferences/keys` and tenant-default endpoints require `admin`. Validation errors return HTTP 422 with field-level violations; auth errors return HTTP 401/403 with no preference data leaked. PII concern: preference values are scanned for emails/phone-numbers on write — flagged values are blocked unless the key's schema explicitly opts into PII (e.g. notification destination addresses)."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "src": "prefs",
+      "rel": "depends_on",
+      "dst": "identity",
+      "properties": {
+        "reason": "Every endpoint requires an Identity-issued bearer token. User scope (`/v1/preferences/me`) is derived from the token's `sub` claim.",
+        "version_pin": ">=4.0.0"
+      }
+    }
+  ]
+}

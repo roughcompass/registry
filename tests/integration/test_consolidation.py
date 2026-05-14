@@ -39,7 +39,7 @@ from registry.main import create_app
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _BOOTSTRAP_SCRIPT = _REPO_ROOT / "scripts" / "bootstrap_dev_tenant.py"
-_SEED_SCRIPT = _REPO_ROOT / "scripts" / "seed_dev_capabilities.py"
+_SEED_SCRIPT = _REPO_ROOT / "scripts" / "seed.py"
 _TOKEN_LINE_RE = re.compile(r"Token\s*:\s*(\S+)")
 
 

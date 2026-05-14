@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "platform-team-tenants",
+  "description": "Three consumer product tenants alongside the existing `dev` tenant (which plays the platform/producer role and owns Salt). Each consumer gets an admin actor with the consumer + producer roles — producers because they may themselves publish derived capabilities downstream (the layered-abstractions pattern).",
+  "tenants": [
+    {
+      "slug": "acme-trading",
+      "display_name": "Acme Trading",
+      "kind": "consumer"
+    },
+    {
+      "slug": "beta-research",
+      "display_name": "Beta Research Platform",
+      "kind": "consumer"
+    },
+    {
+      "slug": "gamma-onboarding",
+      "display_name": "Gamma Onboarding",
+      "kind": "consumer"
+    }
+  ],
+  "actors": [
+    {
+      "tenant_slug": "acme-trading",
+      "display_name": "acme-admin",
+      "roles": ["admin", "producer", "consumer", "auditor"]
+    },
+    {
+      "tenant_slug": "beta-research",
+      "display_name": "beta-admin",
+      "roles": ["admin", "producer", "consumer", "auditor"]
+    },
+    {
+      "tenant_slug": "gamma-onboarding",
+      "display_name": "gamma-admin",
+      "roles": ["admin", "producer", "consumer", "auditor"]
+    }
+  ]
+}

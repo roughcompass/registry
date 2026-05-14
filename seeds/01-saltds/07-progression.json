@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "name": "platform-team-progression",
+  "description": "A capability state-machine progression definition on the platform tenant. Capabilities move draft → review → stable → deprecated, with attribute-gates required for each forward transition. Enforced (not advisory) so a producer cannot promote a capability to `stable` without the interface + accessibility-compliance attributes set. `target_tenant_slug` is omitted intentionally — this writes to whichever platform tenant the seed orchestrator was invoked against.",
+  "progression_definitions": [
+    {
+      "entity_type": "capability",
+      "is_advisory": false,
+      "definition": {
+        "states": ["draft", "review", "stable", "deprecated"],
+        "initial_state": "draft",
+        "terminal_states": ["deprecated"],
+        "transitions": [
+          {
+            "from": "draft",
+            "to": "review",
+            "requires_attributes": ["summary", "owner"],
+            "description": "Cannot move into review without at least a summary and a named owner."
+          },
+          {
+            "from": "review",
+            "to": "stable",
+            "requires_attributes": ["interface", "accessibility_compliance"],
+            "description": "Promotion to `stable` requires a documented interface and an accessibility-compliance statement."
+          },
+          {
+            "from": "stable",
+            "to": "deprecated",
+            "requires_attributes": ["successor"],
+            "description": "Deprecation requires the capability to name its successor — consumers need a forward pointer."
+          },
+          {
+            "from": "review",
+            "to": "draft",
+            "description": "Move back to draft if review surfaces gaps. No gate."
+          }
+        ]
+      }
+    }
+  ]
+}

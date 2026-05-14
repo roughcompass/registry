@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "name": "platform-team-visibility",
+  "description": "Flip the Salt parent capability and a curated set of components from `private` to `public` so cross-tenant adoption is permitted. In a real production setup these would more likely go through `tenant-shared` with an explicit share list; `public` is used here because Salt is genuinely open-source and the demo benefits from any tenant being able to see it. Targets the orchestrator's default tenant — `target_tenant_slug` is omitted intentionally so this bundle works against whichever platform tenant the seed is invoked against.",
+  "entities": [
+    {
+      "name": "salt-design-system",
+      "entity_type": "capability",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-button",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-input",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-checkbox",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-form-field",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-card",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-data-grid",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-dialog",
+      "entity_type": "concept",
+      "visibility": "public"
+    },
+    {
+      "name": "salt-stepper",
+      "entity_type": "concept",
+      "visibility": "public"
+    }
+  ]
+}

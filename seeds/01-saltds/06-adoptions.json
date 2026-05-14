@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "name": "platform-team-adoptions",
+  "description": "Eight cross-tenant adoption events: each consumer tenant declares its dependency on a curated mix of Salt components. The provider is implicit — when `provider_tenant` is omitted the loader resolves it to the orchestrator's default tenant, so this bundle is slug-agnostic and runs against whichever platform tenant `make dev-seed` was invoked against.",
+  "adoptions": [
+    {
+      "provider_capability": "salt-button",
+      "consumer_tenant": "acme-trading",
+      "consumer_actor": "acme-admin",
+      "intent": "Primary CTA buttons across the trading dashboard.",
+      "version_pin": "1.45.0"
+    },
+    {
+      "provider_capability": "salt-data-grid",
+      "consumer_tenant": "acme-trading",
+      "consumer_actor": "acme-admin",
+      "intent": "Order-book + positions tables; needs the 100k-row virtualization in v1.45.",
+      "version_pin": "1.45.0"
+    },
+    {
+      "provider_capability": "salt-input",
+      "consumer_tenant": "acme-trading",
+      "consumer_actor": "acme-admin",
+      "intent": "Symbol-search inputs in the trade entry panel.",
+      "version_pin": "1.45.0"
+    },
+    {
+      "provider_capability": "salt-form-field",
+      "consumer_tenant": "beta-research",
+      "consumer_actor": "beta-admin",
+      "intent": "Wraps every input on the model-config forms with label + validation.",
+      "version_pin": "1.44.0"
+    },
+    {
+      "provider_capability": "salt-input",
+      "consumer_tenant": "beta-research",
+      "consumer_actor": "beta-admin",
+      "intent": "Free-text fields in the model-config forms.",
+      "version_pin": "1.44.0"
+    },
+    {
+      "provider_capability": "salt-checkbox",
+      "consumer_tenant": "beta-research",
+      "consumer_actor": "beta-admin",
+      "intent": "Feature-flag toggles on the experiment pages.",
+      "version_pin": "1.44.0"
+    },
+    {
+      "provider_capability": "salt-card",
+      "consumer_tenant": "gamma-onboarding",
+      "consumer_actor": "gamma-admin",
+      "intent": "Step-card surfaces for the onboarding wizard.",
+      "version_pin": "1.45.0"
+    },
+    {
+      "provider_capability": "salt-stepper",
+      "consumer_tenant": "gamma-onboarding",
+      "consumer_actor": "gamma-admin",
+      "intent": "The headline component — the onboarding flow IS a Stepper.",
+      "version_pin": "1.45.0"
+    }
+  ]
+}

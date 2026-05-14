@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "name": "owners",
+  "description": "Named technical + product owners for every platform capability and the Salt Design System. Owners are modelled as `person` entities so MCP queries can traverse ownership: 'list everything Alice owns', 'who is the product owner of Web Runtime?'. Each capability gets exactly one technical owner (`owned_by` edge) and one product owner (`product_owned_by` edge). Realistic team shape — senior leads own multiple capabilities within their domain.",
+  "released_at": "2025-09-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "alice-chen",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Alice Chen",
+        "role": "Principal Engineer, Identity & SDK",
+        "team": "Platform Engineering — Foundations",
+        "email": "alice.chen@platform.example.com",
+        "slack_handle": "@alice.chen",
+        "github_handle": "@achen-platform",
+        "kind": "technical_owner",
+        "ownership_summary": "Identity service + Web SDK across all major versions. Drove the v2→v3 SDK breaking-change RFC."
+      }
+    },
+    {
+      "name": "bob-park",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Bob Park",
+        "role": "Senior Product Manager, Foundations",
+        "team": "Platform Product — Foundations",
+        "email": "bob.park@platform.example.com",
+        "slack_handle": "@bob.park",
+        "kind": "product_owner",
+        "ownership_summary": "Owns the developer-experience roadmap for Identity + Web SDK. Coordinated the v3 migration timeline with consumer teams."
+      }
+    },
+    {
+      "name": "carlos-rivera",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Carlos Rivera",
+        "role": "Tech Lead, User Services",
+        "team": "Platform Engineering — User Services",
+        "email": "carlos.rivera@platform.example.com",
+        "slack_handle": "@carlos.r",
+        "github_handle": "@crivera",
+        "kind": "technical_owner",
+        "ownership_summary": "Preferences + Notifications. Designed the per-tenant template + custom-key extension surfaces."
+      }
+    },
+    {
+      "name": "diana-wu",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Diana Wu",
+        "role": "Senior Product Manager, User Services",
+        "team": "Platform Product — User Services",
+        "email": "diana.wu@platform.example.com",
+        "slack_handle": "@diana.wu",
+        "kind": "product_owner",
+        "ownership_summary": "Preferences + Notifications. Owns the channel-opt-in story and the tenant-template authoring UX."
+      }
+    },
+    {
+      "name": "eve-anderson",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Eve Anderson",
+        "role": "Principal Engineer, Experience Platform",
+        "team": "Platform Engineering — Experience Platform",
+        "email": "eve.anderson@platform.example.com",
+        "slack_handle": "@eve.a",
+        "github_handle": "@eanderson",
+        "kind": "technical_owner",
+        "ownership_summary": "Web Runtime — zones, slots, menus, audience segmentation. Owns the module-federation + trusted-origins security story."
+      }
+    },
+    {
+      "name": "frank-kowalski",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Frank Kowalski",
+        "role": "Director of Product, Experience Platform",
+        "team": "Platform Product — Experience Platform",
+        "email": "frank.kowalski@platform.example.com",
+        "slack_handle": "@frank.k",
+        "kind": "product_owner",
+        "ownership_summary": "Web Runtime product surface. Drives the tenant-customisation strategy and the audience-segmentation roadmap."
+      }
+    },
+    {
+      "name": "sarah-goldman",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Sarah Goldman",
+        "role": "Engineering Lead, Salt Design System",
+        "team": "JPMorgan Chase — Salt DS",
+        "email": "sarah.goldman@external.example.com",
+        "github_handle": "@sgoldman-jpm",
+        "kind": "technical_owner",
+        "ownership_summary": "External owner — runs the Salt component library at JPMorgan Chase. Liaison for upstream component bugs and feature requests filed via consumer annotations."
+      }
+    },
+    {
+      "name": "mike-hopkins",
+      "entity_type": "person",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Mike Hopkins",
+        "role": "Design System Product Manager",
+        "team": "JPMorgan Chase — Salt DS",
+        "email": "mike.hopkins@external.example.com",
+        "kind": "product_owner",
+        "ownership_summary": "External owner — Salt's product roadmap, release cadence, and the public docs site."
+      }
+    }
+  ],
+  "edges": [
+    {"src": "salt-design-system", "rel": "owned_by", "dst": "sarah-goldman", "properties": {"since": "2025-09-15"}},
+    {"src": "salt-design-system", "rel": "product_owned_by", "dst": "mike-hopkins", "properties": {"since": "2025-09-15"}},
+
+    {"src": "identity", "rel": "owned_by", "dst": "alice-chen", "properties": {"since": "2025-09-15"}},
+    {"src": "identity", "rel": "product_owned_by", "dst": "bob-park", "properties": {"since": "2025-09-15"}},
+
+    {"src": "prefs", "rel": "owned_by", "dst": "carlos-rivera", "properties": {"since": "2025-09-15"}},
+    {"src": "prefs", "rel": "product_owned_by", "dst": "diana-wu", "properties": {"since": "2025-09-15"}},
+
+    {"src": "notifications", "rel": "owned_by", "dst": "carlos-rivera", "properties": {"since": "2025-09-15"}},
+    {"src": "notifications", "rel": "product_owned_by", "dst": "diana-wu", "properties": {"since": "2025-09-15"}},
+
+    {"src": "web-sdk", "rel": "owned_by", "dst": "alice-chen", "properties": {"since": "2025-09-15", "led_breaking_change": "v2.4.0 → v3.0.0"}},
+    {"src": "web-sdk", "rel": "product_owned_by", "dst": "bob-park", "properties": {"since": "2025-09-15"}},
+
+    {"src": "web-runtime", "rel": "owned_by", "dst": "eve-anderson", "properties": {"since": "2025-09-15"}},
+    {"src": "web-runtime", "rel": "product_owned_by", "dst": "frank-kowalski", "properties": {"since": "2025-09-15"}}
+  ]
+}

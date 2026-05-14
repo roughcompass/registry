@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "name": "identity-baseline",
+  "description": "Platform Identity service. Authentication, token issuance + refresh, identity claims. Every other platform capability (preferences, notifications, web SDK, web runtime) authenticates against this service. OIDC-compliant — operators federate to their org IdP via OIDC discovery.",
+  "released_at": "2025-09-15T00:00:00Z",
+  "entities": [
+    {
+      "name": "identity",
+      "entity_type": "capability",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Identity",
+        "summary": "Platform authentication + identity-claims service. OIDC-compliant token issuance, refresh, validation, and the canonical user-identity shape every other capability consumes.",
+        "owner": "Platform Engineering",
+        "lifecycle": {"state": "ga"},
+        "current_version": "4.7.0",
+        "package_name": "@digital-platform/identity",
+        "license": "proprietary",
+        "compliance": ["SOC2-Type2", "ISO-27001"],
+        "interface": {
+          "kind": "rest-api",
+          "base_url": "https://identity.platform.example.com",
+          "auth": "bearer-token",
+          "endpoints": [
+            {
+              "method": "POST",
+              "path": "/v1/auth/token",
+              "summary": "Exchange an OIDC authorization code or refresh token for an access token.",
+              "request": {
+                "content_type": "application/x-www-form-urlencoded",
+                "schema": {
+                  "grant_type": {"type": "'authorization_code' | 'refresh_token' | 'client_credentials'", "required": true},
+                  "code": {"type": "string", "required": false, "description": "Required when grant_type=authorization_code."},
+                  "refresh_token": {"type": "string", "required": false, "description": "Required when grant_type=refresh_token."},
+                  "client_id": {"type": "string", "required": true},
+                  "client_secret": {"type": "string", "required": false, "description": "Required for confidential clients."},
+                  "scope": {"type": "string", "required": false, "default": "openid profile email"}
+                }
+              },
+              "response": {
+                "200": {
+                  "schema": {
+                    "access_token": {"type": "string (JWT)"},
+                    "token_type": {"type": "'Bearer'"},
+                    "expires_in": {"type": "number (seconds)", "default": 3600},
+                    "refresh_token": {"type": "string", "description": "Present when grant_type allows refresh."},
+                    "id_token": {"type": "string (JWT)", "description": "OIDC id_token, present when scope includes 'openid'."},
+                    "scope": {"type": "string"}
+                  }
+                },
+                "400": {"schema": {"error": "'invalid_grant' | 'invalid_client' | 'unsupported_grant_type'", "error_description": "string"}}
+              }
+            },
+            {
+              "method": "POST",
+              "path": "/v1/auth/revoke",
+              "summary": "Revoke an access token or refresh token. Idempotent.",
+              "request": {
+                "schema": {
+                  "token": {"type": "string", "required": true},
+                  "token_type_hint": {"type": "'access_token' | 'refresh_token'", "required": false}
+                }
+              },
+              "response": {
+                "200": {"schema": {"revoked": "boolean"}}
+              }
+            },
+            {
+              "method": "GET",
+              "path": "/v1/me",
+              "summary": "Return the identity the caller's token resolves to.",
+              "auth_required": true,
+              "response": {
+                "200": {
+                  "schema": {
+                    "user_id": {"type": "string (UUID)"},
+                    "tenant_id": {"type": "string (UUID)"},
+                    "email": {"type": "string"},
+                    "display_name": {"type": "string"},
+                    "roles": {"type": "string[]"},
+                    "scopes": {"type": "string[]"},
+                    "token_id": {"type": "string (UUID)"},
+                    "token_expires_at": {"type": "string (ISO-8601)"}
+                  }
+                }
+              }
+            },
+            {
+              "method": "GET",
+              "path": "/.well-known/openid-configuration",
+              "summary": "OIDC discovery document. Public, no auth required.",
+              "response": {
+                "200": {
+                  "schema": {
+                    "issuer": "string (URL)",
+                    "authorization_endpoint": "string (URL)",
+                    "token_endpoint": "string (URL)",
+                    "userinfo_endpoint": "string (URL)",
+                    "jwks_uri": "string (URL)",
+                    "response_types_supported": "string[]",
+                    "subject_types_supported": "string[]",
+                    "id_token_signing_alg_values_supported": "string[]"
+                  }
+                }
+              }
+            },
+            {
+              "method": "GET",
+              "path": "/.well-known/jwks.json",
+              "summary": "JSON Web Key Set — public keys for verifying tokens this service issues.",
+              "response": {"200": {"schema": {"keys": "JWK[]"}}}
+            },
+            {
+              "method": "POST",
+              "path": "/v1/sessions",
+              "summary": "Establish a stateful session and return a session cookie. For browser apps using the Web SDK; CLIs and services should use /v1/auth/token directly.",
+              "request": {
+                "schema": {
+                  "id_token": {"type": "string (JWT)", "required": true, "description": "OIDC id_token from /v1/auth/token."}
+                }
+              },
+              "response": {
+                "200": {
+                  "headers": {"Set-Cookie": "session_id=...; HttpOnly; Secure; SameSite=Strict"},
+                  "schema": {"session_id": "string (UUID)", "expires_at": "string (ISO-8601)"}
+                }
+              }
+            },
+            {
+              "method": "DELETE",
+              "path": "/v1/sessions/{session_id}",
+              "summary": "Sign out a session.",
+              "auth_required": true,
+              "response": {"204": {}}
+            }
+          ],
+          "token_claims": {
+            "sub": {"type": "string (UUID)", "description": "User ID. Stable for the user's lifetime in this tenant."},
+            "tenant_id": {"type": "string (UUID)", "description": "Tenant the user belongs to. Required."},
+            "iss": {"type": "string (URL)"},
+            "aud": {"type": "string", "description": "Audience — the client ID that requested the token."},
+            "exp": {"type": "number (unix-seconds)"},
+            "iat": {"type": "number (unix-seconds)"},
+            "scope": {"type": "string", "description": "Space-separated scope list."},
+            "roles": {"type": "string[]", "description": "Tenant-scoped role names."},
+            "email": {"type": "string", "description": "Present when 'email' scope was requested."},
+            "name": {"type": "string", "description": "Present when 'profile' scope was requested."}
+          }
+        }
+      },
+      "external_ids": [
+        {"system": "github", "external_id": "digital-platform/identity", "url": "https://github.com/digital-platform/identity"}
+      ],
+      "facts": [
+        {
+          "category": "overview",
+          "title": "Overview",
+          "body_format": "markdown",
+          "body": "Identity is the platform's authentication and identity-claims service. It speaks OIDC and federates to org IdPs via OIDC discovery. Every other platform capability (Preferences, Notifications, Web SDK, Web Runtime) authenticates against Identity — there is no other auth surface. Tokens are short-lived JWTs (1h default); refresh tokens are rotating and tenant-scoped. The canonical user-identity shape — `{user_id, tenant_id, roles, scopes, …}` — is what `/v1/me` returns and is the contract every downstream capability honours."
+        },
+        {
+          "category": "security_model",
+          "title": "Security model",
+          "body_format": "markdown",
+          "body": "JWTs are signed with rotating RSA-2048 keys. Public keys are published at `/.well-known/jwks.json`; consumers cache with `kid`-aware rotation. Refresh tokens are stored hashed (Argon2id) and bound to a (user_id, client_id, device_fingerprint) tuple — replay from a different device fails validation. Session cookies for browser flows are `HttpOnly; Secure; SameSite=Strict`. All endpoints rate-limited per-tenant + per-IP. Token revocation is propagated to a Redis denylist with a 5s TTL backstop; downstream services that cache JWT validation MUST check the denylist for tokens younger than that backstop."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Integrating with the Identity service",
+          "body_format": "markdown",
+          "body": "Three integration shapes:\n\n1. **Browser via Web SDK** — call `webSdk.auth.signIn()`; the SDK handles the OIDC redirect, code exchange, and session cookie. Use `webSdk.auth.getUserIdentity()` to retrieve the canonical identity shape (note: this call's signature changed between Web SDK 2.x and 3.x — see the Web SDK migration guide).\n\n2. **Server-to-server** — request tokens via `POST /v1/auth/token` with `grant_type=client_credentials`. Cache tokens until expiry minus 60s to avoid edge-of-expiry races.\n\n3. **CLI / interactive** — use the device-code flow (not documented here yet; see Identity v5 roadmap)."
+        }
+      ]
+    }
+  ]
+}

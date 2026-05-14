@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "name": "web-sdk-v2.0",
+  "description": "Web SDK v2.0–v2.4 release notes. The v2-era interface shape is owned by the bitemporal block in 03-v3.0.json (it's the only way an attribute can be replaced by a later seed bundle).",
+  "released_at": "2025-09-15T00:00:00Z",
+  "facts": [
+    {
+      "entity": "web-sdk",
+      "category": "release_note",
+      "title": "v2.0.0 release notes",
+      "body_format": "markdown",
+      "body": "**v2.0.0** — Modernised browser SDK. ESM-only build, TypeScript-first types, peer-deps bumped to React 17+. New `notifications` module replaces the v1-era `webSdk.inbox` shim. `auth.getUserIdentity()` continues to return a slim `{userId, tenantId, displayName, email}` from the session cache — synchronous, no network call.\n\n**v2.4.0** (latest 2.x) — Performance polish: token-refresh debouncing, smaller cache hot-path. No API changes since 2.0; the surface is stable across the 2.x line."
+    }
+  ]
+}
