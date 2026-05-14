@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "web-sdk-v3.0",
-  "description": "Web SDK v3.0 — breaking-change release. Owns the bitemporal `interface` attribute with BOTH v2 and v3 shapes so `?as_of=` queries return the correct contract for the requested time. Also carries the v3 release note + migration guide.",
+  "description": "Web SDK v3.0 — breaking-change release. Owns the bitemporal `interface` attribute (narrative shape for docs) and the bitemporal `interface_canonical` attribute (operations/events/fields shape the breaking-change advisor diffs) with BOTH v2 and v3 rows in each, so `?as_of=` queries return the correct contract for the requested time. Also carries the v3 release note + migration guide.",
   "released_at": "2026-02-01T00:00:00Z",
   "facts": [
     {
@@ -179,6 +179,74 @@
                   {"name": "hasEntitlement", "signature": "hasEntitlement(name: string): Promise<boolean>", "description": "Check whether the current user has a named entitlement."}
                 ]
               }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "entity": "web-sdk",
+      "key": "interface_canonical",
+      "replace_existing": true,
+      "rows": [
+        {
+          "valid_from": "2025-09-15T00:00:00Z",
+          "valid_to": "2026-02-01T00:00:00Z",
+          "value": {
+            "operations": [
+              {"name": "init", "returns": "void", "params": [{"name": "config", "type": "SdkConfig", "required": true}]},
+              {"name": "signIn", "returns": "void", "params": [{"name": "opts", "type": "object", "required": false}]},
+              {"name": "signOut", "returns": "void", "params": []},
+              {"name": "getUserIdentity", "returns": "UserIdentity | null", "params": []},
+              {"name": "isSignedIn", "returns": "boolean", "params": []},
+              {"name": "prefs.get", "returns": "any | undefined", "params": [{"name": "key", "type": "string", "required": true}]},
+              {"name": "prefs.set", "returns": "Promise<void>", "params": [{"name": "key", "type": "string", "required": true}, {"name": "value", "type": "any", "required": true}]},
+              {"name": "prefs.load", "returns": "Promise<void>", "params": []},
+              {"name": "prefs.onChange", "returns": "Unsubscribe", "params": [{"name": "handler", "type": "function", "required": true}]},
+              {"name": "notifications.inbox", "returns": "Promise<InboxMessage[]>", "params": [{"name": "opts", "type": "object", "required": false}]},
+              {"name": "notifications.subscribe", "returns": "Unsubscribe", "params": [{"name": "handler", "type": "function", "required": true}]},
+              {"name": "notifications.markRead", "returns": "Promise<void>", "params": [{"name": "messageId", "type": "string", "required": true}]}
+            ],
+            "events": [],
+            "fields": [
+              {"name": "userId", "type": "string", "required": true},
+              {"name": "tenantId", "type": "string", "required": true},
+              {"name": "displayName", "type": "string", "required": true},
+              {"name": "email", "type": "string", "required": true}
+            ]
+          }
+        },
+        {
+          "valid_from": "2026-02-01T00:00:00Z",
+          "valid_to": null,
+          "value": {
+            "operations": [
+              {"name": "init", "returns": "Promise<SdkInstance>", "params": [{"name": "config", "type": "SdkConfig", "required": true}]},
+              {"name": "signIn", "returns": "Promise<void>", "params": [{"name": "opts", "type": "object", "required": false}]},
+              {"name": "signOut", "returns": "Promise<void>", "params": []},
+              {"name": "getUserIdentity", "returns": "Promise<UserIdentity>", "params": [{"name": "opts", "type": "object", "required": false}]},
+              {"name": "isSignedIn", "returns": "Promise<boolean>", "params": []},
+              {"name": "prefs.get", "returns": "Promise<any | undefined>", "params": [{"name": "key", "type": "string", "required": true}]},
+              {"name": "prefs.set", "returns": "Promise<void>", "params": [{"name": "key", "type": "string", "required": true}, {"name": "value", "type": "any", "required": true}]},
+              {"name": "prefs.onChange", "returns": "Unsubscribe", "params": [{"name": "handler", "type": "function", "required": true}]},
+              {"name": "notifications.inbox", "returns": "Promise<InboxMessage[]>", "params": [{"name": "opts", "type": "object", "required": false}]},
+              {"name": "notifications.subscribe", "returns": "Unsubscribe", "params": [{"name": "handler", "type": "function", "required": true}]},
+              {"name": "notifications.markRead", "returns": "Promise<void>", "params": [{"name": "messageId", "type": "string", "required": true}]},
+              {"name": "runtime.config", "returns": "Promise<RuntimeConfig>", "params": []},
+              {"name": "runtime.zone", "returns": "Promise<ZoneConfig | null>", "params": [{"name": "name", "type": "string", "required": true}]},
+              {"name": "runtime.hasEntitlement", "returns": "Promise<boolean>", "params": [{"name": "name", "type": "string", "required": true}]}
+            ],
+            "events": [],
+            "fields": [
+              {"name": "userId", "type": "string", "required": true},
+              {"name": "tenantId", "type": "string", "required": true},
+              {"name": "displayName", "type": "string", "required": true},
+              {"name": "email", "type": "string", "required": true},
+              {"name": "tenantSlug", "type": "string", "required": true},
+              {"name": "roles", "type": "string[]", "required": true},
+              {"name": "scopes", "type": "string[]", "required": true},
+              {"name": "entitlements", "type": "string[]", "required": true},
+              {"name": "tokenExpiresAt", "type": "string", "required": true}
             ]
           }
         }

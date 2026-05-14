@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "name": "runtime-sdk-mf-bridge-baseline",
+  "description": "Integration capability bridging Web Runtime and Web SDK — the module-federation host that lets Web SDK v3's `runtime` module safely load tenant-supplied remote components referenced by Web Runtime's zone/slot configs. Enforces tenant-trusted-origin allow-listing, version-pins the federated container, falls back to platform defaults when a remote fails.",
+  "released_at": "2026-02-15T00:00:00Z",
+  "target_tenant_slug": "dev",
+  "entities": [
+    {
+      "name": "runtime-sdk-mf-bridge",
+      "entity_type": "integration",
+      "visibility": "public",
+      "attributes": {
+        "display_name": "Runtime ↔ SDK Module-Federation Bridge",
+        "summary": "Module-federation host that joins Web Runtime (publishes `component_ref` URLs in zone/slot configs) to Web SDK v3's `runtime` module (consumes those configs in the browser). Enforces per-tenant trusted-origin allow-listing on remote loads, version-pins each federated container, falls back to platform defaults when a remote fails to load, and emits load-failure telemetry to the tenant's admin inbox.",
+        "owner": "Platform Engineering",
+        "lifecycle": {"state": "ga"},
+        "current_version": "1.1.0",
+        "package_name": "@digital-platform/runtime-sdk-mf-bridge",
+        "language": "typescript",
+        "framework": "react",
+        "module_format": ["esm"],
+        "license": "proprietary",
+        "config_template": {
+          "trusted_origins": ["https://cdn.tenant-acme.example.com", "https://*.platform.example.com"],
+          "remote_load_timeout_ms": 4000,
+          "fallback_strategy": "platform-default",
+          "csp_directives": {
+            "script-src": "'self' https://cdn.platform.example.com {trusted_origins}",
+            "connect-src": "'self' https://web-runtime.platform.example.com"
+          },
+          "telemetry": {"emit_load_failures": true, "channel": "platform-runtime-errors"}
+        },
+        "runbook_url": "https://runbooks.platform.example.com/runtime-sdk-mf-bridge",
+        "known_issues": [
+          {
+            "id": "MFBR-001",
+            "summary": "Safari 15 cross-origin module preloads fail when CSP `script-src` omits the remote origin. Workaround: include every trusted origin in the tenant CSP at deploy time; the `csp_directives` config block above is the source-of-truth template.",
+            "severity": "warning",
+            "filed_at": "2026-01-20T00:00:00Z"
+          },
+          {
+            "id": "MFBR-002",
+            "summary": "When a federated remote ships a React major-version mismatch (e.g. tenant on React 17 against platform on React 18), the bridge loads the remote but mounting throws an invariant error. The bridge does NOT detect this at load time — it surfaces at first render and falls back to platform default for the affected zone.",
+            "severity": "warning",
+            "filed_at": "2026-02-05T00:00:00Z"
+          }
+        ]
+      },
+      "external_ids": [
+        {"system": "npm", "external_id": "@digital-platform/runtime-sdk-mf-bridge", "url": "https://www.npmjs.com/package/@digital-platform/runtime-sdk-mf-bridge"},
+        {"system": "github", "external_id": "digital-platform/runtime-sdk-mf-bridge", "url": "https://github.com/digital-platform/runtime-sdk-mf-bridge"}
+      ],
+      "facts": [
+        {
+          "category": "overview",
+          "title": "Overview",
+          "body_format": "markdown",
+          "body": "The Runtime ↔ SDK Module-Federation Bridge is the load-bearing glue between **Web Runtime** (which publishes `component_ref` strings in zone- and slot-replacement configs) and **Web SDK v3+** (whose `runtime` module needs to resolve and mount those refs in the browser). It is not part of either capability — it has its own npm package, its own version, its own owner, its own runbook, and its own known-issue list, because the glue carries real lifecycle weight: CSP changes, federated-container version pinning, origin allow-listing, and graceful fallback all live here, not in the SDK or the Runtime.\n\nApps consume the bridge transitively — installing `@digital-platform/web-sdk@^3.0.0` pulls it in as a peer when `runtime.enabled` is true. Direct installation is only required when a tenant wants to override the trusted-origin set or the fallback strategy beyond what the SDK passes through."
+        },
+        {
+          "category": "dev_doc",
+          "title": "What the bridge does at boot",
+          "body_format": "markdown",
+          "body": "When Web SDK v3 boots with `runtime.enabled: true`, the bridge:\n\n1. Reads the resolved runtime config from `GET /v1/runtime/config` (via the SDK).\n2. For each `zone` and `slot` replacement whose `component_ref` is a module-federation URL, registers it with the in-browser MF host (`webpack/module-federation` runtime).\n3. Validates the origin against the per-tenant trusted-origin allow-list. Non-allow-listed origins are rejected at registration time, before any network request goes out.\n4. Pins each remote container to the version declared in the `component_ref` string (`tenant-acme/HeaderShell@1.4.0` pins to `1.4.0`).\n5. Provides a fallback resolver: if a remote times out (default 4s) or fails to load, the bridge returns the platform-default component for that zone/slot and emits a `runtime-error` notification to the tenant admin inbox.\n\nAll five steps complete before `webSdk.init()` resolves. The SDK does not start rendering until the bridge has either (a) successfully registered every replacement, or (b) downgraded the failing replacements to platform defaults and reported them."
+        },
+        {
+          "category": "dev_doc",
+          "title": "Configuring trusted origins per tenant",
+          "body_format": "markdown",
+          "body": "Trusted origins are configured at tenant onboarding and stored in Web Runtime's tenant config. The bridge reads them via the runtime config payload — there is no separate API.\n\nAdd a tenant origin:\n\n```bash\ncurl -X PATCH https://web-runtime.platform.example.com/v1/runtime/tenant-config \\\n  -H \"Authorization: Bearer $ADMIN_TOKEN\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"trusted_origins\": {\n      \"add\": [\"https://cdn.tenant-acme.example.com\"]\n    }\n  }'\n```\n\nThe bridge re-reads the origin set on every `webSdk.init()` call — there is no in-browser cache of the allow-list. To rotate a compromised origin out, remove it from tenant config and force every app instance to call `init()` again (typically: next user navigation).\n\nWildcards are supported in the subdomain position only: `https://*.platform.example.com` is valid; `https://*.example.com` is not. The bridge rejects overly-broad wildcards at registration time."
+        },
+        {
+          "category": "security_model",
+          "title": "Security model",
+          "body_format": "markdown",
+          "body": "Two layers gate every remote load:\n\n1. **Origin allow-listing** (this bridge). The trusted-origin set lives in Web Runtime's tenant config and is enforced in-browser before any network fetch. A non-allow-listed origin in a `component_ref` is rejected at the bridge — the SDK never even attempts the load. This stops a compromised Web Runtime config (or a tenant-admin error) from pointing apps at an attacker-controlled CDN.\n2. **Content Security Policy** (tenant's responsibility, with `config_template.csp_directives` above as the canonical recipe). Browsers refuse to load scripts from origins not in the page's CSP `script-src`. Tenants MUST include every trusted origin in their app shell's CSP at deploy time — the bridge cannot inject CSP headers (that's the host page's responsibility).\n\nThe combination is defense-in-depth: bypassing the bridge's allow-list still requires bypassing the browser's CSP enforcement. A tenant who omits an origin from CSP but adds it to trusted_origins will see remote loads fail at the browser layer with a violation report — the bridge surfaces that as a `runtime-error` notification so the misconfiguration is visible.\n\nThe bridge does NOT itself perform code signing, SRI checks, or origin TLS validation — those are browser responsibilities. Tenants requiring SRI for federated remotes must layer it via their CI pipeline at the time the `component_ref` URL is registered with Web Runtime."
+        }
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "src": "runtime-sdk-mf-bridge",
+      "rel": "composes",
+      "dst": "web-sdk",
+      "properties": {
+        "reason": "The bridge is the runtime arm of Web SDK v3's `runtime` module. SDK boot is sequenced so that bridge registration completes before `init()` resolves; the SDK is the bridge's host environment.",
+        "version_pin": "^3.0.0"
+      }
+    },
+    {
+      "src": "runtime-sdk-mf-bridge",
+      "rel": "composes",
+      "dst": "web-runtime",
+      "properties": {
+        "reason": "The bridge consumes Web Runtime's zone/slot config payload and resolves every `component_ref` it carries. Web Runtime owns the trusted-origins config the bridge enforces against.",
+        "version_pin": ">=1.2.0"
+      }
+    }
+  ]
+}

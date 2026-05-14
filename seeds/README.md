@@ -35,6 +35,8 @@ seeds/
     01-baseline.json                ← zones, slots, menus, audiences, entitlements
   07-owners/                        ← technical + product owners (person entities + edges)
     01-owners.json                  ← 8 people, 12 ownership edges (owned_by + product_owned_by)
+  08-integrations/                  ← integration capabilities — non-trivial glue as first-class nodes
+    01-runtime-sdk-mf-bridge.json   ← module-federation bridge between web-runtime and web-sdk
 ```
 
 ## Conventions
