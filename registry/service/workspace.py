@@ -1836,14 +1836,15 @@ class WorkspaceService:
         Step 2 — Actor-owned workspace cleanup:
           For each workspace owned by the target actor (owner_kind='actor',
           owner_actor_id=target_actor_id):
-            2a. If the workspace is now empty (or had only the target actor's
-                entries, deleted in Step 1): DELETE the workspace row.
-            2b. If other actors' entries still exist: SET owner_actor_id=NULL
-                and archived_at=now so the workspace is preserved for those
-                actors but no longer tied to the purged actor.
+            - If residual entries authored by other actors remain after Step 1,
+              cascade-delete them (counted as additional purged_entries).
+            - DELETE the workspace row. Actor-owned workspaces are single-writer
+              by design; they cannot be preserved past their owner. The owner_kind
+              field is immutable after creation, so there is no path to convert
+              them into tenant-owned artifacts.
 
-        The workspace shares table has been removed; there is no share-revocation
-        step. Role-based access control does not produce actor-scoped share rows.
+        Entries authored by the target actor inside tenant-owned workspaces are
+        deleted by Step 1; the tenant workspaces themselves are untouched.
 
         Audit event: action=rtbf.purge, with counts and requesting admin id.
 
@@ -1917,35 +1918,25 @@ class WorkspaceService:
                 has_other_entries = other_entries_result.first() is not None
 
                 if has_other_entries:
-                    # Step 2b: other actors' content exists — disassociate and
-                    # archive so remaining contributors keep access.
-                    #
-                    # The chk_actor_owner CHECK constraint forbids
-                    # (owner_kind='actor' AND owner_actor_id IS NULL), so the
-                    # purge must also flip owner_kind to 'tenant'. Semantically:
-                    # the workspace becomes a tenant-owned artifact orphaned of
-                    # its original actor, preserved for the remaining contributors.
-                    await session.execute(
+                    # Actor-owned workspaces are single-writer: only the owner
+                    # can author entries. Stray entries authored by other actors
+                    # are residual data that cannot recur, and the workspace
+                    # owner is being erased. Cascade-delete the remaining
+                    # entries (alongside the workspace) so the actor-owned
+                    # container disappears entirely. Count those cascade
+                    # deletions against purged_entries.
+                    cascade_result = await session.execute(
                         text(
-                            """
-                            UPDATE workspaces
-                            SET owner_actor_id = NULL,
-                                owner_kind = 'tenant',
-                                archived_at = :now,
-                                updated_at = :now
-                            WHERE workspace_id = :ws_id
-                            """
+                            "DELETE FROM workspace_entries WHERE workspace_id = :ws_id"
                         ),
-                        {"ws_id": ws_id, "now": now},
-                    )
-                else:
-                    # Step 2a: workspace is empty (or had only the target actor's
-                    # entries, which were deleted in Step 1). Delete the workspace.
-                    await session.execute(
-                        text("DELETE FROM workspaces WHERE workspace_id = :ws_id"),
                         {"ws_id": ws_id},
                     )
-                    purged_workspaces += 1
+                    purged_entries += cascade_result.rowcount or 0
+                await session.execute(
+                    text("DELETE FROM workspaces WHERE workspace_id = :ws_id"),
+                    {"ws_id": ws_id},
+                )
+                purged_workspaces += 1
 
         # Audit outside the transaction so failure in audit does not roll back the
         # purge (the purge itself is the authoritative action; the audit record is

@@ -113,21 +113,30 @@ def _make_entry_row(
     return row
 
 
+def _make_actor_role_row(role_name: str) -> MagicMock:
+    """Build a mock actor_roles row for _load_effective_roles."""
+    row = MagicMock()
+    row.name = role_name
+    return row
+
+
 def _make_session(
     *,
     is_regulated: bool = False,
     entry_row: MagicMock | None = None,
+    actor_roles: list[str] | None = None,
 ) -> AsyncMock:
     """Session mock routing by SQL keyword fragments.
 
     Routes:
       SELECT ... FROM tenants          → regulated flag
       SELECT ... FROM workspaces       → workspace row (same-tenant owner)
-      SELECT ... FROM workspace_shares → no active share (owner path doesn't need one)
+      SELECT ... FROM actor_roles      → role-name rows for _load_effective_roles
       SELECT ... FROM workspace_entries → entry_row for update paths
       INSERT INTO workspace_entries    → no-op
       UPDATE workspace_entries         → no-op
     """
+    _roles = actor_roles if actor_roles is not None else ["producer"]
 
     async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
         sql = " ".join(str(stmt).split())
@@ -143,9 +152,10 @@ def _make_session(
             result.first = MagicMock(return_value=_make_workspace_row())
             return result
 
-        if "FROM workspace_shares" in sql:
-            # No active share — same-tenant owner path needs none.
-            result.first = MagicMock(return_value=None)
+        if "FROM actor_roles" in sql:
+            role_rows = [_make_actor_role_row(r) for r in _roles]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
 
         if "INSERT INTO workspace_entries" in sql:
@@ -314,8 +324,10 @@ async def test_create_body_block_no_insert_issued() -> None:
         if "FROM workspaces" in sql:
             result.first = MagicMock(return_value=_make_workspace_row())
             return result
-        if "FROM workspace_shares" in sql:
-            result.first = MagicMock(return_value=None)
+        if "FROM actor_roles" in sql:
+            role_rows = [_make_actor_role_row("producer")]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
         result.first = MagicMock(return_value=None)
         result.fetchall = MagicMock(return_value=[])
@@ -457,8 +469,10 @@ async def test_update_body_block_raises_422_no_update() -> None:
         if "FROM workspaces" in sql:
             result.first = MagicMock(return_value=_make_workspace_row())
             return result
-        if "FROM workspace_shares" in sql:
-            result.first = MagicMock(return_value=None)
+        if "FROM actor_roles" in sql:
+            role_rows = [_make_actor_role_row("producer")]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
         if "FROM workspace_entries" in sql:
             result.first = MagicMock(return_value=entry_row)

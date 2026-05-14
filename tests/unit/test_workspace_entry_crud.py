@@ -143,26 +143,33 @@ def _make_entry_row(
 # ---------------------------------------------------------------------------
 
 
+def _make_actor_role_row(role_name: str) -> MagicMock:
+    """Build a mock actor_roles row for _load_effective_roles."""
+    row = MagicMock()
+    row.name = role_name
+    return row
+
+
 def _make_session(
     *,
     is_regulated: bool = False,
     workspace_row: MagicMock | None = None,
     entry_row: MagicMock | None = None,
     entry_list_rows: list[MagicMock] | None = None,
-    share_row: MagicMock | None = None,
+    actor_roles: list[str] | None = None,
 ) -> AsyncMock:
     """Build an AsyncMock session whose execute routes by SQL keywords.
 
     Routes:
       SELECT ... FROM tenants                  → tenant row
+      SELECT ... FROM actor_roles (JOIN roles) → role-name rows for _load_effective_roles
       SELECT ... FROM workspaces (single)      → workspace_row (for get_workspace)
-      SELECT ... FROM workspace_shares         → share_row (None = no share; actor
-                                                 is same-tenant owner by default)
       SELECT ... FROM workspace_entries (single) → entry_row
       SELECT ... FROM workspace_entries (list)   → entry_list_rows
       INSERT INTO workspace_entries            → no-op
       UPDATE workspace_entries                 → no-op
     """
+    _roles = actor_roles if actor_roles is not None else ["producer"]
 
     async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
         sql = " ".join(str(stmt).split())
@@ -188,9 +195,10 @@ def _make_session(
             result.first = MagicMock(return_value=ws_row)
             return result
 
-        if "FROM workspace_shares" in sql:
-            # share_row=None means no active share (same-tenant owner path needs none).
-            result.first = MagicMock(return_value=share_row)
+        if "FROM actor_roles" in sql:
+            role_rows = [_make_actor_role_row(r) for r in _roles]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
 
         if "FROM workspace_entries" in sql:
@@ -232,7 +240,7 @@ def _make_service(
     workspace_row: MagicMock | None = None,
     entry_row: MagicMock | None = None,
     entry_list_rows: list[MagicMock] | None = None,
-    share_row: MagicMock | None = None,
+    actor_roles: list[str] | None = None,
     audit_writer: MagicMock | None = None,
     scanner: MagicMock | None = None,
     clock: FakeClock | None = None,
@@ -245,7 +253,7 @@ def _make_service(
             workspace_row=workspace_row,
             entry_row=entry_row,
             entry_list_rows=entry_list_rows,
-            share_row=share_row,
+            actor_roles=actor_roles,
         )
     svc = WorkspaceService(
         session_factory=_make_factory(session),
@@ -756,20 +764,22 @@ async def test_list_entries_kind_filter_with_cursor() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_entry_cross_tenant_no_share_raises_403() -> None:
-    """A cross-tenant actor with no active share cannot create entries.
+async def test_create_entry_cross_tenant_raises_not_found() -> None:
+    """A cross-tenant actor cannot perceive the workspace at all.
 
-    get_workspace enforces the access check. When the actor is from a different
-    tenant and no workspace_shares row exists, the service raises 403 before
-    any INSERT runs.
+    get_workspace enforces tenant isolation as the outermost predicate. When the
+    actor's tenant differs from the workspace's tenant, the service raises
+    WorkspaceNotFound (router maps to 404) so the workspace's existence is not
+    disclosed.
     """
+    from registry.service.workspace import WorkspaceNotFound
+
     # Actor B is from tenant B; the workspace is owned by actor A in tenant A.
     ctx_b = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
     ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
-    # No share row (default) — cross-tenant actor is blocked.
     svc, _ = _make_service(workspace_row=ws_row)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceNotFound):
         await svc.create_entry(
             ctx_b,
             workspace_id=_WORKSPACE_ID,
@@ -778,8 +788,6 @@ async def test_create_entry_cross_tenant_no_share_raises_403() -> None:
             reference_ids=[],
         )
 
-    assert exc_info.value.status_code == 403
-
 
 # ---------------------------------------------------------------------------
 # (t) update_entry by cross-tenant actor with no share → 403
@@ -787,25 +795,27 @@ async def test_create_entry_cross_tenant_no_share_raises_403() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_entry_cross_tenant_no_share_raises_403() -> None:
-    """A cross-tenant actor with no active share cannot update entries.
+async def test_update_entry_cross_tenant_raises_not_found() -> None:
+    """A cross-tenant actor cannot perceive the entry's workspace.
 
-    update_entry calls get_workspace on the entry's owning workspace. When the
-    actor is from a different tenant with no share, get_workspace raises 403.
+    update_entry calls get_workspace on the entry's owning workspace. Tenant
+    isolation is the outermost predicate, so the result is WorkspaceNotFound
+    (router maps to 404) — the workspace's existence is not disclosed across
+    tenants.
     """
+    from registry.service.workspace import WorkspaceNotFound
+
     ctx_b = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
     ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
     entry_row = _make_entry_row(workspace_id=_WORKSPACE_ID)
     svc, _ = _make_service(workspace_row=ws_row, entry_row=entry_row)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceNotFound):
         await svc.update_entry(
             ctx_b,
             entry_id=_ENTRY_ID,
             body_md="Unauthorized update",
         )
-
-    assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------

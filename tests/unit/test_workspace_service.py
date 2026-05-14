@@ -1214,6 +1214,7 @@ async def test_update_workspace_updated_at_reflects_clock() -> None:
 def _make_rtbf_session(
     *,
     entries_rowcount: int = 0,
+    cascade_entries_rowcount: int = 0,
     owned_workspace_ids: list[uuid.UUID] | None = None,
     ws_has_other_entries: bool = False,
     track_calls: list[str] | None = None,
@@ -1221,7 +1222,11 @@ def _make_rtbf_session(
     """Build a session mock that handles the RTBF purge SQL sequence.
 
     owned_workspace_ids — workspaces owned by the target actor.
-    ws_has_other_entries — if True, the "other actors' entries" check returns a row.
+    ws_has_other_entries — if True, the "other actors' entries" check returns a row,
+                  triggering the cascade-delete branch.
+    entries_rowcount — rows reported by Step 1's DELETE (target actor's entries).
+    cascade_entries_rowcount — rows reported by the cascade DELETE of residual
+                  entries in an actor-owned workspace before its row is dropped.
     track_calls — if provided, every SQL verb is appended so tests can assert
                   that specific statements were (or were not) executed.
     """
@@ -1231,6 +1236,13 @@ def _make_rtbf_session(
     async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
         sql = " ".join(str(stmt).split())
         result = MagicMock()
+
+        # Cascade DELETE — residual entries in an actor-owned workspace
+        if "DELETE FROM workspace_entries" in sql and "workspace_id = :ws_id" in sql:
+            _track.append("DELETE_workspace_entries_cascade")
+            result.rowcount = cascade_entries_rowcount
+            result.first = MagicMock(return_value=None)
+            return result
 
         # Step 1 — DELETE entries owned by target actor
         if "DELETE FROM workspace_entries" in sql:
@@ -1293,6 +1305,7 @@ def _make_rtbf_session(
 def _make_rtbf_service(
     *,
     entries_rowcount: int = 0,
+    cascade_entries_rowcount: int = 0,
     owned_workspace_ids: list[uuid.UUID] | None = None,
     ws_has_other_entries: bool = False,
     track_calls: list[str] | None = None,
@@ -1301,6 +1314,7 @@ def _make_rtbf_service(
     """Convenience builder for RTBF-focused WorkspaceService fixtures."""
     session = _make_rtbf_session(
         entries_rowcount=entries_rowcount,
+        cascade_entries_rowcount=cascade_entries_rowcount,
         owned_workspace_ids=owned_workspace_ids,
         ws_has_other_entries=ws_has_other_entries,
         track_calls=track_calls,
@@ -1371,8 +1385,14 @@ async def test_purge_rtbf_only_owned_entries_deletes_workspace() -> None:
 
 
 @pytest.mark.asyncio
-async def test_purge_rtbf_shared_workspace_archives_not_deletes() -> None:
-    """When other actors' entries exist in the workspace, it is archived, not deleted."""
+async def test_purge_rtbf_owned_workspace_with_other_entries_cascade_deletes() -> None:
+    """Residual entries authored by other actors cascade-delete with the actor-owned workspace.
+
+    Actor-owned workspaces are single-writer by design; they cannot survive
+    past their owner. Any stray entries authored by other actors (legacy data
+    shape that cannot recur) are dropped alongside the workspace and counted
+    in purged_entries.
+    """
     ctx = _ctx(roles=["admin"])
     target = uuid.uuid4()
     ws_id = uuid.uuid4()
@@ -1381,18 +1401,20 @@ async def test_purge_rtbf_shared_workspace_archives_not_deletes() -> None:
     svc = _make_rtbf_service(
         entries_rowcount=1,
         owned_workspace_ids=[ws_id],
-        ws_has_other_entries=True,    # another actor has entries → 2b path
+        ws_has_other_entries=True,    # another actor has entries → cascade-delete them
+        cascade_entries_rowcount=2,   # two residual entries authored by other actors
         track_calls=calls,
     )
 
     result = await svc.purge_actor_personal_data(ctx, target_actor_id=target)
 
-    # Workspace not deleted; it was archived and disassociated
-    assert result.purged_workspaces == 0
-    assert result.purged_entries == 1
+    # Workspace deleted; residual entries counted against purged_entries
+    assert result.purged_workspaces == 1
+    assert result.purged_entries == 3   # 1 from Step 1 + 2 from cascade
 
-    assert "UPDATE_workspace_archive" in calls    # 2b path fired
-    assert "DELETE_workspace" not in calls        # workspace row kept
+    assert "DELETE_workspace_entries_cascade" in calls   # cascade fired
+    assert "DELETE_workspace" in calls                   # workspace row deleted
+    assert "UPDATE_workspace_archive" not in calls       # no preservation path
 
 
 # ---------------------------------------------------------------------------
