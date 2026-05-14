@@ -8,7 +8,45 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+# Internal role names accepted by the registry's RBAC layer. Entitlement
+# strings carry external suffix names that must map to one of these four.
+_VALID_INTERNAL_ROLES: frozenset[str] = frozenset({"admin", "producer", "consumer", "auditor"})
+
+
+def _parse_csv_list(value: str | None) -> list[str]:
+    """Parse a comma-separated env value into a stripped, non-empty list."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _parse_role_mapping(value: str | None) -> dict[str, str]:
+    """Parse `EXTERNAL:internal,EXTERNAL:internal,...` into a dict.
+
+    Pairs missing a colon raise ValueError immediately. Whitespace surrounding
+    keys and values is stripped. Duplicate external keys take last-wins —
+    legitimate during LDAP rename rollouts where old and new strings ship
+    concurrently. Semantic validation (non-empty, internal role membership)
+    happens in Settings.__post_init__ so direct-dict construction in tests
+    is also covered.
+    """
+    if not value:
+        return {}
+    result: dict[str, str] = {}
+    for raw_pair in value.split(","):
+        pair = raw_pair.strip()
+        if not pair:
+            continue
+        if ":" not in pair:
+            raise ValueError(
+                f"ENTITLEMENT_ROLE_MAPPING pair {pair!r} is missing the ':' delimiter; "
+                "expected 'EXTERNAL:internal'."
+            )
+        external, internal = pair.split(":", maxsplit=1)
+        result[external.strip()] = internal.strip()
+    return result
 
 
 @dataclass
@@ -97,6 +135,73 @@ class Settings:
     # Set to None to disable alias header acceptance.
     auth_seal_id_header_alias: str | None = "X-SEAL-ID"
 
+    # --- Auth: OIDC validation contract ---
+    # Acceptable `iss` values. Tokens whose issuer is not in this list are
+    # rejected even if their signature validates against a trusted JWKS — this
+    # blocks confused-deputy attacks across applications sharing an IDP.
+    # Empty list = legacy behavior (no issuer allowlisting). Production
+    # deployments should populate this.
+    oidc_issuer_allowlist: list[str] = field(default_factory=list)
+
+    # Acceptable `azp` (authorized party) or `client_id` values. Applies to
+    # all token grant types. Empty list = check skipped (NOT recommended in
+    # production; an empty allowlist allows any token issued by a trusted
+    # JWKS to pass the service-token check).
+    oidc_client_id_allowlist: list[str] = field(default_factory=list)
+
+    # Registry-enforced upper bound on token lifetime: middleware rejects
+    # tokens where `exp - iat` exceeds this bound, or where `iat` is absent.
+    # Defense-in-depth against IDP misconfiguration that could issue
+    # long-lived tokens. Clock skew tolerance ±60s (applied at validation,
+    # not in this setting).
+    oidc_max_token_ttl_seconds: int = 900
+
+    # Set of acceptable `aud` (audience) values. ADFS carries the resource
+    # URI here. Replaces the singular `oidc_expected_audience` for the
+    # multi-resource case. Empty list = legacy behavior (use
+    # `oidc_expected_audience` if set).
+    resource_uri_allowlist: list[str] = field(default_factory=list)
+
+    # --- Auth: Entitlement service ---
+    # Base URL of the enterprise entitlement service. When set, this enables
+    # the entitlement-resolution code path; the entitlement-related fields
+    # below all become required (validated in __post_init__). Empty/unset =
+    # entitlement path is disabled (legacy behavior continues to apply via
+    # auth_mode/auth_claim_source_url).
+    entitlement_service_url: str = ""
+
+    # Environment indicator passed as the `env` query param to the
+    # entitlement service (e.g. `PRD`, `NPD`, `DEV`). Required if
+    # entitlement_service_url is set.
+    entitlement_service_env: str = ""
+
+    # Middle token of the entitlement grammar for this deployment
+    # (`<tenant_slug>_<DISCRIMINATOR>_<ROLE_SUFFIX>`). Per-deployment
+    # config — multiple registry-shaped services may share one entitlement
+    # endpoint with different discriminators. Required if
+    # entitlement_service_url is set; non-empty; no internal whitespace.
+    entitlement_service_discriminator: str = ""
+
+    # External-suffix → internal-role mapping
+    # (e.g. {"ADMIN": "admin", "ADMINISTRATOR": "admin"}). Internal values
+    # must be in {admin, producer, consumer, auditor}. Multiple external
+    # suffixes may map to the same internal role — covers LDAP rename
+    # rollouts with concurrent old/new strings. Required if
+    # entitlement_service_url is set; non-empty.
+    entitlement_role_mapping: dict[str, str] = field(default_factory=dict)
+
+    # HTTP timeouts and retry budget for entitlement-service calls. The
+    # entitlement call sits in the auth hot path on every request, so
+    # bounded failure behavior is required to prevent request thread
+    # pile-up on a slow upstream.
+    entitlement_connect_timeout_ms: int = 250
+    entitlement_read_timeout_ms: int = 1500
+    entitlement_max_retries: int = 1
+
+    # In-process LRU cache size bound for entitlement responses (per process).
+    # TTL is bounded by the JWT's own `exp`, not this setting.
+    entitlement_cache_max_entries: int = 10000
+
     # --- Progression ---
     # TTL (seconds) for the cached progression-definition lookup. The definition
     # describes which capability transitions are allowed. A short TTL keeps the
@@ -112,6 +217,62 @@ class Settings:
                 f"AUTH_CLAIM_SOURCE_URL must be set when AUTH_MODE is {self.auth_mode!r}. "
                 "Provide the base URL of the external claim source, or set AUTH_MODE=oidc."
             )
+
+        # Entitlement service config: required-together. When the entitlement
+        # path is wired (entitlement_service_url is non-empty), every related
+        # field must also be provided and well-formed. Defaults of empty
+        # string / empty dict / empty list are permitted only when the
+        # entitlement path is disabled — this keeps existing tests that
+        # construct minimal Settings(...) without the new fields working,
+        # while still failing loudly at startup the moment the new path is
+        # enabled with incomplete config.
+        if self.entitlement_service_url:
+            if not self.entitlement_service_env:
+                raise ValueError(
+                    "ENTITLEMENT_SERVICE_ENV must be set when ENTITLEMENT_SERVICE_URL is set."
+                )
+            if not self.entitlement_service_discriminator:
+                raise ValueError(
+                    "ENTITLEMENT_SERVICE_DISCRIMINATOR must be set when ENTITLEMENT_SERVICE_URL is set."
+                )
+            if any(c.isspace() for c in self.entitlement_service_discriminator):
+                raise ValueError(
+                    "ENTITLEMENT_SERVICE_DISCRIMINATOR may not contain whitespace; "
+                    f"got {self.entitlement_service_discriminator!r}."
+                )
+            if not self.entitlement_role_mapping:
+                raise ValueError(
+                    "ENTITLEMENT_ROLE_MAPPING must be a non-empty mapping when "
+                    "ENTITLEMENT_SERVICE_URL is set."
+                )
+            for external, internal in self.entitlement_role_mapping.items():
+                if not external:
+                    raise ValueError(
+                        "ENTITLEMENT_ROLE_MAPPING contains an entry with an empty external "
+                        f"key (mapped to {internal!r})."
+                    )
+                if not internal:
+                    raise ValueError(
+                        f"ENTITLEMENT_ROLE_MAPPING entry {external!r} has an empty internal "
+                        "role value."
+                    )
+                if internal not in _VALID_INTERNAL_ROLES:
+                    raise ValueError(
+                        f"ENTITLEMENT_ROLE_MAPPING entry {external!r}:{internal!r} maps to an "
+                        f"unknown internal role; valid roles are "
+                        f"{sorted(_VALID_INTERNAL_ROLES)}."
+                    )
+            mapped_roles = set(self.entitlement_role_mapping.values())
+            uncovered = _VALID_INTERNAL_ROLES - mapped_roles
+            if uncovered:
+                # Soft warning, not a hard failure: a deployment may legitimately
+                # not expose every internal role (e.g. `auditor` may be omitted).
+                logging.getLogger(__name__).warning(
+                    "ENTITLEMENT_ROLE_MAPPING does not map any external suffix to "
+                    "the following internal role(s): %s. Endpoints requiring those "
+                    "roles will be inaccessible.",
+                    sorted(uncovered),
+                )
 
     # --- Rate limiting ---
     default_reads_per_second: int = 100
@@ -211,6 +372,18 @@ def get_settings() -> Settings:
         ),
         auth_tenant_id_header=os.environ.get("AUTH_TENANT_ID_HEADER", "X-Tenant-ID"),
         auth_seal_id_header_alias=os.environ.get("AUTH_SEAL_ID_HEADER_ALIAS", "X-SEAL-ID") or None,
+        oidc_issuer_allowlist=_parse_csv_list(os.environ.get("OIDC_ISSUER_ALLOWLIST")),
+        oidc_client_id_allowlist=_parse_csv_list(os.environ.get("OIDC_CLIENT_ID_ALLOWLIST")),
+        oidc_max_token_ttl_seconds=int(os.environ.get("OIDC_MAX_TOKEN_TTL_SECONDS", "900")),
+        resource_uri_allowlist=_parse_csv_list(os.environ.get("RESOURCE_URI_ALLOWLIST")),
+        entitlement_service_url=os.environ.get("ENTITLEMENT_SERVICE_URL", ""),
+        entitlement_service_env=os.environ.get("ENTITLEMENT_SERVICE_ENV", ""),
+        entitlement_service_discriminator=os.environ.get("ENTITLEMENT_SERVICE_DISCRIMINATOR", ""),
+        entitlement_role_mapping=_parse_role_mapping(os.environ.get("ENTITLEMENT_ROLE_MAPPING")),
+        entitlement_connect_timeout_ms=int(os.environ.get("ENTITLEMENT_CONNECT_TIMEOUT_MS", "250")),
+        entitlement_read_timeout_ms=int(os.environ.get("ENTITLEMENT_READ_TIMEOUT_MS", "1500")),
+        entitlement_max_retries=int(os.environ.get("ENTITLEMENT_MAX_RETRIES", "1")),
+        entitlement_cache_max_entries=int(os.environ.get("ENTITLEMENT_CACHE_MAX_ENTRIES", "10000")),
         progression_definition_cache_ttl_seconds=int(os.environ.get("PROGRESSION_DEFINITION_CACHE_TTL_SECONDS", "60")),
         log_format=os.environ.get("LOG_FORMAT", "json"),
         log_level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
