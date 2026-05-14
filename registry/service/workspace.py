@@ -590,20 +590,23 @@ class WorkspaceService:
         include_archived: bool = False,
         cursor: str | None = None,
     ) -> tuple[list[WorkspaceRef], str | None]:
-        """List workspaces visible to the calling actor.
+        """List workspaces visible to the calling actor within their tenant.
 
-        Visibility is the union of:
-          - Workspaces the calling actor owns (owner_actor_id == ctx.actor_id), OR
-          - Workspaces owned by the calling actor's tenant
-            (tenant_id == ctx.tenant_id — covers team-owned workspaces), OR
-          - Workspaces the calling actor holds an active share on
-            (workspace_shares.grantee_actor_id == ctx.actor_id AND revoked_at IS NULL).
+        Visibility is role-based: the actor must hold at least one role in their
+        tenant, and the workspace must satisfy the perceivability conditions:
+          - Tenant-owned workspaces are visible to any role holder.
+          - Actor-owned workspaces are visible to the owning actor (with producer
+            or consumer role) or to auditors.
+        Cross-tenant visibility does not exist under the role model.
 
         Always excludes soft-deleted rows (t_invalidated_at IS NULL).
         Excludes archived rows when include_archived=False (default).
 
+        The visibility predicate is pushed into SQL via EXISTS subqueries against
+        actor_roles so the DB can use its index and no Python-layer post-filter
+        is needed for correctness or performance.
+
         Cursor is keyset on workspace_id, encoded as base64(json({"id": "<uuid>"})).
-        Decode on input; encode on output as next_cursor.
         """
         cursor_id: uuid.UUID | None = None
         if cursor is not None:
@@ -615,18 +618,32 @@ class WorkspaceService:
             "limit": _DEFAULT_PAGE_SIZE + 1,
         }
 
-        where_clauses: list[str] = [
-            "w.t_invalidated_at IS NULL",
-            """(
-                w.owner_actor_id = :actor_id
-                OR w.tenant_id = :tenant_id
-                OR EXISTS (
-                    SELECT 1 FROM workspace_shares s
-                    WHERE s.workspace_id = w.workspace_id
-                      AND s.grantee_actor_id = :actor_id
-                      AND s.revoked_at IS NULL
+        # Role-based visibility predicate pushed into SQL.
+        # Two branches correspond to the two perceivability rules:
+        #   tenant-owned: any role holder can see it
+        #   actor-owned: auditor sees all; owner sees their own if producer/consumer
+        _role_exists = (
+            "SELECT 1 FROM actor_roles ar "
+            "JOIN roles r ON r.role_id = ar.role_id "
+            "WHERE ar.actor_id = :actor_id AND ar.tenant_id = :tenant_id"
+        )
+        visibility_predicate = f"""(
+            (w.owner_kind = 'tenant'
+             AND EXISTS ({_role_exists}))
+            OR
+            (w.owner_kind = 'actor' AND (
+                EXISTS ({_role_exists} AND r.name = 'auditor')
+                OR (
+                    w.owner_actor_id = :actor_id
+                    AND EXISTS ({_role_exists} AND r.name IN ('producer', 'consumer'))
                 )
-            )""",
+            ))
+        )"""
+
+        where_clauses: list[str] = [
+            "w.tenant_id = :tenant_id",
+            "w.t_invalidated_at IS NULL",
+            visibility_predicate,
         ]
 
         if not include_archived:
@@ -1818,21 +1835,31 @@ class WorkspaceService:
             "limit": _DEFAULT_PAGE_SIZE + 1,
         }
 
-        # Visibility scope: entries in workspaces the actor can access.
-        visibility_cte = """
+        # Visibility CTE: entries in workspaces the actor can perceive.
+        # The EXISTS subqueries push the role check into SQL so the DB index
+        # handles the predicate — no Python-layer post-filter needed.
+        _role_exists = (
+            "SELECT 1 FROM actor_roles ar "
+            "JOIN roles r ON r.role_id = ar.role_id "
+            "WHERE ar.actor_id = :actor_id AND ar.tenant_id = :tenant_id"
+        )
+        visibility_cte = f"""
             visible_workspaces AS (
                 SELECT w.workspace_id
                 FROM workspaces w
-                WHERE w.t_invalidated_at IS NULL
+                WHERE w.tenant_id = :tenant_id
+                  AND w.t_invalidated_at IS NULL
                   AND (
-                      (w.owner_kind = 'actor' AND w.owner_actor_id = :actor_id)
-                      OR w.tenant_id = :tenant_id
-                      OR EXISTS (
-                          SELECT 1 FROM workspace_shares s
-                          WHERE s.workspace_id = w.workspace_id
-                            AND s.grantee_actor_id = :actor_id
-                            AND s.revoked_at IS NULL
-                      )
+                      (w.owner_kind = 'tenant'
+                       AND EXISTS ({_role_exists}))
+                      OR
+                      (w.owner_kind = 'actor' AND (
+                          EXISTS ({_role_exists} AND r.name = 'auditor')
+                          OR (
+                              w.owner_actor_id = :actor_id
+                              AND EXISTS ({_role_exists} AND r.name IN ('producer', 'consumer'))
+                          )
+                      ))
                   )
             )
         """

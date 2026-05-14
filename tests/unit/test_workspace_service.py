@@ -132,15 +132,9 @@ def _make_session(
             result.first = MagicMock(return_value=None)
             return result
 
-        if "FROM actor_roles" in sql:
-            # _load_effective_roles query
-            role_rows = [_make_actor_role_row(r) for r in _roles]
-            result.fetchall = MagicMock(return_value=role_rows)
-            result.__iter__ = MagicMock(return_value=iter(role_rows))
-            return result
-
         if "FROM workspaces w" in sql:
-            # list_workspaces / search_workspaces query
+            # list_workspaces / search_workspaces query (checked before actor_roles to
+            # avoid misrouting queries that embed EXISTS(SELECT FROM actor_roles))
             rows = list_rows if list_rows is not None else []
             result.fetchall = MagicMock(return_value=rows)
             return result
@@ -148,6 +142,13 @@ def _make_session(
         if "FROM workspaces" in sql and "workspace_id = :workspace_id" in sql:
             # get_workspace single-row lookup
             result.first = MagicMock(return_value=workspace_row)
+            return result
+
+        if "FROM actor_roles" in sql:
+            # _load_effective_roles query
+            role_rows = [_make_actor_role_row(r) for r in _roles]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
 
         result.first = MagicMock(return_value=None)
