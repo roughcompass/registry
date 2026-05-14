@@ -94,6 +94,7 @@ async def _seed_tenant(
                 ),
                 {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
             )
+            role_names = ["producer", "consumer", "admin"]
             await session.execute(
                 text(
                     "INSERT INTO api_tokens "
@@ -104,10 +105,36 @@ async def _seed_tenant(
                     "tid": tenant_id,
                     "aid": actor_id,
                     "th": hash_token(raw_token),
-                    "roles": ["producer", "consumer", "admin"],
+                    "roles": role_names,
                     "now": _NOW,
                 },
             )
+            # Workspace authorization reads actor_roles JOIN roles to derive the
+            # effective role set; seed both tables so the perf actor passes the
+            # role-based visibility predicate without going through the public
+            # role-assignment surface.
+            for role_name in role_names:
+                role_id = uuid.uuid4()
+                await session.execute(
+                    text(
+                        "INSERT INTO roles "
+                        "(role_id, tenant_id, name, permissions, created_at) "
+                        "VALUES (:rid, :tid, :name, '{}', :now) "
+                        "ON CONFLICT DO NOTHING"
+                    ),
+                    {"rid": role_id, "tid": tenant_id, "name": role_name, "now": _NOW},
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO actor_roles "
+                        "(actor_id, role_id, tenant_id, granted_at) "
+                        "SELECT :aid, r.role_id, :tid, :now "
+                        "FROM roles r "
+                        "WHERE r.tenant_id = :tid AND r.name = :name "
+                        "ON CONFLICT DO NOTHING"
+                    ),
+                    {"aid": actor_id, "tid": tenant_id, "name": role_name, "now": _NOW},
+                )
     finally:
         await engine.dispose()
     return tenant_id, actor_id, raw_token
