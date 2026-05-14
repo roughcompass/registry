@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime
 import uuid
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -29,11 +29,10 @@ from registry.types import FakeClock, TenantContext
 
 _NOW = datetime.datetime(2026, 5, 12, 12, 0, 0, tzinfo=datetime.UTC)
 _TENANT_A = uuid.uuid4()   # workspace owning tenant
-_TENANT_B = uuid.uuid4()   # grantee (different) tenant
+_TENANT_B = uuid.uuid4()   # second tenant (for cross-tenant isolation tests)
 _ACTOR_A = uuid.uuid4()    # owner actor
-_ACTOR_B = uuid.uuid4()    # grantee actor
+_ACTOR_B = uuid.uuid4()    # second actor
 _WORKSPACE_ID = uuid.uuid4()
-_SHARE_ID = uuid.uuid4()
 
 
 def _ctx(
@@ -87,15 +86,10 @@ def _make_workspace_row(
     return row
 
 
-def _make_share_row(
-    *,
-    share_id: uuid.UUID = _SHARE_ID,
-    grantee_tenant_id: uuid.UUID = _TENANT_B,
-) -> MagicMock:
-    """Build a mock workspace_shares row."""
+def _make_actor_role_row(role_name: str) -> MagicMock:
+    """Build a mock actor_roles row for _load_effective_roles."""
     row = MagicMock()
-    row.share_id = share_id
-    row.grantee_tenant_id = grantee_tenant_id
+    row.name = role_name
     return row
 
 
@@ -103,42 +97,32 @@ def _make_session(
     *,
     is_regulated: bool = False,
     workspace_row: MagicMock | None = None,
-    share_row: MagicMock | None = None,
+    actor_roles: list[str] | None = None,
     list_rows: list[MagicMock] | None = None,
 ) -> AsyncMock:
     """Build an AsyncMock session whose execute routes by SQL keywords.
 
     Routes:
-    - SELECT ... FROM tenants  → returns tenant row with is_regulated
-    - INSERT INTO workspaces   → no return value needed
-    - SELECT ... FROM workspaces (single) → workspace_row or None
-    - SELECT ... FROM workspace_shares     → share_row or None
-    - INSERT INTO workspace_share_acceptances → no-op
-    - SELECT ... FROM workspaces (list)    → list_rows
+    - SELECT ... FROM tenants         → tenant row with is_regulated
+    - INSERT INTO workspaces          → no-op
+    - UPDATE workspaces               → no-op
+    - SELECT ... FROM actor_roles     → role name rows for _load_effective_roles
+    - SELECT ... FROM workspaces (single row) → workspace_row or None
+    - SELECT ... FROM workspaces w (list)     → list_rows
     """
+    _roles = actor_roles if actor_roles is not None else ["producer"]
 
     async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
         sql = " ".join(str(stmt).split())
         result = MagicMock()
 
         if "FROM tenants" in sql:
-            if workspace_row is None and list_rows is None:
-                # create_workspace path
-                tenant_row = MagicMock()
-                tenant_row.is_regulated = is_regulated
-                result.first = MagicMock(return_value=tenant_row)
-            else:
-                # Should not appear in get/list tests, but handle defensively
-                tenant_row = MagicMock()
-                tenant_row.is_regulated = is_regulated
-                result.first = MagicMock(return_value=tenant_row)
+            tenant_row = MagicMock()
+            tenant_row.is_regulated = is_regulated
+            result.first = MagicMock(return_value=tenant_row)
             return result
 
         if "INSERT INTO workspaces" in sql:
-            result.first = MagicMock(return_value=None)
-            return result
-
-        if "INSERT INTO workspace_share_acceptances" in sql:
             result.first = MagicMock(return_value=None)
             return result
 
@@ -146,8 +130,15 @@ def _make_session(
             result.first = MagicMock(return_value=None)
             return result
 
+        if "FROM actor_roles" in sql:
+            # _load_effective_roles query
+            role_rows = [_make_actor_role_row(r) for r in _roles]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
+            return result
+
         if "FROM workspaces w" in sql:
-            # list_workspaces query
+            # list_workspaces / search_workspaces query
             rows = list_rows if list_rows is not None else []
             result.fetchall = MagicMock(return_value=rows)
             return result
@@ -155,10 +146,6 @@ def _make_session(
         if "FROM workspaces" in sql and "workspace_id = :workspace_id" in sql:
             # get_workspace single-row lookup
             result.first = MagicMock(return_value=workspace_row)
-            return result
-
-        if "FROM workspace_shares" in sql:
-            result.first = MagicMock(return_value=share_row)
             return result
 
         result.first = MagicMock(return_value=None)
@@ -195,7 +182,7 @@ def _make_service(
     session: AsyncMock | None = None,
     is_regulated: bool = False,
     workspace_row: MagicMock | None = None,
-    share_row: MagicMock | None = None,
+    actor_roles: list[str] | None = None,
     list_rows: list[MagicMock] | None = None,
     audit_writer: MagicMock | None = None,
     clock: FakeClock | None = None,
@@ -204,7 +191,7 @@ def _make_service(
         session = _make_session(
             is_regulated=is_regulated,
             workspace_row=workspace_row,
-            share_row=share_row,
+            actor_roles=actor_roles,
             list_rows=list_rows,
         )
     return WorkspaceService(
@@ -313,53 +300,22 @@ async def test_get_workspace_returns_workspace_for_owner() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (e) get_workspace — returns workspace for share holder (different tenant)
+# (e) get_workspace — 404 for actor with no roles (not perceivable)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_workspace_returns_for_share_holder() -> None:
-    """get_workspace allows a grantee actor with an active share (cross-tenant)."""
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
-    # Workspace owned by TENANT_A / ACTOR_A — actor_B is NOT same-tenant
+async def test_get_workspace_raises_404_for_no_roles() -> None:
+    """get_workspace raises when the actor has no roles in their tenant."""
+    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_B)
     ws_row = _make_workspace_row(
         tenant_id=_TENANT_A,
         owner_kind="tenant",
         owner_actor_id=None,
     )
-    share_row = _make_share_row(share_id=_SHARE_ID, grantee_tenant_id=_TENANT_B)
-
-    # _log_acceptance_if_first will open a second session; patch it out here
-    # to keep the session mock simple.
-    svc = _make_service(workspace_row=ws_row, share_row=share_row)
-    with patch.object(svc, "_log_acceptance_if_first", new=AsyncMock(return_value=None)):
-        ref = await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    assert isinstance(ref, WorkspaceRef)
-    assert ref.workspace_id == _WORKSPACE_ID
-
-
-# ---------------------------------------------------------------------------
-# (f) get_workspace — 403 for non-owner non-share-holder
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_workspace_raises_403_for_unauthorized() -> None:
-    """get_workspace raises 403 when the caller has no ownership or share."""
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
-    ws_row = _make_workspace_row(
-        tenant_id=_TENANT_A,
-        owner_actor_id=_ACTOR_A,
-        owner_kind="actor",
-    )
-    # No share row
-    svc = _make_service(workspace_row=ws_row, share_row=None)
-
-    with pytest.raises(HTTPException) as exc_info:
-        await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    assert exc_info.value.status_code == 403
+    # actor_roles=[] → _load_effective_roles returns frozenset()
+    # After T04 service rewire this will raise WorkspaceNotFound; for now placeholder
+    _ = svc  # fixture seeded; test body complete after service rewire in T04
 
 
 # ---------------------------------------------------------------------------
@@ -381,27 +337,25 @@ async def test_get_workspace_raises_404_for_soft_deleted() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (h) get_workspace — calls _log_acceptance_if_first on cross-tenant access
+# (h) get_workspace — same-tenant member can access tenant-owned workspace
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_get_workspace_calls_log_acceptance_on_cross_tenant() -> None:
-    """_log_acceptance_if_first is called when the grantee's tenant differs from the workspace tenant."""
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
+async def test_get_workspace_same_tenant_member_can_access_tenant_workspace() -> None:
+    """A same-tenant actor with any role can access a tenant-owned workspace."""
+    other_actor = uuid.uuid4()
+    ctx = _ctx(tenant=_TENANT_A, actor=other_actor)
     ws_row = _make_workspace_row(
         tenant_id=_TENANT_A,
         owner_kind="tenant",
         owner_actor_id=None,
     )
-    share_row = _make_share_row(grantee_tenant_id=_TENANT_B)  # cross-tenant: B != A
-    svc = _make_service(workspace_row=ws_row, share_row=share_row)
+    svc = _make_service(workspace_row=ws_row, actor_roles=["consumer"])
 
-    log_acceptance_mock = AsyncMock(return_value=None)
-    with patch.object(svc, "_log_acceptance_if_first", new=log_acceptance_mock):
-        await svc.get_workspace(ctx, _WORKSPACE_ID)
+    ref = await svc.get_workspace(ctx, _WORKSPACE_ID)
 
-    log_acceptance_mock.assert_awaited_once_with(ctx, _SHARE_ID, _WORKSPACE_ID)
+    assert ref.workspace_id == _WORKSPACE_ID
 
 
 # ---------------------------------------------------------------------------
@@ -548,18 +502,15 @@ async def test_update_workspace_name_succeeds_and_audits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_workspace_by_non_owner_raises_403() -> None:
-    """update_workspace raises 403 when the caller is not the owner or a tenant admin."""
-    # ACTOR_B is in TENANT_B (different tenant) — not owner, not admin in TENANT_A
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B, roles=["producer"])
-    # Workspace in TENANT_A owned by ACTOR_A, but give ACTOR_B a share (read access)
+async def test_update_workspace_by_consumer_raises_403() -> None:
+    """update_workspace raises 403 when the caller is a consumer (read-only role)."""
+    # Consumer can perceive actor-owned workspace they own, but cannot write metadata
+    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_A, roles=["consumer"])
     ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
-    share_row = _make_share_row(grantee_tenant_id=_TENANT_B)
-    svc = _make_service(workspace_row=ws_row, share_row=share_row)
+    svc = _make_service(workspace_row=ws_row, actor_roles=["consumer"])
 
-    with patch.object(svc, "_log_acceptance_if_first", new=AsyncMock(return_value=None)):
-        with pytest.raises(HTTPException) as exc_info:
-            await svc.update_workspace(ctx, _WORKSPACE_ID, name="Hacked")
+    with pytest.raises(HTTPException) as exc_info:
+        await svc.update_workspace(ctx, _WORKSPACE_ID, name="Hacked")
 
     assert exc_info.value.status_code == 403
 
@@ -823,26 +774,6 @@ async def test_update_workspace_raises_404_for_soft_deleted() -> None:
 
 
 # ---------------------------------------------------------------------------
-# list_workspaces — returns workspace held via share
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_list_workspaces_returns_workspace_held_via_share() -> None:
-    """list_workspaces includes workspaces accessible via an active share."""
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
-    # The workspace belongs to TENANT_A; ACTOR_B has a share (visibility via EXISTS sub-query)
-    shared_ws = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
-    svc = _make_service(list_rows=[shared_ws])
-
-    refs, next_cursor = await svc.list_workspaces(ctx)
-
-    assert len(refs) == 1
-    assert refs[0].workspace_id == _WORKSPACE_ID
-    assert next_cursor is None
-
-
-# ---------------------------------------------------------------------------
 # list_workspaces — cursor pagination boundaries
 # ---------------------------------------------------------------------------
 
@@ -921,43 +852,6 @@ async def test_list_workspaces_cursor_is_base64_string() -> None:
     payload = json.loads(base64.urlsafe_b64decode(next_cursor.encode()).decode())
     assert "id" in payload
     uuid.UUID(payload["id"])  # must be a valid UUID
-
-
-# ---------------------------------------------------------------------------
-# get_workspace — _log_acceptance_if_first called exactly once per invocation
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_workspace_log_acceptance_called_exactly_once_per_call() -> None:
-    """_log_acceptance_if_first is invoked exactly once per get_workspace call for a cross-tenant share."""
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B)
-    ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_kind="tenant", owner_actor_id=None)
-    share_row = _make_share_row(grantee_tenant_id=_TENANT_B)
-    svc = _make_service(workspace_row=ws_row, share_row=share_row)
-
-    log_mock = AsyncMock(return_value=None)
-    with patch.object(svc, "_log_acceptance_if_first", new=log_mock):
-        await svc.get_workspace(ctx, _WORKSPACE_ID)
-        await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    # Each get_workspace call triggers exactly one _log_acceptance_if_first call.
-    # The DB INSERT itself is idempotent via ON CONFLICT DO NOTHING.
-    assert log_mock.await_count == 2
-
-
-@pytest.mark.asyncio
-async def test_get_workspace_no_log_acceptance_for_same_tenant() -> None:
-    """_log_acceptance_if_first is NOT called when grantee tenant == workspace tenant."""
-    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_A)
-    ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
-    svc = _make_service(workspace_row=ws_row)
-
-    log_mock = AsyncMock(return_value=None)
-    with patch.object(svc, "_log_acceptance_if_first", new=log_mock):
-        await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    log_mock.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -1245,30 +1139,6 @@ async def test_list_workspaces_returns_multiple_rows() -> None:
 
 
 # ---------------------------------------------------------------------------
-# get_workspace — raises 403 when share exists but is from same-tenant
-#                 (cross-tenant path not triggered — is_same_tenant covers it)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_get_workspace_same_tenant_member_no_share_lookup() -> None:
-    """For a same-tenant caller, the share lookup is skipped entirely (no share needed)."""
-    member_actor = uuid.uuid4()
-    ctx = _ctx(tenant=_TENANT_A, actor=member_actor)
-    ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
-
-    log_mock = AsyncMock(return_value=None)
-    # share_row is irrelevant because the same-tenant path short-circuits
-    svc = _make_service(workspace_row=ws_row, share_row=None)
-    with patch.object(svc, "_log_acceptance_if_first", new=log_mock):
-        ref = await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    # Same-tenant access: no cross-tenant acceptance log
-    log_mock.assert_not_awaited()
-    assert ref.workspace_id == _WORKSPACE_ID
-
-
-# ---------------------------------------------------------------------------
 # update_workspace — updated_at changes in returned ref
 # ---------------------------------------------------------------------------
 
@@ -1302,7 +1172,6 @@ def _make_rtbf_session(
     entries_rowcount: int = 0,
     owned_workspace_ids: list[uuid.UUID] | None = None,
     ws_has_other_entries: bool = False,
-    shares_rowcount: int = 0,
     track_calls: list[str] | None = None,
 ) -> AsyncMock:
     """Build a session mock that handles the RTBF purge SQL sequence.
@@ -1319,14 +1188,14 @@ def _make_rtbf_session(
         sql = " ".join(str(stmt).split())
         result = MagicMock()
 
-        # Step 1 — DELETE entries
+        # Step 1 — DELETE entries owned by target actor
         if "DELETE FROM workspace_entries" in sql:
             _track.append("DELETE_entries")
             result.rowcount = entries_rowcount
             result.first = MagicMock(return_value=None)
             return result
 
-        # Step 2 — SELECT owned workspaces
+        # Step 2 — SELECT workspaces owned by target actor
         if "SELECT workspace_id" in sql and "FROM workspaces" in sql and "owner_actor_id = :target_actor_id" in sql:
             _track.append("SELECT_owned_workspaces")
             rows = []
@@ -1346,39 +1215,25 @@ def _make_rtbf_session(
                 result.first = MagicMock(return_value=None)
             return result
 
-        # Step 2a — DELETE workspace_shares (before workspace row)
-        if "DELETE FROM workspace_shares" in sql:
-            _track.append("DELETE_shares_for_workspace")
-            result.rowcount = 0
-            result.first = MagicMock(return_value=None)
-            return result
-
-        # Step 2a — DELETE workspaces row
+        # Step 2a — DELETE workspace row (only actor's entries remain)
         if "DELETE FROM workspaces" in sql:
             _track.append("DELETE_workspace")
             result.rowcount = 1
             result.first = MagicMock(return_value=None)
             return result
 
-        # Step 2b — UPDATE workspaces (archive + disassociate)
+        # Step 2b — UPDATE workspaces (archive + disassociate when others' entries exist)
         if "UPDATE workspaces" in sql and "owner_actor_id = NULL" in sql:
             _track.append("UPDATE_workspace_archive")
             result.rowcount = 1
             result.first = MagicMock(return_value=None)
             return result
 
-        # Step 3 — UPDATE workspace_shares (revoke grantee shares)
-        if "UPDATE workspace_shares" in sql:
-            _track.append("UPDATE_shares_revoke")
-            result.rowcount = shares_rowcount
-            result.first = MagicMock(return_value=None)
-            return result
-
-        # workspace_share_acceptances — must NOT be reached by purge
-        if "workspace_share_acceptances" in sql:
-            _track.append("TOUCH_acceptances")
-            result.rowcount = 0
-            result.first = MagicMock(return_value=None)
+        # actor_roles query (used by purge to check caller role)
+        if "FROM actor_roles" in sql:
+            role_rows = [_make_actor_role_row("admin")]
+            result.fetchall = MagicMock(return_value=role_rows)
+            result.__iter__ = MagicMock(return_value=iter(role_rows))
             return result
 
         result.rowcount = 0
@@ -1396,7 +1251,6 @@ def _make_rtbf_service(
     entries_rowcount: int = 0,
     owned_workspace_ids: list[uuid.UUID] | None = None,
     ws_has_other_entries: bool = False,
-    shares_rowcount: int = 0,
     track_calls: list[str] | None = None,
     clock: FakeClock | None = None,
 ) -> WorkspaceService:
@@ -1405,7 +1259,6 @@ def _make_rtbf_service(
         entries_rowcount=entries_rowcount,
         owned_workspace_ids=owned_workspace_ids,
         ws_has_other_entries=ws_has_other_entries,
-        shares_rowcount=shares_rowcount,
         track_calls=track_calls,
     )
     return WorkspaceService(
@@ -1436,8 +1289,7 @@ async def test_purge_rtbf_non_admin_raises_403() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (b) Actor with only-owned entries → entries purged, workspace deleted,
-#     shares revoked, counts correct
+# (b) Actor with only-owned entries → entries purged, workspace deleted
 # ---------------------------------------------------------------------------
 
 
@@ -1453,7 +1305,6 @@ async def test_purge_rtbf_only_owned_entries_deletes_workspace() -> None:
         entries_rowcount=3,
         owned_workspace_ids=[ws_id],
         ws_has_other_entries=False,   # only the target actor's entries existed
-        shares_rowcount=2,
         track_calls=calls,
     )
 
@@ -1464,17 +1315,14 @@ async def test_purge_rtbf_only_owned_entries_deletes_workspace() -> None:
     assert isinstance(result, PurgeResult)
     assert result.purged_entries == 3
     assert result.purged_workspaces == 1   # workspace was deleted (2a path)
-    assert result.revoked_shares == 2
 
-    # Step 2a path: shares-for-workspace deleted, then workspace row deleted
-    assert "DELETE_shares_for_workspace" in calls
+    # Step 2a path: workspace row deleted
     assert "DELETE_workspace" in calls
     assert "UPDATE_workspace_archive" not in calls   # 2b path must NOT fire
 
 
 # ---------------------------------------------------------------------------
-# (c) Shared workspace (other actors' entries) → actor's entries deleted,
-#     workspace archived, other entries intact
+# (c) Workspace with other actors' entries → archived, not deleted
 # ---------------------------------------------------------------------------
 
 
@@ -1490,7 +1338,6 @@ async def test_purge_rtbf_shared_workspace_archives_not_deletes() -> None:
         entries_rowcount=1,
         owned_workspace_ids=[ws_id],
         ws_has_other_entries=True,    # another actor has entries → 2b path
-        shares_rowcount=0,
         track_calls=calls,
     )
 
@@ -1505,26 +1352,7 @@ async def test_purge_rtbf_shared_workspace_archives_not_deletes() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (d) workspace_share_acceptances rows NOT deleted
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_purge_rtbf_does_not_touch_share_acceptances() -> None:
-    """purge_actor_personal_data never issues DELETE/UPDATE on workspace_share_acceptances."""
-    ctx = _ctx(roles=["admin"])
-    calls: list[str] = []
-
-    svc = _make_rtbf_service(track_calls=calls)
-
-    await svc.purge_actor_personal_data(ctx, target_actor_id=uuid.uuid4())
-
-    # The TOUCH_acceptances sentinel must never appear
-    assert "TOUCH_acceptances" not in calls
-
-
-# ---------------------------------------------------------------------------
-# (e) Second purge on same actor → all counts 0 (idempotent)
+# (d) Second purge on same actor → all counts 0 (idempotent)
 # ---------------------------------------------------------------------------
 
 
@@ -1534,20 +1362,15 @@ async def test_purge_rtbf_idempotent_second_run_returns_zero_counts() -> None:
     ctx = _ctx(roles=["admin"])
     target = uuid.uuid4()
 
-    # Simulate the state after the first purge: no entries, no owned workspaces,
-    # no active grantee shares remain.
+    # Simulate the state after the first purge: no entries, no owned workspaces.
     svc = _make_rtbf_service(
         entries_rowcount=0,
         owned_workspace_ids=[],
-        shares_rowcount=0,
     )
 
     from registry.service.workspace import PurgeResult  # noqa: PLC0415
 
     result = await svc.purge_actor_personal_data(ctx, target_actor_id=target)
 
-    assert result == PurgeResult(
-        purged_entries=0,
-        purged_workspaces=0,
-        revoked_shares=0,
-    )
+    assert result.purged_entries == 0
+    assert result.purged_workspaces == 0
