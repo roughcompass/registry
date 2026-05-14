@@ -2,14 +2,18 @@
 and entry CRUD.
 
 Every service method that returns workspace content must call get_workspace first.
-get_workspace is the workspace-level visibility chokepoint: it enforces the three
-access paths (owner, same-tenant member, active share holder) and raises 403/404
-before any content is returned.
+get_workspace is the workspace-level visibility chokepoint: it uses role-based
+access control (via actor_roles) to determine whether the requesting actor can
+perceive the workspace. Bypassing get_workspace is how content leaks happen.
 
-Two-layer cross-tenant share enforcement is in play (one layer is DB triggers;
-this file is Layer 2 — service-layer guard). Cross-tenant share grants are
-validated here before any INSERT reaches the database, giving the caller an
-actionable error message before the database trigger fires as a backstop.
+Access model summary:
+- Tenant-owned workspaces: any role holder in the owning tenant can perceive.
+- Actor-owned workspaces: auditors see all; owners can see their own if they
+  hold producer or consumer. No cross-tenant access exists in the role model.
+
+Write gates are enforced by the _assert_can_* helpers immediately after
+get_workspace confirms perceivability. Helpers are pure synchronous functions
+so they can be unit-tested without a DB session.
 
 No EncryptionService parameter. All workspace content is plaintext in this phase.
 Encryption is a retrofit concern for a later phase.
@@ -50,9 +54,6 @@ VALID_OWNER_KINDS: frozenset[str] = frozenset({"actor", "tenant"})
 VALID_ENTRY_KINDS: frozenset[str] = frozenset(
     {"note", "decision", "open_question", "saved_query", "saved_view", "private_annotation"}
 )
-
-# Closed vocabulary — matches CHECK chk_share_role on workspace_shares.role.
-_VALID_SHARE_ROLES: frozenset[str] = frozenset({"reader", "contributor"})
 
 # Maximum page size for list_workspaces; callers above the cap are silently clamped.
 _MAX_PAGE_SIZE = 200
@@ -157,28 +158,6 @@ def _read_body(entry: _HasBodyMd) -> str:
 
 
 # ---------------------------------------------------------------------------
-# ShareRef dataclass
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ShareRef:
-    """Immutable view of a workspace share row returned by share management methods.
-
-    revoked_at is None for active shares. granted_at is the timestamp of the
-    original INSERT. role is the closed-vocabulary role granted to the grantee.
-    """
-
-    share_id: uuid.UUID
-    workspace_id: uuid.UUID
-    grantee_actor_id: uuid.UUID
-    grantee_tenant_id: uuid.UUID
-    role: str
-    granted_at: datetime
-    revoked_at: datetime | None
-
-
-# ---------------------------------------------------------------------------
 # WorkspaceEntryRef dataclass
 # ---------------------------------------------------------------------------
 
@@ -247,14 +226,12 @@ class SearchResult:
 class PurgeResult:
     """Counts returned by purge_actor_personal_data.
 
-    All three counts are 0 on a repeated (idempotent) invocation once the
-    actor's data has already been purged — there is nothing left to delete or
-    revoke.
+    Both counts are 0 on a repeated (idempotent) invocation once the
+    actor's data has already been purged — there is nothing left to delete.
     """
 
     purged_entries: int
     purged_workspaces: int
-    revoked_shares: int
 
 
 # ---------------------------------------------------------------------------
@@ -1646,321 +1623,6 @@ class WorkspaceService:
 
         return refs, next_cursor
 
-    async def grant_share(
-        self,
-        ctx: TenantContext,
-        workspace_id: uuid.UUID,
-        grantee_actor_id: uuid.UUID,
-        grantee_tenant_id: uuid.UUID,
-        role: str,
-    ) -> ShareRef:
-        """Grant an actor access to a workspace.
-
-        Authorization: the caller must be the owning actor or an admin in the
-        workspace's tenant. get_workspace is called first to resolve the workspace
-        and enforce the visibility chokepoint.
-
-        Layer 2 cross-tenant guard: actor-owned workspaces may only be shared
-        within the same tenant. Granting a cross-tenant share on an actor-owned
-        workspace is rejected here before any DB INSERT. The BEFORE INSERT trigger
-        on workspace_shares is the DB-level backstop for the same rule.
-
-        Raises 422 if the workspace is actor-owned and grantee_tenant_id differs
-        from the workspace's owning tenant.
-        Raises 409 if an active (revoked_at IS NULL) share already exists for the
-        given grantee_actor_id on this workspace.
-        Re-granting after revocation is allowed: a new row is inserted (the unique
-        partial index on workspace_shares only covers active rows).
-
-        Audit-logged on success. Returns ShareRef.
-        """
-        workspace = await self.get_workspace(ctx, workspace_id)
-
-        # Write-auth: owning actor or admin in the workspace's tenant.
-        is_owner = (
-            workspace.owner_actor_id is not None
-            and ctx.actor_id == workspace.owner_actor_id
-        )
-        is_tenant_admin = (
-            ctx.tenant_id == workspace.tenant_id and "admin" in ctx.roles
-        )
-        if not (is_owner or is_tenant_admin):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Actor {ctx.actor_id} is not authorized to grant shares on workspace {workspace_id}. "
-                    "Must be the owning actor or an admin in the workspace's tenant."
-                ),
-            )
-
-        # Layer 2 guard: actor-owned workspaces cannot be shared cross-tenant.
-        if workspace.owner_kind == "actor" and grantee_tenant_id != workspace.tenant_id:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    "Actor-owned workspaces may only be shared within the same tenant. "
-                    "To share cross-tenant, the workspace must be tenant-owned."
-                ),
-            )
-
-        # Role validation. The workspace_shares table CHECK constraint enforces this
-        # at the DB layer, but a service-layer check produces a clean 422 with the
-        # vocabulary instead of letting an integrity error bubble up as 500.
-        if role not in _VALID_SHARE_ROLES:
-            raise HTTPException(
-                status_code=422,
-                detail=(
-                    f"Invalid share role {role!r}. "
-                    f"Must be one of: {sorted(_VALID_SHARE_ROLES)}."
-                ),
-            )
-
-        now = self._clock.now()
-        share_id = uuid.uuid4()
-
-        async with self._session_factory() as session, session.begin():
-            # Check for a duplicate active share before inserting.
-            dup_result = await session.execute(
-                text(
-                    """
-                    SELECT share_id
-                    FROM workspace_shares
-                    WHERE workspace_id = :workspace_id
-                      AND grantee_actor_id = :grantee_actor_id
-                      AND revoked_at IS NULL
-                    LIMIT 1
-                    """
-                ),
-                {
-                    "workspace_id": workspace_id,
-                    "grantee_actor_id": grantee_actor_id,
-                },
-            )
-            if dup_result.first() is not None:
-                raise HTTPException(
-                    status_code=409,
-                    detail="An active share already exists for this grantee.",
-                )
-
-            # tenant_id is the owning workspace's tenant — NOT NULL in the DDL.
-            # Read it from the workspace row fetched by get_workspace earlier so
-            # the share's owning-tenant lineage matches the workspace.
-            await session.execute(
-                text(
-                    """
-                    INSERT INTO workspace_shares (
-                        share_id, workspace_id, tenant_id, grantee_actor_id,
-                        grantee_tenant_id, role, granted_at
-                    ) VALUES (
-                        :share_id, :workspace_id, :tenant_id, :grantee_actor_id,
-                        :grantee_tenant_id, :role, :now
-                    )
-                    """
-                ),
-                {
-                    "share_id": share_id,
-                    "workspace_id": workspace_id,
-                    "tenant_id": workspace.tenant_id,
-                    "grantee_actor_id": grantee_actor_id,
-                    "grantee_tenant_id": grantee_tenant_id,
-                    "role": role,
-                    "now": now,
-                },
-            )
-
-        await self._audit_writer.emit(
-            ctx,
-            action=actions.WORKSPACE_SHARE_GRANTED,
-            target_type="workspace_share",
-            target_id=share_id,
-            after={
-                "share_id": str(share_id),
-                "workspace_id": str(workspace_id),
-                "grantee_actor_id": str(grantee_actor_id),
-                "grantee_tenant_id": str(grantee_tenant_id),
-                "role": role,
-            },
-        )
-
-        _log.info(
-            "workspace.share_granted share_id=%s workspace_id=%s grantee_actor=%s grantee_tenant=%s",
-            share_id,
-            workspace_id,
-            grantee_actor_id,
-            grantee_tenant_id,
-        )
-
-        return ShareRef(
-            share_id=share_id,
-            workspace_id=workspace_id,
-            grantee_actor_id=grantee_actor_id,
-            grantee_tenant_id=grantee_tenant_id,
-            role=role,
-            granted_at=now,
-            revoked_at=None,
-        )
-
-    async def revoke_share(
-        self,
-        ctx: TenantContext,
-        share_id: uuid.UUID,
-    ) -> None:
-        """Revoke a workspace share by setting revoked_at.
-
-        Idempotent: if the share is already revoked the call is a no-op —
-        no second audit row is written and no error is raised.
-
-        Authorization: the caller must be the owning actor of the workspace or
-        an admin in the workspace's tenant.
-
-        Raises 404 if the share_id does not exist.
-        """
-        now = self._clock.now()
-
-        async with self._session_factory() as session, session.begin():
-            share_result = await session.execute(
-                text(
-                    """
-                    SELECT
-                        ws.share_id, ws.workspace_id, ws.revoked_at,
-                        w.owner_actor_id, w.tenant_id
-                    FROM workspace_shares ws
-                    JOIN workspaces w ON w.workspace_id = ws.workspace_id
-                    WHERE ws.share_id = :share_id
-                    """
-                ),
-                {"share_id": share_id},
-            )
-            share_row = share_result.first()
-
-            if share_row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Workspace share {share_id} not found.",
-                )
-
-            # Idempotency: already revoked — no-op, no audit.
-            if share_row.revoked_at is not None:
-                _log.info(
-                    "workspace.revoke_share_noop share_id=%s actor=%s (already revoked)",
-                    share_id,
-                    ctx.actor_id,
-                )
-                return
-
-            # Write-auth: owning actor or admin in the workspace's tenant.
-            is_owner = (
-                share_row.owner_actor_id is not None
-                and ctx.actor_id == share_row.owner_actor_id
-            )
-            is_tenant_admin = (
-                ctx.tenant_id == share_row.tenant_id and "admin" in ctx.roles
-            )
-            if not (is_owner or is_tenant_admin):
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"Actor {ctx.actor_id} is not authorized to revoke share {share_id}. "
-                        "Must be the owning actor or an admin in the workspace's tenant."
-                    ),
-                )
-
-            await session.execute(
-                text(
-                    """
-                    UPDATE workspace_shares
-                    SET revoked_at = :now
-                    WHERE share_id = :share_id
-                      AND revoked_at IS NULL
-                    """
-                ),
-                {"now": now, "share_id": share_id},
-            )
-
-        await self._audit_writer.emit(
-            ctx,
-            action=actions.WORKSPACE_SHARE_REVOKED,
-            target_type="workspace_share",
-            target_id=share_id,
-            after={
-                "share_id": str(share_id),
-                "revoked_at": now.isoformat(),
-            },
-        )
-
-        _log.info(
-            "workspace.share_revoked share_id=%s actor=%s",
-            share_id,
-            ctx.actor_id,
-        )
-
-    async def list_shares(
-        self,
-        ctx: TenantContext,
-        workspace_id: uuid.UUID,
-    ) -> list[ShareRef]:
-        """Return active shares (revoked_at IS NULL) for a workspace.
-
-        Authorization: the caller must be the owning actor or an admin in the
-        workspace's tenant. get_workspace is called first to enforce the visibility
-        chokepoint and raise 403/404 before any share data is returned.
-        """
-        workspace = await self.get_workspace(ctx, workspace_id)
-
-        # Write-auth: owning actor or admin in the workspace's tenant.
-        is_owner = (
-            workspace.owner_actor_id is not None
-            and ctx.actor_id == workspace.owner_actor_id
-        )
-        is_tenant_admin = (
-            ctx.tenant_id == workspace.tenant_id and "admin" in ctx.roles
-        )
-        if not (is_owner or is_tenant_admin):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Actor {ctx.actor_id} is not authorized to list shares on workspace {workspace_id}. "
-                    "Must be the owning actor or an admin in the workspace's tenant."
-                ),
-            )
-
-        async with self._session_factory() as session, session.begin():
-            result = await session.execute(
-                text(
-                    """
-                    SELECT
-                        share_id, workspace_id, grantee_actor_id,
-                        grantee_tenant_id, role, granted_at, revoked_at
-                    FROM workspace_shares
-                    WHERE workspace_id = :workspace_id
-                      AND revoked_at IS NULL
-                    ORDER BY granted_at ASC
-                    """
-                ),
-                {"workspace_id": workspace_id},
-            )
-            rows = result.fetchall()
-
-        _log.info(
-            "workspace.list_shares workspace_id=%s actor=%s count=%d",
-            workspace_id,
-            ctx.actor_id,
-            len(rows),
-        )
-
-        return [
-            ShareRef(
-                share_id=row.share_id,
-                workspace_id=row.workspace_id,
-                grantee_actor_id=row.grantee_actor_id,
-                grantee_tenant_id=row.grantee_tenant_id,
-                role=row.role,
-                granted_at=row.granted_at,
-                revoked_at=row.revoked_at,
-            )
-            for row in rows
-        ]
-
     async def search_workspaces(
         self,
         ctx: TenantContext,
@@ -2149,60 +1811,6 @@ class WorkspaceService:
 
         return SearchResult(items=items, next_cursor=next_cursor, total_count=None)
 
-    async def _log_acceptance_if_first(
-        self,
-        ctx: TenantContext,
-        share_id: uuid.UUID,
-        workspace_id: uuid.UUID,
-    ) -> None:
-        """Record first cross-tenant access in workspace_share_acceptances.
-
-        Called from get_workspace when the grantee's tenant differs from the
-        workspace's owning tenant. The INSERT is idempotent via ON CONFLICT DO NOTHING
-        on the unique index (share_id, accepting_actor_id). Access is NOT gated here —
-        the workspace_shares row is the gate; this log is informational.
-
-        In the ENC phase this method will gain encryption-context fields on the
-        acceptance row. The WS-phase schema records (share_id, workspace_id,
-        accepting_actor_id, accepting_tenant_id, accepted_at) only.
-        """
-        acceptance_id = uuid.uuid4()
-        now = self._clock.now()
-
-        try:
-            async with self._session_factory() as session, session.begin():
-                await session.execute(
-                    text(
-                        """
-                        INSERT INTO workspace_share_acceptances (
-                            acceptance_id, share_id, workspace_id,
-                            accepting_actor_id, accepting_tenant_id, accepted_at
-                        ) VALUES (
-                            :acceptance_id, :share_id, :workspace_id,
-                            :actor_id, :tenant_id, :now
-                        )
-                        ON CONFLICT (share_id, accepting_actor_id) DO NOTHING
-                        """
-                    ),
-                    {
-                        "acceptance_id": acceptance_id,
-                        "share_id": share_id,
-                        "workspace_id": workspace_id,
-                        "actor_id": ctx.actor_id,
-                        "tenant_id": ctx.tenant_id,
-                        "now": now,
-                    },
-                )
-        except Exception:
-            # Acceptance logging must never block the read path. Log and continue.
-            _log.warning(
-                "workspace.acceptance_log_failed workspace_id=%s share_id=%s actor=%s",
-                workspace_id,
-                share_id,
-                ctx.actor_id,
-                exc_info=True,
-            )
-
     async def purge_actor_personal_data(
         self,
         ctx: TenantContext,
@@ -2218,7 +1826,7 @@ class WorkspaceService:
 
         Authorization: caller must hold the admin role. Raises 403 otherwise.
 
-        Three-step algorithm:
+        Two-step algorithm:
 
         Step 1 — Delete entries:
           Physical DELETE of workspace_entries WHERE created_by = target_actor_id
@@ -2228,28 +1836,19 @@ class WorkspaceService:
         Step 2 — Actor-owned workspace cleanup:
           For each workspace owned by the target actor (owner_kind='actor',
           owner_actor_id=target_actor_id):
-            2a. If the workspace is now empty OR all remaining entries are
-                from the target actor: DELETE workspace_shares, then DELETE
-                the workspace row.
+            2a. If the workspace is now empty (or had only the target actor's
+                entries, deleted in Step 1): DELETE the workspace row.
             2b. If other actors' entries still exist: SET owner_actor_id=NULL
                 and archived_at=now so the workspace is preserved for those
                 actors but no longer tied to the purged actor.
 
-        Step 3 — Revoke active shares:
-          SET revoked_at=now on all workspace_shares WHERE
-          grantee_actor_id=target_actor_id AND revoked_at IS NULL.
-
-        workspace_share_acceptances rows are intentionally NOT deleted.
-        Those rows are an audit trail of historical cross-tenant access events.
-        The accepting_actor_id is an opaque identifier in an audit record, not
-        content authored by the actor. Retaining them preserves operator audit
-        integrity. If a stricter erasure policy is required, an explicit
-        Step 4 can be added later.
+        The workspace shares table has been removed; there is no share-revocation
+        step. Role-based access control does not produce actor-scoped share rows.
 
         Audit event: action=rtbf.purge, with counts and requesting admin id.
 
-        Returns PurgeResult{purged_entries, purged_workspaces, revoked_shares}.
-        All counts are 0 on a repeated call (idempotent: nothing left to purge).
+        Returns PurgeResult{purged_entries, purged_workspaces}.
+        Both counts are 0 on a repeated call (idempotent: nothing left to purge).
         """
         if "admin" not in ctx.roles:
             raise HTTPException(
@@ -2341,35 +1940,12 @@ class WorkspaceService:
                     )
                 else:
                     # Step 2a: workspace is empty (or had only the target actor's
-                    # entries, which were deleted in Step 1). Delete shares first
-                    # to avoid FK constraint violations, then delete the workspace.
-                    await session.execute(
-                        text(
-                            "DELETE FROM workspace_shares WHERE workspace_id = :ws_id"
-                        ),
-                        {"ws_id": ws_id},
-                    )
+                    # entries, which were deleted in Step 1). Delete the workspace.
                     await session.execute(
                         text("DELETE FROM workspaces WHERE workspace_id = :ws_id"),
                         {"ws_id": ws_id},
                     )
                     purged_workspaces += 1
-
-            # ------------------------------------------------------------------
-            # Step 3: revoke all active shares where the target actor is grantee.
-            # ------------------------------------------------------------------
-            shares_result = await session.execute(
-                text(
-                    """
-                    UPDATE workspace_shares
-                    SET revoked_at = :now
-                    WHERE grantee_actor_id = :target_actor_id
-                      AND revoked_at IS NULL
-                    """
-                ),
-                {"target_actor_id": target_actor_id, "now": now},
-            )
-            revoked_shares: int = shares_result.rowcount or 0
 
         # Audit outside the transaction so failure in audit does not roll back the
         # purge (the purge itself is the authoritative action; the audit record is
@@ -2384,25 +1960,22 @@ class WorkspaceService:
                 "target_actor_id": str(target_actor_id),
                 "purged_entries": purged_entries,
                 "purged_workspaces": purged_workspaces,
-                "revoked_shares": revoked_shares,
                 "requesting_admin": str(ctx.actor_id),
                 "ts": now.isoformat(),
             },
         )
 
         _log.info(
-            "rtbf.purge target=%s admin=%s entries=%d workspaces=%d shares=%d",
+            "rtbf.purge target=%s admin=%s entries=%d workspaces=%d",
             target_actor_id,
             ctx.actor_id,
             purged_entries,
             purged_workspaces,
-            revoked_shares,
         )
 
         return PurgeResult(
             purged_entries=purged_entries,
             purged_workspaces=purged_workspaces,
-            revoked_shares=revoked_shares,
         )
 
 
@@ -2464,7 +2037,6 @@ __all__ = [
     "WorkspaceRef",
     "WorkspaceEntryRef",
     "SearchResult",
-    "ShareRef",
     "PurgeResult",
     "AuditWriter",
     "PIIScanner",
