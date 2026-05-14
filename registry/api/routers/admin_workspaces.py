@@ -5,9 +5,9 @@ Exposes a single endpoint:
   DELETE /v1/admin/actors/{actor_id}/personal-data
 
 This is a hard-delete operation (not a soft-delete). It physically removes all
-workspace content authored by the target actor and revokes any active shares
-granted to that actor. The operation is idempotent: a second invocation on the
-same actor_id returns counts of 0 (nothing left to purge).
+workspace content authored by the target actor. The operation is idempotent:
+a second invocation on the same actor_id returns counts of 0 (nothing left
+to purge).
 
 Requires admin role. The requesting admin is recorded in the audit log.
 
@@ -39,7 +39,6 @@ class PurgeResultResponse(BaseModel):
 
     purged_entries: int
     purged_workspaces: int
-    revoked_shares: int
 
 
 # ---------------------------------------------------------------------------
@@ -102,5 +101,4 @@ async def delete_actor_personal_data(
     return PurgeResultResponse(
         purged_entries=result.purged_entries,
         purged_workspaces=result.purged_workspaces,
-        revoked_shares=result.revoked_shares,
     )

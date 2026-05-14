@@ -12,9 +12,6 @@ Surface:
   GET    /v1/workspaces/{workspace_id}/entries            → 200 {items, next_cursor}
   PATCH  /v1/workspaces/{workspace_id}/entries/{entry_id} → 200 EntryResponse
   DELETE /v1/workspaces/{workspace_id}/entries/{entry_id} → 204 No Content (idempotent)
-  GET    /v1/workspaces/{workspace_id}/shares             → 200 {items: [ShareResponse]}
-  POST   /v1/workspaces/{workspace_id}/shares             → 201 ShareResponse
-  DELETE /v1/workspaces/{workspace_id}/shares/{share_id}  → 204 No Content (idempotent)
 
 PATCH and DELETE are registered via HttpMethodRouter so the
 ``REGISTRY_HTTP_METHODS_MODE`` env var controls whether POST-tunneled
@@ -22,17 +19,19 @@ aliases are also exposed.
 
 Authorization
 -------------
-- All endpoints: any authenticated consumer, producer, or admin can call
-  workspace + entry endpoints. Ownership and visibility enforcement lives in
-  WorkspaceService — the service raises 403/404 before touching any content.
-- PATCH workspace / DELETE workspace: requires the caller to be the owning
-  actor or an admin in the workspace's owning tenant (enforced in service).
-- PATCH entry / DELETE entry: requires the caller to own the workspace or
-  hold an active contributor share (enforced in service).
+- All endpoints: any authenticated actor (consumer, producer, admin, or auditor)
+  can call workspace + entry endpoints. Visibility and write enforcement lives in
+  WorkspaceService — the service raises WorkspaceNotFound/WorkspaceOperationDenied
+  before touching any content. Routers map these to HTTP 404/403.
+- PATCH workspace / DELETE workspace: requires the appropriate role for the
+  workspace's owner_kind (enforced in service via write-gate helpers).
+- PATCH entry / DELETE entry: same role-based write-gate (enforced in service).
 
 Error mapping
 -------------
-- HTTPException(403/404/422) raised by service propagates as-is.
+- WorkspaceNotFound (service) → HTTP 404.
+- WorkspaceOperationDenied (service) → HTTP 403.
+- HTTPException(422) raised by service propagates as-is.
 - Pydantic RequestValidationError → 422 via global handler in main.py.
 
 warnings field
@@ -65,12 +64,19 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
-from registry.api.auth.context import ROLE_ADMIN, ROLE_CONSUMER, ROLE_PRODUCER, require_roles
+from registry.api.auth.context import ROLE_ADMIN, ROLE_AUDITOR, ROLE_CONSUMER, ROLE_PRODUCER, require_roles
 from registry.api.middleware.http_methods import HttpMethodRouter, get_mode_settings
-from registry.service.workspace import SearchResult, ShareRef, WorkspaceEntryRef, WorkspaceRef, WorkspaceService
+from registry.service.workspace import (
+    SearchResult,
+    WorkspaceEntryRef,
+    WorkspaceNotFound,
+    WorkspaceOperationDenied,
+    WorkspaceRef,
+    WorkspaceService,
+)
 from registry.types import SystemClock, TenantContext
 
 # ---------------------------------------------------------------------------
@@ -78,7 +84,9 @@ from registry.types import SystemClock, TenantContext
 # ---------------------------------------------------------------------------
 
 # Any authenticated actor can call workspace and entry endpoints.
-_any_roles = [ROLE_CONSUMER, ROLE_PRODUCER, ROLE_ADMIN]
+# Auditors are included so they can reach read endpoints (perceivability
+# is still enforced by the service's role-based visibility predicate).
+_any_roles = [ROLE_CONSUMER, ROLE_PRODUCER, ROLE_ADMIN, ROLE_AUDITOR]
 _any_required = require_roles(_any_roles)
 
 
@@ -146,17 +154,6 @@ class EntryUpdateRequest(BaseModel):
     )
 
 
-class ShareCreateRequest(BaseModel):
-    """Request body for POST /v1/workspaces/{workspace_id}/shares."""
-
-    grantee_actor_id: uuid.UUID = Field(..., description="UUID of the actor being granted access.")
-    grantee_tenant_id: uuid.UUID = Field(..., description="UUID of the grantee's tenant.")
-    role: str = Field(
-        ...,
-        description="Share role. Must be 'reader' or 'contributor'.",
-    )
-
-
 # ---------------------------------------------------------------------------
 # Pydantic response models
 # ---------------------------------------------------------------------------
@@ -215,29 +212,6 @@ class EntryResponse(BaseModel):
     updated_at: str
     created_by: uuid.UUID | None = None
     warnings: list[WarningEntry] | None = None
-
-    model_config = {"populate_by_name": True}
-
-
-class ShareResponse(BaseModel):
-    """Shape returned by share grant (201) and list (200) endpoints.
-
-    revoked_at is included on the POST 201 response (active shares have None).
-    The GET list endpoint returns only active shares (revoked_at IS NULL), so
-    revoked_at will always be null in that context, but the field is kept for
-    a consistent shape across both endpoints.
-
-    Absent fields: encryption_tier, encryption_status, body_ciphertext, kek_id,
-    wrapped_dek — same exclusions as WorkspaceResponse and EntryResponse.
-    """
-
-    share_id: uuid.UUID
-    workspace_id: uuid.UUID
-    grantee_actor_id: uuid.UUID
-    grantee_tenant_id: uuid.UUID
-    role: str
-    granted_at: str
-    revoked_at: str | None = None
 
     model_config = {"populate_by_name": True}
 
@@ -307,17 +281,19 @@ def _entry_ref_to_response(ref: WorkspaceEntryRef) -> EntryResponse:
     )
 
 
-def _share_ref_to_response(ref: ShareRef) -> ShareResponse:
-    """Convert a ShareRef returned by the service to the REST ShareResponse shape."""
-    return ShareResponse(
-        share_id=ref.share_id,
-        workspace_id=ref.workspace_id,
-        grantee_actor_id=ref.grantee_actor_id,
-        grantee_tenant_id=ref.grantee_tenant_id,
-        role=ref.role,
-        granted_at=ref.granted_at.isoformat(),
-        revoked_at=ref.revoked_at.isoformat() if ref.revoked_at is not None else None,
-    )
+def _ws_exc_to_http(exc: Exception) -> HTTPException:
+    """Convert a WorkspaceAuthError subclass to the correct HTTPException.
+
+    WorkspaceNotFound → 404 (workspace does not exist or is not perceivable).
+    WorkspaceOperationDenied → 403 (workspace is perceivable but the operation
+    is not permitted for this role/ownership combination).
+
+    The two cases are always checked in this order. Raising the wrong code would
+    leak whether a workspace exists to an unauthorised caller.
+    """
+    if isinstance(exc, WorkspaceNotFound):
+        return HTTPException(status_code=404, detail=str(exc))
+    return HTTPException(status_code=403, detail=str(exc))
 
 
 def _search_result_to_response(result: SearchResult) -> dict[str, Any]:
@@ -447,12 +423,15 @@ async def create_workspace(
 
     Invalid owner_kind values are rejected with 422 by the service.
     """
-    ref = await svc.create_workspace(
-        ctx,
-        name=body.name,
-        owner_kind=body.owner_kind,
-        description=body.description,
-    )
+    try:
+        ref = await svc.create_workspace(
+            ctx,
+            name=body.name,
+            owner_kind=body.owner_kind,
+            description=body.description,
+        )
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     response = _workspace_ref_to_response(ref)
     return response.model_dump(exclude_none=True)
 
@@ -576,15 +555,18 @@ async def create_entry(
     Regulated tenants cannot create entries (defense-in-depth against any path
     that bypasses the workspace-create guard).
     """
-    ref = await svc.create_entry(
-        ctx,
-        workspace_id=workspace_id,
-        kind=body.kind,
-        body_md=body.body_md,
-        reference_ids=body.reference_ids,
-        references_jsonb=body.references_jsonb,
-        expires_at=body.expires_at,
-    )
+    try:
+        ref = await svc.create_entry(
+            ctx,
+            workspace_id=workspace_id,
+            kind=body.kind,
+            body_md=body.body_md,
+            reference_ids=body.reference_ids,
+            references_jsonb=body.references_jsonb,
+            expires_at=body.expires_at,
+        )
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     response = _entry_ref_to_response(ref)
     return response.model_dump(exclude_none=True)
 
@@ -616,12 +598,15 @@ async def list_entries(
 
     Cursor-paginated on entry_id ascending.
     """
-    refs, next_cursor = await svc.list_entries(
-        ctx,
-        workspace_id=workspace_id,
-        kind=kind,
-        cursor=cursor,
-    )
+    try:
+        refs, next_cursor = await svc.list_entries(
+            ctx,
+            workspace_id=workspace_id,
+            kind=kind,
+            cursor=cursor,
+        )
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     items = [_entry_ref_to_response(r).model_dump(exclude_none=True) for r in refs]
     return {"items": items, "next_cursor": next_cursor}
 
@@ -641,10 +626,13 @@ async def _get_workspace_handler(
 ) -> dict[str, Any]:
     """Return a single workspace by ID.
 
-    The service enforces visibility: the caller must own the workspace or hold
-    an active share. Raises 403 if not authorized, 404 if not found.
+    The service enforces visibility via role-based access control.
+    WorkspaceNotFound → 404; WorkspaceOperationDenied → 403.
     """
-    ref = await svc.get_workspace(ctx, workspace_id=workspace_id)
+    try:
+        ref = await svc.get_workspace(ctx, workspace_id=workspace_id)
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     response = _workspace_ref_to_response(ref)
     return response.model_dump(exclude_none=True)
 
@@ -664,13 +652,16 @@ async def _update_workspace_handler(
     Pass archived_at=null to un-archive a workspace. Omit a field to leave it
     unchanged (name and description are partial-update safe).
     """
-    ref = await svc.update_workspace(
-        ctx,
-        workspace_id=workspace_id,
-        name=body.name,
-        description=body.description,
-        archived_at=body.archived_at,
-    )
+    try:
+        ref = await svc.update_workspace(
+            ctx,
+            workspace_id=workspace_id,
+            name=body.name,
+            description=body.description,
+            archived_at=body.archived_at,
+        )
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     response = _workspace_ref_to_response(ref)
     return response.model_dump(exclude_none=True)
 
@@ -682,11 +673,14 @@ async def _delete_workspace_handler(
 ) -> Response:
     """Soft-delete a workspace. Idempotent — a second call returns 204 unchanged.
 
-    Authorization: the caller must be the owning actor or an admin in the
-    workspace's owning tenant. The service sets t_invalidated_at and treats
-    already-deleted workspaces as a no-op rather than an error.
+    Authorization is role-based: the write-gate checks owner_kind and
+    effective_roles. WorkspaceNotFound → 404; WorkspaceOperationDenied → 403.
+    Already-deleted workspaces are a no-op rather than an error.
     """
-    await svc.delete_workspace(ctx, workspace_id=workspace_id)
+    try:
+        await svc.delete_workspace(ctx, workspace_id=workspace_id)
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -745,13 +739,16 @@ async def _update_entry_handler(
 
     Only supplied fields are updated; omitted fields retain their current values.
     """
-    ref = await svc.update_entry(
-        ctx,
-        entry_id=entry_id,
-        body_md=body.body_md,
-        reference_ids=body.reference_ids,
-        references_jsonb=body.references_jsonb,
-    )
+    try:
+        ref = await svc.update_entry(
+            ctx,
+            entry_id=entry_id,
+            body_md=body.body_md,
+            reference_ids=body.reference_ids,
+            references_jsonb=body.references_jsonb,
+        )
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     response = _entry_ref_to_response(ref)
     return response.model_dump(exclude_none=True)
 
@@ -764,10 +761,13 @@ async def _delete_entry_handler(
 ) -> Response:
     """Soft-delete a workspace entry. Idempotent — a second call returns 204 unchanged.
 
-    Authorization: the caller must own the workspace or hold an active contributor
-    share. The service enforces this via get_workspace before writing.
+    Authorization is role-based: the write-gate checks owner_kind and
+    effective_roles. WorkspaceNotFound → 404; WorkspaceOperationDenied → 403.
     """
-    await svc.delete_entry(ctx, entry_id=entry_id)
+    try:
+        await svc.delete_entry(ctx, entry_id=entry_id)
+    except (WorkspaceNotFound, WorkspaceOperationDenied) as exc:
+        raise _ws_exc_to_http(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -790,118 +790,14 @@ _entry_mut_mr.add_mutation_route(
 )
 
 
-# ---------------------------------------------------------------------------
-# Share collection endpoints — GET + POST
-# Shares nest under /v1/workspaces/{workspace_id}/shares.
-# ---------------------------------------------------------------------------
-
-share_router = APIRouter(prefix="/v1/workspaces", tags=["workspaces"])
-
-
-@share_router.get(
-    "/{workspace_id}/shares",
-    summary="List active shares on a workspace",
-)
-async def list_shares(
-    workspace_id: Annotated[uuid.UUID, Path(description="Workspace UUID")],
-    svc: WorkspaceService = Depends(get_workspace_service),
-    ctx: TenantContext = Depends(_any_required),
-) -> dict[str, Any]:
-    """List active (not revoked) shares for a workspace.
-
-    Authorization: caller must be the workspace owner or an admin in the
-    workspace's owning tenant. The service enforces this before returning data.
-
-    Returns only shares where revoked_at IS NULL. For full audit history
-    (including revocations), query the audit_log.
-    """
-    refs = await svc.list_shares(ctx, workspace_id=workspace_id)
-    items = [_share_ref_to_response(r).model_dump(exclude_none=True) for r in refs]
-    return {"items": items}
-
-
-@share_router.post(
-    "/{workspace_id}/shares",
-    status_code=status.HTTP_201_CREATED,
-    summary="Grant a share on a workspace",
-)
-async def grant_share(
-    workspace_id: Annotated[uuid.UUID, Path(description="Workspace UUID")],
-    body: ShareCreateRequest,
-    svc: WorkspaceService = Depends(get_workspace_service),
-    ctx: TenantContext = Depends(_any_required),
-) -> dict[str, Any]:
-    """Grant an actor access to a workspace.
-
-    Authorization: caller must be the workspace owner or an admin in the
-    workspace's owning tenant.
-
-    Actor-owned workspaces may only be shared within the same tenant — a
-    cross-tenant share attempt returns 422. Tenant-owned workspaces allow
-    cross-tenant shares.
-
-    A 409 is returned when an active (non-revoked) share already exists for
-    the grantee. Granting after a prior revocation is allowed: a new row is
-    inserted because the unique partial index only covers active rows.
-    """
-    ref = await svc.grant_share(
-        ctx,
-        workspace_id=workspace_id,
-        grantee_actor_id=body.grantee_actor_id,
-        grantee_tenant_id=body.grantee_tenant_id,
-        role=body.role,
-    )
-    response = _share_ref_to_response(ref)
-    return response.model_dump(exclude_none=True)
-
-
-# ---------------------------------------------------------------------------
-# Share mutation endpoint — DELETE via HttpMethodRouter
-# ---------------------------------------------------------------------------
-
-share_mutation_router = APIRouter(prefix="/v1/workspaces", tags=["workspaces"])
-_share_mut_mr = HttpMethodRouter(share_mutation_router, mode=_mode, separator=_sep)
-
-
-async def _delete_share_handler(
-    workspace_id: uuid.UUID,
-    share_id: uuid.UUID,
-    svc: WorkspaceService = Depends(get_workspace_service),
-    ctx: TenantContext = Depends(_any_required),
-) -> Response:
-    """Revoke a workspace share. Idempotent — a second call returns 204 unchanged.
-
-    Authorization: caller must be the workspace owner or an admin in the
-    workspace's owning tenant. The service enforces this before revoking.
-
-    Raises 404 if share_id does not exist.
-    """
-    await svc.revoke_share(ctx, share_id=share_id)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-_share_mut_mr.add_mutation_route(
-    path="/{workspace_id}/shares/{share_id}",
-    action="delete",
-    handler=_delete_share_handler,
-    verb="DELETE",
-    status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
-    summary="Revoke a workspace share (idempotent)",
-)
-
-
 __all__ = [
     "router",
     "mutation_router",
     "entry_mutation_router",
-    "share_router",
-    "share_mutation_router",
     "get_workspace_service",
     "_build_workspace_service",
     "WorkspaceResponse",
     "EntryResponse",
-    "ShareResponse",
     "SearchResponse",
     "WarningEntry",
 ]

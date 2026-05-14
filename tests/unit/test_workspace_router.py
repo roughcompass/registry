@@ -1,6 +1,6 @@
-"""Unit tests for the workspace + entry + share + search REST router.
+"""Unit tests for the workspace + entry + search REST router.
 
-Covers the 13 endpoints in registry/registry/api/routers/workspaces.py:
+Covers the 10 endpoints in registry/registry/api/routers/workspaces.py:
 
   POST   /v1/workspaces
   GET    /v1/workspaces
@@ -12,9 +12,6 @@ Covers the 13 endpoints in registry/registry/api/routers/workspaces.py:
   GET    /v1/workspaces/{workspace_id}/entries
   PATCH  /v1/workspaces/{workspace_id}/entries/{entry_id}
   DELETE /v1/workspaces/{workspace_id}/entries/{entry_id}
-  GET    /v1/workspaces/{workspace_id}/shares
-  POST   /v1/workspaces/{workspace_id}/shares
-  DELETE /v1/workspaces/{workspace_id}/shares/{share_id}
 
 All tests use AsyncMock for the WorkspaceService layer — no Postgres or Docker
 required. The tenant context dependency is overridden with a pre-built fixture.
@@ -29,12 +26,11 @@ Key behaviors verified:
 - Regulated tenant create → 422 with exact error message.
 - List endpoints return {items, next_cursor} shape.
 - DELETE returns 204 (no body).
-- Cross-tenant share on actor-owned workspace → 422.
-- Duplicate active share → 409.
 - Search returns paginated results.
 - Search reference_ids comma-separated parses correctly.
 - Admin RTBF requires admin role → 403 if missing.
-- list_shares returns 200 with items.
+- WorkspaceNotFound from service → 404 HTTP response.
+- WorkspaceOperationDenied from service → 403 HTTP response.
 """
 
 from __future__ import annotations
@@ -53,10 +49,14 @@ from registry.api.routers.workspaces import (
     get_workspace_service,
     mutation_router,
     router,
-    share_mutation_router,
-    share_router,
 )
-from registry.service.workspace import SearchResult, ShareRef, WorkspaceEntryRef, WorkspaceRef
+from registry.service.workspace import (
+    SearchResult,
+    WorkspaceEntryRef,
+    WorkspaceNotFound,
+    WorkspaceOperationDenied,
+    WorkspaceRef,
+)
 from registry.types import TenantContext
 
 # ---------------------------------------------------------------------------
@@ -73,10 +73,6 @@ _REGULATED_TENANT_ERROR = (
     "Workspace creation is not permitted for regulated tenants at encryption tier 'none'. "
     "Configure a higher encryption tier before creating workspaces."
 )
-
-_SHARE_ID = uuid.uuid4()
-_GRANTEE_ACTOR_ID = uuid.uuid4()
-_GRANTEE_TENANT_ID = uuid.uuid4()
 
 # ---------------------------------------------------------------------------
 # Fixtures: WorkspaceRef and WorkspaceEntryRef builders
@@ -128,23 +124,6 @@ def _make_entry_ref(
     )
 
 
-def _make_share_ref(
-    *,
-    share_id: uuid.UUID | None = None,
-    role: str = "reader",
-    revoked_at: datetime.datetime | None = None,
-) -> ShareRef:
-    return ShareRef(
-        share_id=share_id or _SHARE_ID,
-        workspace_id=_WORKSPACE_ID,
-        grantee_actor_id=_GRANTEE_ACTOR_ID,
-        grantee_tenant_id=_GRANTEE_TENANT_ID,
-        role=role,
-        granted_at=_NOW,
-        revoked_at=revoked_at,
-    )
-
-
 # ---------------------------------------------------------------------------
 # App builder
 # ---------------------------------------------------------------------------
@@ -166,12 +145,6 @@ def _build_app(
     update_entry_effect: Exception | None = None,
     update_entry_return: WorkspaceEntryRef | None = None,
     delete_entry_effect: Exception | None = None,
-    # Share methods
-    list_shares_effect: Exception | None = None,
-    list_shares_return: list[ShareRef] | None = None,
-    grant_share_effect: Exception | None = None,
-    grant_share_return: ShareRef | None = None,
-    revoke_share_effect: Exception | None = None,
     # Search
     search_workspaces_return: SearchResult | None = None,
     search_workspaces_effect: Exception | None = None,
@@ -184,8 +157,6 @@ def _build_app(
     app.include_router(router)
     app.include_router(mutation_router)
     app.include_router(entry_mutation_router)
-    app.include_router(share_router)
-    app.include_router(share_mutation_router)
 
     svc = MagicMock()
 
@@ -233,22 +204,6 @@ def _build_app(
         svc.delete_entry = AsyncMock(side_effect=delete_entry_effect)
     else:
         svc.delete_entry = AsyncMock(return_value=None)
-
-    # Share methods
-    if list_shares_effect is not None:
-        svc.list_shares = AsyncMock(side_effect=list_shares_effect)
-    else:
-        svc.list_shares = AsyncMock(return_value=list_shares_return if list_shares_return is not None else [])
-
-    if grant_share_effect is not None:
-        svc.grant_share = AsyncMock(side_effect=grant_share_effect)
-    else:
-        svc.grant_share = AsyncMock(return_value=grant_share_return or _make_share_ref())
-
-    if revoke_share_effect is not None:
-        svc.revoke_share = AsyncMock(side_effect=revoke_share_effect)
-    else:
-        svc.revoke_share = AsyncMock(return_value=None)
 
     # Search
     if search_workspaces_effect is not None:
@@ -727,143 +682,55 @@ def test_entry_response_excludes_encryption_fields() -> None:
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/workspaces/{workspace_id}/shares — list shares
+# Exception mapping: WorkspaceNotFound → 404, WorkspaceOperationDenied → 403
 # ---------------------------------------------------------------------------
 
 
-def test_list_shares_returns_200_with_items() -> None:
-    """GET /v1/workspaces/{id}/shares returns 200 with {items: [ShareResponse]}."""
-    share1 = _make_share_ref(role="reader")
-    share2 = _make_share_ref(share_id=uuid.uuid4(), role="contributor")
-    app = _build_app(list_shares_return=[share1, share2])
-    client = TestClient(app, raise_server_exceptions=True)
-
-    resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}/shares")
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert "items" in body
-    assert len(body["items"]) == 2
-    item = body["items"][0]
-    assert item["share_id"] == str(_SHARE_ID)
-    assert item["workspace_id"] == str(_WORKSPACE_ID)
-    assert item["grantee_actor_id"] == str(_GRANTEE_ACTOR_ID)
-    assert item["grantee_tenant_id"] == str(_GRANTEE_TENANT_ID)
-    assert item["role"] == "reader"
-    assert "granted_at" in item
-    # Encryption fields must be absent
-    for forbidden in ("encryption_tier", "encryption_status", "kek_id", "wrapped_dek"):
-        assert forbidden not in item, f"Forbidden field present: {forbidden}"
-
-
-def test_list_shares_empty_returns_empty_items() -> None:
-    """GET /v1/workspaces/{id}/shares with no active shares returns {items: []}."""
-    app = _build_app(list_shares_return=[])
-    client = TestClient(app, raise_server_exceptions=True)
-
-    resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}/shares")
-    assert resp.status_code == 200
-    assert resp.json()["items"] == []
-
-
-# ---------------------------------------------------------------------------
-# POST /v1/workspaces/{workspace_id}/shares — grant share
-# ---------------------------------------------------------------------------
-
-
-def test_grant_share_happy_path_returns_201() -> None:
-    """POST /v1/workspaces/{id}/shares returns 201 with ShareResponse."""
-    share_ref = _make_share_ref(role="contributor")
-    app = _build_app(grant_share_return=share_ref)
-    client = TestClient(app, raise_server_exceptions=True)
-
-    resp = client.post(
-        f"/v1/workspaces/{_WORKSPACE_ID}/shares",
-        json={
-            "grantee_actor_id": str(_GRANTEE_ACTOR_ID),
-            "grantee_tenant_id": str(_GRANTEE_TENANT_ID),
-            "role": "contributor",
-        },
-    )
-    assert resp.status_code == 201, resp.text
-    body = resp.json()
-    assert body["share_id"] == str(_SHARE_ID)
-    assert body["workspace_id"] == str(_WORKSPACE_ID)
-    assert body["role"] == "contributor"
-    assert "granted_at" in body
-
-
-def test_grant_share_cross_tenant_actor_owned_returns_422() -> None:
-    """Cross-tenant share on actor-owned workspace raises 422 from service (Layer 2 guard)."""
-    other_tenant_id = uuid.uuid4()
+def test_get_workspace_workspace_not_found_returns_404() -> None:
+    """GET /v1/workspaces/{id}: WorkspaceNotFound from service maps to 404."""
     app = _build_app(
-        grant_share_effect=HTTPException(
-            status_code=422,
-            detail=(
-                "Actor-owned workspaces may only be shared within the same tenant. "
-                "To share cross-tenant, the workspace must be tenant-owned."
-            ),
-        )
+        get_workspace_effect=WorkspaceNotFound("workspace not found"),
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}")
+    assert resp.status_code == 404
+
+
+def test_update_workspace_operation_denied_returns_403() -> None:
+    """PATCH /v1/workspaces/{id}: WorkspaceOperationDenied from service maps to 403."""
+    app = _build_app(
+        update_workspace_effect=WorkspaceOperationDenied("operation denied"),
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.patch(f"/v1/workspaces/{_WORKSPACE_ID}", json={"name": "New Name"})
+    assert resp.status_code == 403
+
+
+def test_delete_workspace_workspace_not_found_returns_404() -> None:
+    """DELETE /v1/workspaces/{id}: WorkspaceNotFound from service maps to 404."""
+    app = _build_app(
+        delete_workspace_effect=WorkspaceNotFound("workspace not found"),
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.delete(f"/v1/workspaces/{_WORKSPACE_ID}")
+    assert resp.status_code == 404
+
+
+def test_create_entry_operation_denied_returns_403() -> None:
+    """POST /v1/workspaces/{id}/entries: WorkspaceOperationDenied from service maps to 403."""
+    app = _build_app(
+        create_entry_effect=WorkspaceOperationDenied("operation denied"),
     )
     client = TestClient(app, raise_server_exceptions=False)
 
     resp = client.post(
-        f"/v1/workspaces/{_WORKSPACE_ID}/shares",
-        json={
-            "grantee_actor_id": str(_GRANTEE_ACTOR_ID),
-            "grantee_tenant_id": str(other_tenant_id),
-            "role": "reader",
-        },
+        f"/v1/workspaces/{_WORKSPACE_ID}/entries",
+        json={"kind": "note", "body_md": "Some body."},
     )
-    assert resp.status_code == 422
-    text = resp.text
-    assert "actor-owned" in text.lower() or "same tenant" in text.lower()
-
-
-def test_grant_share_duplicate_active_share_returns_409() -> None:
-    """POST /v1/workspaces/{id}/shares when active share already exists returns 409."""
-    app = _build_app(
-        grant_share_effect=HTTPException(
-            status_code=409,
-            detail="An active share already exists for this grantee.",
-        )
-    )
-    client = TestClient(app, raise_server_exceptions=False)
-
-    resp = client.post(
-        f"/v1/workspaces/{_WORKSPACE_ID}/shares",
-        json={
-            "grantee_actor_id": str(_GRANTEE_ACTOR_ID),
-            "grantee_tenant_id": str(_GRANTEE_TENANT_ID),
-            "role": "reader",
-        },
-    )
-    assert resp.status_code == 409
-    assert "active share" in resp.json().get("detail", "").lower()
-
-
-# ---------------------------------------------------------------------------
-# DELETE /v1/workspaces/{workspace_id}/shares/{share_id} — revoke share
-# ---------------------------------------------------------------------------
-
-
-def test_revoke_share_returns_204() -> None:
-    """DELETE /v1/workspaces/{id}/shares/{share_id} returns 204 No Content."""
-    app = _build_app()
-    client = TestClient(app, raise_server_exceptions=True)
-
-    resp = client.delete(f"/v1/workspaces/{_WORKSPACE_ID}/shares/{_SHARE_ID}")
-    assert resp.status_code == 204
-    assert resp.content == b""
-
-
-def test_revoke_share_idempotent_second_call_returns_204() -> None:
-    """Second DELETE on same share returns 204 — service no-op path."""
-    app = _build_app()
-    client = TestClient(app, raise_server_exceptions=True)
-
-    client.delete(f"/v1/workspaces/{_WORKSPACE_ID}/shares/{_SHARE_ID}")
-    resp = client.delete(f"/v1/workspaces/{_WORKSPACE_ID}/shares/{_SHARE_ID}")
-    assert resp.status_code == 204
+    assert resp.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -992,7 +859,7 @@ def test_admin_rtbf_with_admin_role_returns_200() -> None:
     admin_app = FastAPI()
     admin_app.include_router(admin_router)
 
-    purge_result = PurgeResult(purged_entries=3, purged_workspaces=1, revoked_shares=2)
+    purge_result = PurgeResult(purged_entries=3, purged_workspaces=1)
     admin_svc = MagicMock()
     admin_svc.purge_actor_personal_data = AsyncMock(return_value=purge_result)
 
@@ -1012,4 +879,4 @@ def test_admin_rtbf_with_admin_role_returns_200() -> None:
     body = resp.json()
     assert body["purged_entries"] == 3
     assert body["purged_workspaces"] == 1
-    assert body["revoked_shares"] == 2
+    assert "revoked_shares" not in body
