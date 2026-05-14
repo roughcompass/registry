@@ -55,11 +55,12 @@ include = ["registry*", "sync*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-# Pin to "session" so the existing module-scoped async fixtures (testcontainers
-# Postgres, MCP harnesses) continue to share their loop with function-scoped
-# tests instead of failing with ScopeMismatch. The fixture's scope still wins
-# when narrower; this only sets the default for fixtures that don't declare one.
-asyncio_default_fixture_loop_scope = "session"
+# Leave asyncio_default_fixture_loop_scope unset. Tests mix module-scoped
+# async fixtures with function-scoped tests, and neither "function" nor
+# "session" satisfies both: "function" causes ScopeMismatch on module
+# fixtures, "session" causes "Future attached to a different loop" on
+# per-test asyncpg engines. Each async fixture declares its own scope
+# explicitly, which gives the right behavior in every case.
 testpaths = ["tests"]
 filterwarnings = [
     # pytest-asyncio deprecated the event_loop-fixture override pattern; our

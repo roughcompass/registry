@@ -302,6 +302,13 @@ class EntityService:
                     # or raises ProgressionError (HTTP 422).
 
             for key, value in updates.items():
+                # `name` lives on the Entity row itself; every other key is a
+                # bi-temporal attribute. Write through to entity.name when
+                # the update touches it so subsequent get_full_capability /
+                # to_response reflects the new value.
+                if key == "name":
+                    entity.name = value
+                    continue
                 # Close the currently-open row for this key, if any.
                 current = existing_by_key.get(key)
                 if current is not None:

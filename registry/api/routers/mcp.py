@@ -30,6 +30,7 @@ available in mcp<2.0.  The Starlette sub-app exposes:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -1224,6 +1225,19 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
     """
     sse_transport = SseServerTransport("/messages/")
 
+    async def _poll_disconnect(request: Request) -> None:
+        """Return as soon as the client closes the connection.
+
+        Polls ``request.is_disconnected()`` in a tight loop so the caller can
+        race this against the MCP server run and cancel it on disconnect.
+        Starlette's ``is_disconnected()`` is non-blocking (it peeks at the
+        receive channel with an immediately-cancelled CancelScope), so the
+        loop itself is O(1) per iteration and yields to the event loop on
+        each ``asyncio.sleep(0)`` call.
+        """
+        while not await request.is_disconnected():
+            await asyncio.sleep(0.5)
+
     async def handle_sse(request: Request) -> None:
         # Extract Bearer token from request headers and store in ContextVar
         # so every tool call invoked during this SSE session can read it.
@@ -1231,11 +1245,41 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
         token_var_token = _request_token.set(raw_token)
         try:
             async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
-                await server._mcp_server.run(
-                    streams[0],
-                    streams[1],
-                    server._mcp_server.create_initialization_options(),
+                # Race the MCP server against a disconnect watchdog.  Without
+                # this, a client that drops the SSE connection leaves the server
+                # socket in CLOSE_WAIT forever because server._mcp_server.run()
+                # never returns — it is blocked waiting for the next JSON-RPC
+                # message on the POST channel, which will never arrive.
+                mcp_task = asyncio.ensure_future(
+                    server._mcp_server.run(
+                        streams[0],
+                        streams[1],
+                        server._mcp_server.create_initialization_options(),
+                    )
                 )
+                disconnect_task = asyncio.ensure_future(_poll_disconnect(request))
+                try:
+                    done, pending = await asyncio.wait(
+                        {mcp_task, disconnect_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    # Re-raise any exception from the MCP run task so errors
+                    # are not silently swallowed.
+                    for task in done:
+                        if task is mcp_task and not task.cancelled():
+                            exc = task.exception()
+                            if exc is not None:
+                                raise exc
+                except asyncio.CancelledError:
+                    mcp_task.cancel()
+                    disconnect_task.cancel()
+                    raise
         finally:
             _request_token.reset(token_var_token)
 

@@ -1,58 +1,150 @@
 {
   "schema_version": 1,
   "name": "salt-ds-v1.44",
-  "description": "Salt Design System v1.44.0 — adds FilterBar + StepperInput; Toast gains placement prop; ComboBox value-selection now fires on Enter-when-highlighted.",
+  "description": "Salt Design System v1.44.0 \u2014 adds 1 component(s) over v1.43: salt-slider.",
   "released_at": "2025-12-01T00:00:00Z",
   "entities": [
     {
-      "name": "salt-filter-bar",
+      "name": "salt-slider",
       "entity_type": "concept",
       "parent": "salt-design-system",
       "valid_from": "2025-12-01T00:00:00Z",
       "attributes": {
-        "display_name": "FilterBar",
-        "category": "data",
-        "summary": "Stackable filter chips with type-ahead value selection for table / list filtering.",
-        "interface": {
-          "package": "@salt-ds/lab",
-          "import_name": "FilterBar",
-          "notes": "Shipped from @salt-ds/lab in v1.44 while the API stabilises; promotion to @salt-ds/core is planned for the 2.0 line.",
-          "props": [
-            {"name": "filters",        "type": "Filter[]",                                 "required": true,  "description": "Filter definitions; each carries a key, label, and value-source."},
-            {"name": "selectedValues", "type": "Record<string, unknown>",                  "required": false, "description": "Controlled selection; pair with onChange."},
-            {"name": "onChange",       "type": "(next: Record<string, unknown>) => void",  "required": false},
-            {"name": "stackingMode",   "type": "'horizontal' | 'wrap'",                    "required": false, "default": "'horizontal'"},
-            {"name": "size",           "type": "'compact' | 'standard'",                   "required": false, "default": "'standard'"},
-            {"name": "clearable",      "type": "boolean",                                  "required": false, "default": "true"},
-            {"name": "disabled",       "type": "boolean",                                  "required": false, "default": "false"}
-          ]
-        }
-      }
-    },
-    {
-      "name": "salt-stepper-input",
-      "entity_type": "concept",
-      "parent": "salt-design-system",
-      "valid_from": "2025-12-01T00:00:00Z",
-      "attributes": {
-        "display_name": "StepperInput",
+        "display_name": "Slider",
         "category": "form-controls",
-        "summary": "Numeric input with increment / decrement buttons; honours min/max/step props.",
+        "summary": "Salt Slider component (@salt-ds/core, v1.44.0).",
         "interface": {
           "package": "@salt-ds/core",
-          "import_name": "StepperInput",
+          "import_name": "Slider",
           "props": [
-            {"name": "value",            "type": "number | string",                          "required": false},
-            {"name": "defaultValue",     "type": "number | string",                          "required": false, "default": "0"},
-            {"name": "min",              "type": "number",                                    "required": false, "default": "-Infinity"},
-            {"name": "max",              "type": "number",                                    "required": false, "default": "Infinity"},
-            {"name": "step",             "type": "number",                                    "required": false, "default": "1"},
-            {"name": "block",            "type": "number",                                    "required": false, "default": "10", "description": "Larger step used when shift-clicking the buttons."},
-            {"name": "decimalPlaces",    "type": "number",                                    "required": false, "default": "0"},
-            {"name": "disabled",         "type": "boolean",                                   "required": false, "default": "false"},
-            {"name": "readOnly",         "type": "boolean",                                   "required": false, "default": "false"},
-            {"name": "validationStatus", "type": "'error' | 'warning' | 'success'",          "required": false},
-            {"name": "onChange",         "type": "(event: ChangeEvent<HTMLInputElement>) => void", "required": false}
+            {
+              "name": "accessibleMaxText",
+              "type": "string",
+              "required": false,
+              "description": "Accessible text to announce maximum value label."
+            },
+            {
+              "name": "accessibleMinText",
+              "type": "string",
+              "required": false,
+              "description": "Accessible text to announce minimum value label."
+            },
+            {
+              "name": "constrainLabelPosition",
+              "type": "boolean",
+              "required": false,
+              "default": "false",
+              "description": "When minimum and maximum labels are defined, ensure they are confined within the boundary of the slider."
+            },
+            {
+              "name": "decimalPlaces",
+              "type": "number",
+              "required": false,
+              "default": "2",
+              "description": "The number of allowed decimal places"
+            },
+            {
+              "name": "defaultValue",
+              "type": "number",
+              "required": false,
+              "default": "min + (max - min) / 2,",
+              "description": "The default value. Use when the component is not controlled."
+            },
+            {
+              "name": "disabled",
+              "type": "boolean",
+              "required": false,
+              "description": "Disable the slider."
+            },
+            {
+              "name": "format",
+              "type": "(value: number) => string | number",
+              "required": false,
+              "description": "A callback to format the display value in the tooltip, min and max labels and the `aria-valuetext` attribute."
+            },
+            {
+              "name": "marks",
+              "type": "{ label: string; value: number; }[]",
+              "required": false,
+              "description": "Marks that are displayed under the track."
+            },
+            {
+              "name": "max",
+              "type": "number",
+              "required": false,
+              "default": "10",
+              "description": "Maximum slider value."
+            },
+            {
+              "name": "min",
+              "type": "number",
+              "required": false,
+              "default": "0",
+              "description": "Minimum slider value."
+            },
+            {
+              "name": "maxLabel",
+              "type": "string",
+              "required": false,
+              "description": "Label for maximum value."
+            },
+            {
+              "name": "minLabel",
+              "type": "string",
+              "required": false,
+              "description": "Label for the minimum value."
+            },
+            {
+              "name": "onChange",
+              "type": "(event: Event, value: number) => void",
+              "required": false,
+              "description": "Callback called when slider value is changed. It provides a generic event and the current value of the slider."
+            },
+            {
+              "name": "onChangeEnd",
+              "type": "(event: Event, value: number) => void",
+              "required": false,
+              "description": "Callback called when the slider is stopped from being dragged or its value is changed from the keyboard. It provides a generic event and the current value of the slider."
+            },
+            {
+              "name": "restrictToMarks",
+              "type": "boolean",
+              "required": false,
+              "description": "Restrict slider value to marks only. The step will be ignored."
+            },
+            {
+              "name": "showTicks",
+              "type": "boolean",
+              "required": false,
+              "description": "Show visual ticks above the marks."
+            },
+            {
+              "name": "showTooltip",
+              "type": "boolean",
+              "required": false,
+              "default": "true",
+              "description": "Show the slider value in a tooltip when the thumb is hovered."
+            },
+            {
+              "name": "step",
+              "type": "number",
+              "required": false,
+              "default": "1",
+              "description": "Minimum interval the slider thumb can move."
+            },
+            {
+              "name": "stepMultiplier",
+              "type": "number",
+              "required": false,
+              "default": "2",
+              "description": "Maximum interval the slider thumb can move when using PageUp and PageDown keys."
+            },
+            {
+              "name": "value",
+              "type": "number",
+              "required": false,
+              "description": "Value of the slider, to be used when in a controlled state."
+            }
           ]
         }
       }
@@ -64,7 +156,7 @@
       "category": "release_note",
       "title": "v1.44.0 release notes",
       "body_format": "markdown",
-      "body": "v1.44.0 — Two new components: **FilterBar** (`salt-filter-bar`) for table / list filtering, and **StepperInput** (`salt-stepper-input`) for numeric step controls. Toast gains a `placement` prop (`top-right` | `bottom-right` | `top-center` | `bottom-center`); default `top-right` matches prior visual behaviour.\n\nNon-breaking: ComboBox value-selection events now also fire on Enter-when-highlighted (previously only mouse click + Tab). Existing handlers continue to work; opt out via `selectOnEnter={false}`."
+      "body": "v1.44.0 \u2014 Incremental polish across form controls and overlays. See the diff against v1.43 for the new components surfaced under /v1/capabilities/salt-design-system?as_of=<v1.44-release>."
     }
   ]
 }

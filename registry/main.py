@@ -571,12 +571,24 @@ def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
 
 
 def _init_otel(settings: Settings) -> None:
-    """Initialize the OTel SDK with OTLP HTTP export. No-op when otlp_endpoint is None."""
+    """Initialize the OTel SDK with OTLP HTTP export. No-op when otlp_endpoint is None.
+
+    The exporter is given an explicit per-attempt timeout so that a slow or
+    unreachable collector cannot block the BatchSpanProcessor worker thread for
+    longer than the configured limit.  The default (10 s) plus exponential-backoff
+    retries (up to 64 s total) are too long: a stalling export run fills the span
+    queue and eventually causes span drops while the worker is occupied.  A short
+    timeout fails fast, lets the worker move on, and keeps queue pressure low.
+    """
     if settings.otlp_endpoint is None:
         return
     resource = Resource.create({"service.name": settings.service_name})
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otlp_endpoint)))
+    exporter = OTLPSpanExporter(
+        endpoint=settings.otlp_endpoint,
+        timeout=settings.otlp_exporter_timeout_s,
+    )
+    provider.add_span_processor(BatchSpanProcessor(exporter))
     trace.set_tracer_provider(provider)
 
 

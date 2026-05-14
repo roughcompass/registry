@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "salt-ds-v1.45",
-  "description": "Salt Design System v1.45.0 — DataGrid virtualization + column pinning; Dialog focus-trap fix for nested Drawer; new density-touch token; ComboBox controlled-open. Also defines the package-level interface and the current_version bitemporal history so time-travel queries return the right version label.",
+  "description": "Salt Design System v1.45.0 \u2014 adds 1 component(s) over v1.44, plus the package-level interface (entry points, provider props, install), 28 scraped patterns, 6 scraped guides, and the current_version bitemporal history for time-travel demos.",
   "released_at": "2026-01-15T00:00:00Z",
   "entities": [
     {
@@ -19,28 +19,118 @@
           },
           "framework": "react",
           "language": "typescript",
-          "module_format": ["esm", "cjs"],
+          "module_format": [
+            "esm",
+            "cjs"
+          ],
           "tree_shakeable": true,
           "side_effects": false,
           "side_packages": [
-            {"name": "@salt-ds/theme", "summary": "Design tokens (colour, density, corner-radius, typography) as CSS variables."},
-            {"name": "@salt-ds/icons", "summary": "Salt icon set — tree-shakeable React components."},
-            {"name": "@salt-ds/lab",   "summary": "Pre-stable components incubating before promotion to @salt-ds/core."}
+            {
+              "name": "@salt-ds/theme",
+              "summary": "Design tokens (colour, density, corner-radius, typography) as CSS variables."
+            },
+            {
+              "name": "@salt-ds/icons",
+              "summary": "Salt icon set \u2014 tree-shakeable React components."
+            },
+            {
+              "name": "@salt-ds/data-grid",
+              "summary": "Virtualised data grid, versioned independently of @salt-ds/core."
+            },
+            {
+              "name": "@salt-ds/lab",
+              "summary": "Pre-stable components incubating before promotion to @salt-ds/core."
+            }
           ],
           "provider": {
             "name": "SaltProvider",
             "summary": "Wrap your app to apply tokens and density. Nested providers override.",
             "props": [
-              {"name": "density", "type": "'low' | 'medium' | 'high' | 'touch'", "required": false, "default": "'medium'"},
-              {"name": "mode",    "type": "'light' | 'dark'",                    "required": false, "default": "'light'"},
-              {"name": "theme",   "type": "string | string[]",                   "required": false, "description": "Theme name(s) loaded from @salt-ds/theme."}
+              {
+                "name": "density",
+                "type": "'low' | 'medium' | 'high' | 'touch'",
+                "required": false,
+                "default": "'medium'"
+              },
+              {
+                "name": "mode",
+                "type": "'light' | 'dark'",
+                "required": false,
+                "default": "'light'"
+              },
+              {
+                "name": "theme",
+                "type": "string | string[]",
+                "required": false,
+                "description": "Theme name(s) loaded from @salt-ds/theme."
+              }
             ]
           },
           "entry_points": [
-            "Button", "IconButton", "Input", "Checkbox", "RadioButton", "Switch",
-            "ComboBox", "FormField", "Card", "Tabs", "Accordion", "FlexLayout",
-            "Dialog", "Drawer", "Tooltip", "Toast", "DataGrid",
-            "FilterBar", "StepperInput"
+            "Accordion",
+            "Avatar",
+            "Badge",
+            "Banner",
+            "Button",
+            "Card",
+            "Checkbox",
+            "CircularProgress",
+            "Dialog",
+            "Divider",
+            "Drawer",
+            "FileDropZone",
+            "FormField",
+            "Grid",
+            "Input",
+            "InteractableCard",
+            "Link",
+            "LinkCard",
+            "MenuBase",
+            "MultilineInput",
+            "NavigationItem",
+            "Option",
+            "Overlay",
+            "Pagination",
+            "Panel",
+            "ParentChildLayout",
+            "PillInput",
+            "RadioButton",
+            "Scrim",
+            "Slider",
+            "Spinner",
+            "StatusAdornment",
+            "StatusIndicator",
+            "Stepper",
+            "Switch",
+            "Tag",
+            "Toast",
+            "ToggleButton",
+            "ToggleButtonGroup",
+            "Tooltip"
+          ]
+        }
+      }
+    },
+    {
+      "name": "salt-stepper",
+      "entity_type": "concept",
+      "parent": "salt-design-system",
+      "valid_from": "2026-01-15T00:00:00Z",
+      "attributes": {
+        "display_name": "Stepper",
+        "category": "form-controls",
+        "summary": "Salt Stepper component (@salt-ds/core, v1.45.0).",
+        "interface": {
+          "package": "@salt-ds/core",
+          "import_name": "Stepper",
+          "props": [
+            {
+              "name": "orientation",
+              "type": "StepperOrientation",
+              "required": false,
+              "description": "The orientation of the stepper: defaults to horizontal."
+            }
           ]
         }
       }
@@ -52,7 +142,245 @@
       "category": "release_note",
       "title": "v1.45.0 release notes",
       "body_format": "markdown",
-      "body": "v1.45.0 — DataGrid gains column pinning + virtualised row rendering for ≥ 100k-row datasets; Dialog focus-trap fix for nested Drawer composition; new density token `density-touch` for tablet form-factor; ComboBox now exposes a controlled `open` prop. No breaking changes vs 1.44.x."
+      "body": "v1.45.0 \u2014 DataGrid gains column pinning + virtualised row rendering for \u2265 100k-row datasets; Dialog focus-trap fix for nested Drawer composition; new density token `density-touch` for tablet form-factor; ComboBox now exposes a controlled `open` prop. No breaking changes vs 1.44.x."
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Analytical dashboard",
+      "body_format": "markdown",
+      "body": "An analytical dashboard enables users to analyze trends, patterns and metrics effectively. You can use this to present data in a hierarchical and intuitive manner.\n\nThe mock-ups displayed in this pattern are available as [templates](https://www.figma.com/file/O3FYUQYXLosmEuZc0T30Qo/Analytical-Dashboard-Pattern?type=design&node-id=1288-5747&mode=design&t=Pu46NKEwCeMRSjPD-0) in Figma _(J.P. Morgan employees only)_.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Announcement dialog",
+      "body_format": "markdown",
+      "body": "An announcement dialog promotes new features and can provide users with access to onward action, such as installing version updates.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: App header",
+      "body_format": "markdown",
+      "body": "An app header is a consistently available element that sits at the top of every application interface. It contains a brand logo or mark and application-wide functionality, including navigation and utility actions.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Breadcrumbs",
+      "body_format": "markdown",
+      "body": "Breadcrumbs are a secondary navigation pattern that helps users keep track of their current location within a hierarchy. It provides a space-efficient means of allowing quick navigation to previous levels.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Button bar",
+      "body_format": "markdown",
+      "body": "A button bar displays possible actions for users to take when they reach the end of a task. You can use it to provide consistent presentation of button types and orders within pages or dialogs across your applications.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Comments",
+      "body_format": "markdown",
+      "body": "The Comments pattern enables users to post, view, and interact with user-generated content, such as feedback, discussions, or reviews.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Contact details",
+      "body_format": "markdown",
+      "body": "Contact details display communication information for a person, company, distribution list or individual channel. This can include a name, a phone number or email address.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Content status",
+      "body_format": "markdown",
+      "body": "A content status provides information about content in a container component of an application. It remains onscreen until a situation resolves or the user takes action, making it a great tool for communication and guidance.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Experience customization",
+      "body_format": "markdown",
+      "body": "Experience customization is a pattern which guides users through configuring their application settings\u2014including regional, visual, and functional formats\u2014on first use or later use, to ensure the interface is fully optimized for their specific preferences.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: File upload",
+      "body_format": "markdown",
+      "body": "A file upload allows users to transfer one or multiple files from an external source to the web application. This pattern is commonly embedded in forms or as a standalone element.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Formatted input",
+      "body_format": "markdown",
+      "body": "Formatted input is an input behavior that guides and validates user-entered data against a defined format or pattern (e.g., phone numbers, card numbers, currency amounts, postal/ZIP codes, etc.). When the user types or submits the value, it's checked against the pattern and presented in a consistent formatted style to match that pattern.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Forms",
+      "body_format": "markdown",
+      "body": "A form allows you to capture data, gather opinions and receive information in a consistent format. This pattern provides guidelines for creating forms that are flexible to business domain, user experience and channel.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Header block",
+      "body_format": "markdown",
+      "body": "Header block is a standardized header for container components and application regions, used to display various text elements depending on scenarios. Headings can also display accent and status to highlight messaging.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Indication",
+      "body_format": "markdown",
+      "body": "The indication pattern provides a starting point for designers to apply common indication scenarios, with consideration for color, iconography and recommended labeling guidelines. \n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: International address form",
+      "body_format": "markdown",
+      "body": "An international address form gives users a set of form fields to input address information for specific countries. The form displays relevant fields for a user-selected location.\n\nThe pattern aims to accommodate users worldwide, but your team may be able to take further steps that fall outside its scope. For example, check with your tech partners if it's possible to detect user location and automatically adjust the form.\n\nFuture versions of this pattern will cover the use of APIs, autocompletion and enhanced support for more locations.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: International phone number",
+      "body_format": "markdown",
+      "body": "An international phone number input gives users a set of form fields to input phone number information for specific countries.\n\nThe pattern is a form that displays a relevant phone number field for a user-selected location. You can use it to provide consistent design when implementing International Phone Number Input interactions across your applications.\n\nWe provide design guidance on how you can use Salt form control components to achieve the pattern. Your team can take further steps that fall outside its scope. For example, check with your tech partners if it\u2019s possible to autodetect user location using data that can support auto-generating number placeholders. You can also check if it's possible to save the entered number when the user changes the country.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Keyboard shortcuts",
+      "body_format": "markdown",
+      "body": "Keyboard shortcuts allow users to execute actions, that are usually performed with a mouse or trackpad, using a keyboard. They increase the efficiency and productivity of users who primarily rely on their keyboard when interacting with applications.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: List builder",
+      "body_format": "markdown",
+      "body": "A list builder allows users to create a bespoke list of items from an original list, also known as a pick list, adding or removing items as required. Users can filter the items by using the filter input field.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: List filtering",
+      "body_format": "markdown",
+      "body": "When searching through a list, a filter enables users to specify criteria and only show relevant options. This pattern introduces the filter behavior of Salt components where a list is used.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Menu button",
+      "body_format": "markdown",
+      "body": "A menu button expands to reveal numerous contextual options when there's limited space to display them. The items within the menu are often less frequently used and don't require constant display within the interface.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Metric",
+      "body_format": "markdown",
+      "body": "A metric displays an important number value prominently. You can add indicators or labels to help provide context to the presented value.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Navigation",
+      "body_format": "markdown",
+      "body": "A navigation provides users with a structured and intuitive way to go to different pages, sections or features of your website or application. It tells users where they are at all times and ensures they can easily get to where they need to go. Use this pattern to provide consistency that helps users navigate your website or application easily and efficiently.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Preferences dialog",
+      "body_format": "markdown",
+      "body": "A preferences dialog allows you to display, group and navigate application preferences within a responsive modal dialog window. This pattern introduces guidelines to make the preferences dialog consistent and usable.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Search",
+      "body_format": "markdown",
+      "body": "The Search pattern offers users an intuitive way to explore content quickly by using keywords. Search is essential to discover information in apps that support large amounts of information. This pattern supports a basic menu driven search behavior, with optional free text behavior and configurable search result items.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Selectable card",
+      "body_format": "markdown",
+      "body": "A selectable card allows users to make selections by clicking anywhere within the card. It\u2019s functionally equivalent to a form control, such as [`ToggleButton`](/salt/components/toggle-button), [`RadioButton`](/salt/components/radio-button) or [`Checkbox`](/salt/components/checkbox). You can group selectable cards to support single or multiple selection.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Split button",
+      "body_format": "markdown",
+      "body": "A split button enables users to perform a main action and access relevant, supplementary actions inside a menu.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Vertical navigation",
+      "body_format": "markdown",
+      "body": "Vertical navigation provides users with a structured and intuitive way to navigate different pages, sections or features of your website or application. It's often on the left of the viewport and organizes links into a single or multilevel structure.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Pattern: Wizard",
+      "body_format": "markdown",
+      "body": "The wizard allows a workflow-based task to be displayed in a sequence of manageable steps, for easier completion.\n\n**Tags:** pattern"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Accessibility",
+      "body_format": "markdown",
+      "body": "Salt accessibility guide \u2014 see https://www.saltdesignsystem.com/salt/foundations/accessibility for full content.\n\nSource: https://www.saltdesignsystem.com/salt/foundations/accessibility"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Color",
+      "body_format": "markdown",
+      "body": "Salt color guide \u2014 see https://www.saltdesignsystem.com/salt/foundations/color for full content.\n\nSource: https://www.saltdesignsystem.com/salt/foundations/color"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Typography",
+      "body_format": "markdown",
+      "body": "Salt typography guide \u2014 see https://www.saltdesignsystem.com/salt/foundations/typography for full content.\n\nSource: https://www.saltdesignsystem.com/salt/foundations/typography"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Density",
+      "body_format": "markdown",
+      "body": "Salt density guide \u2014 see https://www.saltdesignsystem.com/salt/foundations/density for full content.\n\nSource: https://www.saltdesignsystem.com/salt/foundations/density"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Motion",
+      "body_format": "markdown",
+      "body": "Salt motion guide \u2014 see https://www.saltdesignsystem.com/salt/foundations/motion for full content.\n\nSource: https://www.saltdesignsystem.com/salt/foundations/motion"
+    },
+    {
+      "entity": "salt-design-system",
+      "category": "dev_doc",
+      "title": "Guide: Getting started",
+      "body_format": "markdown",
+      "body": "Salt getting started guide \u2014 see https://www.saltdesignsystem.com/salt/getting-started/start-here for full content.\n\nSource: https://www.saltdesignsystem.com/salt/getting-started/start-here"
     }
   ],
   "bitemporal_attributes": [
@@ -61,9 +389,21 @@
       "key": "current_version",
       "replace_existing": true,
       "rows": [
-        {"value": "1.43.0", "valid_from": "2025-09-15T00:00:00Z", "valid_to": "2025-12-01T00:00:00Z"},
-        {"value": "1.44.0", "valid_from": "2025-12-01T00:00:00Z", "valid_to": "2026-01-15T00:00:00Z"},
-        {"value": "1.45.0", "valid_from": "2026-01-15T00:00:00Z", "valid_to": null}
+        {
+          "value": "1.43.0",
+          "valid_from": "2025-09-15T00:00:00Z",
+          "valid_to": "2025-12-01T00:00:00Z"
+        },
+        {
+          "value": "1.44.0",
+          "valid_from": "2025-12-01T00:00:00Z",
+          "valid_to": "2026-01-15T00:00:00Z"
+        },
+        {
+          "value": "1.45.0",
+          "valid_from": "2026-01-15T00:00:00Z",
+          "valid_to": null
+        }
       ]
     }
   ]

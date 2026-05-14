@@ -126,6 +126,13 @@ class Settings:
     # --- OTel ---
     otlp_endpoint: str | None = None
     service_name: str = "registry"
+    # Timeout (seconds) for a single OTLP export attempt.  The exporter uses
+    # blocking HTTP under the hood, so this caps how long the BatchSpanProcessor
+    # worker thread can be tied up on a slow or unreachable collector.  Keeping
+    # it short (default 2 s) means a stalling Jaeger/OTEL collector cannot block
+    # the worker long enough to fill the span queue and cause span drops on busy
+    # services.  Raise it only if your collector is reliably slow but functional.
+    otlp_exporter_timeout_s: int = 2
 
     # --- Sync ---
     connector_run_timeout_s: int = 300
@@ -183,6 +190,7 @@ def get_settings() -> Settings:
         rate_limit_read_per_minute=int(os.environ.get("RATE_LIMIT_READ_PER_MINUTE", "600")),
         otlp_endpoint=os.environ.get("OTLP_ENDPOINT"),
         service_name=os.environ.get("SERVICE_NAME", "registry"),
+        otlp_exporter_timeout_s=int(os.environ.get("OTLP_EXPORTER_TIMEOUT_S", "2")),
         connector_run_timeout_s=int(os.environ.get("CONNECTOR_RUN_TIMEOUT_S", "300")),
         webhook_secret_github=os.environ.get("GITHUB_WEBHOOK_SECRET"),
         webhook_secret_gitlab=os.environ.get("GITLAB_WEBHOOK_SECRET"),
