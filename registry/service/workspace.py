@@ -561,14 +561,18 @@ class WorkspaceService:
         """Create a new workspace.
 
         Steps:
-        1. Fetch the tenant row to check is_regulated. Regulated tenants cannot
+        1. Load the actor's effective roles and enforce the creation gate:
+           Producer may create actor-owned workspaces; Admin may create
+           tenant-owned workspaces. No-role actors and mismatched role/kind
+           combinations raise WorkspaceOperationDenied before any DB write.
+        2. Fetch the tenant row to check is_regulated. Regulated tenants cannot
            create workspaces while encryption_tier='none' — they must wait for the
            ENC phase. This is a program constraint, not a bug; it is surfaced as an
            actionable 422 so operators understand the blocker.
-        2. Validate owner_kind is in the closed vocabulary ('actor', 'tenant').
-        3. INSERT the workspace row with encryption_tier='none'.
-        4. Emit audit event.
-        5. Return WorkspaceRef.
+        3. Validate owner_kind is in the closed vocabulary ('actor', 'tenant').
+        4. INSERT the workspace row with encryption_tier='none'.
+        5. Emit audit event.
+        6. Return WorkspaceRef.
 
         owner_kind='actor' sets owner_actor_id=ctx.actor_id (personal workspace).
         owner_kind='tenant' sets owner_actor_id=NULL (team workspace).
@@ -577,7 +581,29 @@ class WorkspaceService:
         workspace_id = uuid.uuid4()
 
         async with self._session_factory() as session, session.begin():
-            # Step 1 — regulated-tenant gate.
+            # Step 1 — role-based creation gate.
+            # Load roles before any validation so a no-role actor is rejected
+            # before owner_kind is even evaluated — avoiding information leakage
+            # about which owner_kind values are valid for a given role.
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
+            )
+            if owner_kind == "actor":
+                if "producer" not in effective_roles:
+                    raise WorkspaceOperationDenied(
+                        "Only producers may create actor-owned workspaces."
+                    )
+            elif owner_kind == "tenant":
+                if "admin" not in effective_roles:
+                    raise WorkspaceOperationDenied(
+                        "Only admins may create tenant-owned workspaces."
+                    )
+            # Unknown owner_kind values are caught in the next step; no-role
+            # actors with an unknown kind will fall through to the vocabulary
+            # check and receive a 422 (which is acceptable — 403 would also
+            # be correct, but 422 is more actionable).
+
+            # Step 2 — regulated-tenant gate.
             tenant_result = await session.execute(
                 text("SELECT is_regulated FROM tenants WHERE tenant_id = :tid"),
                 {"tid": ctx.tenant_id},
@@ -592,7 +618,7 @@ class WorkspaceService:
                     ),
                 )
 
-            # Step 2 — validate owner_kind.
+            # Step 3 — validate owner_kind vocabulary.
             if owner_kind not in VALID_OWNER_KINDS:
                 raise HTTPException(
                     status_code=422,
@@ -604,7 +630,7 @@ class WorkspaceService:
 
             owner_actor_id = ctx.actor_id if owner_kind == "actor" else None
 
-            # Step 3 — INSERT workspace row.
+            # Step 4 — INSERT workspace row.
             await session.execute(
                 text(
                     """
@@ -631,7 +657,7 @@ class WorkspaceService:
                 },
             )
 
-        # Step 4 — emit audit event.
+        # Step 5 — emit audit event.
         await self._audit_writer.emit(
             ctx,
             action=actions.WORKSPACE_CREATED,
@@ -652,7 +678,7 @@ class WorkspaceService:
             owner_kind,
         )
 
-        # Step 5 — return WorkspaceRef built from the values written.
+        # Step 6 — return WorkspaceRef built from the values written.
         return WorkspaceRef(
             workspace_id=workspace_id,
             tenant_id=ctx.tenant_id,

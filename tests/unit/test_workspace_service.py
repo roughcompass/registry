@@ -238,7 +238,7 @@ async def test_create_workspace_succeeds_actor_owner() -> None:
 async def test_create_workspace_succeeds_tenant_owner() -> None:
     """create_workspace with owner_kind='tenant' sets owner_actor_id=None."""
     ctx = _ctx()
-    svc = _make_service()
+    svc = _make_service(actor_roles=["admin"])
 
     ref = await svc.create_workspace(ctx, name="Team WS", owner_kind="tenant")
 
@@ -281,6 +281,54 @@ async def test_create_workspace_raises_422_on_invalid_owner_kind() -> None:
 
     assert exc_info.value.status_code == 422
     assert "owner_kind" in exc_info.value.detail
+
+
+# ---------------------------------------------------------------------------
+# (d) create_workspace — role gate
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_producer_denied_for_tenant_kind() -> None:
+    """Producer may not create tenant-owned workspaces; admin role is required."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["producer"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="Team WS", owner_kind="tenant")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_admin_denied_for_actor_kind() -> None:
+    """Admin without producer may not create actor-owned workspaces."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["admin"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="Personal WS", owner_kind="actor")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_no_role_denied() -> None:
+    """Actors with no roles are denied before owner_kind is evaluated."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=[])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="actor")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_admin_and_producer_may_create_both_kinds() -> None:
+    """Multi-role actors (admin + producer) may create workspaces of either kind."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["admin", "producer"])
+
+    ref_actor = await svc.create_workspace(ctx, name="Actor WS", owner_kind="actor")
+    ref_tenant = await svc.create_workspace(ctx, name="Tenant WS", owner_kind="tenant")
+
+    assert ref_actor.owner_kind == "actor"
+    assert ref_tenant.owner_kind == "tenant"
 
 
 # ---------------------------------------------------------------------------
@@ -865,7 +913,7 @@ async def test_list_workspaces_cursor_is_base64_string() -> None:
 async def test_create_workspace_tenant_owner_actor_id_is_none() -> None:
     """create_workspace with owner_kind='tenant' returns owner_actor_id=None."""
     ctx = _ctx()
-    svc = _make_service()
+    svc = _make_service(actor_roles=["admin"])
 
     ref = await svc.create_workspace(ctx, name="Team WS", owner_kind="tenant")
 
