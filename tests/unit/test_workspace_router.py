@@ -880,3 +880,71 @@ def test_admin_rtbf_with_admin_role_returns_200() -> None:
     assert body["purged_entries"] == 3
     assert body["purged_workspaces"] == 1
     assert "revoked_shares" not in body
+
+
+# ---------------------------------------------------------------------------
+# Auditor role reaches workspace read endpoints
+# ---------------------------------------------------------------------------
+
+
+def test_auditor_role_can_reach_get_workspace() -> None:
+    """An actor with only the auditor role can GET a workspace (auditor is in _any_roles).
+
+    The role gate uses _any_roles which includes ROLE_AUDITOR. This test verifies
+    that an auditor context is not rejected at the router gate before the service
+    is invoked.
+    """
+    auditor_ctx = TenantContext(
+        tenant_id=_TENANT_ID,
+        actor_id=_ACTOR_ID,
+        roles=["auditor"],
+    )
+    app = _build_app(
+        ctx=auditor_ctx,
+        get_workspace_return=_make_workspace_ref(owner_kind="tenant"),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}")
+
+    assert resp.status_code == 200, (
+        f"Auditor must reach GET /workspaces/{{id}}; got {resp.status_code}: {resp.text}"
+    )
+
+
+def test_auditor_role_can_reach_list_workspaces() -> None:
+    """An actor with only the auditor role can GET /v1/workspaces (auditor is in _any_roles)."""
+    auditor_ctx = TenantContext(
+        tenant_id=_TENANT_ID,
+        actor_id=_ACTOR_ID,
+        roles=["auditor"],
+    )
+    app = _build_app(
+        ctx=auditor_ctx,
+        list_workspaces_return=([_make_workspace_ref(owner_kind="tenant")], None),
+    )
+    client = TestClient(app, raise_server_exceptions=True)
+
+    resp = client.get("/v1/workspaces")
+
+    assert resp.status_code == 200, (
+        f"Auditor must reach GET /workspaces; got {resp.status_code}: {resp.text}"
+    )
+
+
+def test_unknown_role_denied_at_router_gate() -> None:
+    """An actor with an unrecognised role that is not in _any_roles receives 403 at the gate."""
+    unknown_ctx = TenantContext(
+        tenant_id=_TENANT_ID,
+        actor_id=_ACTOR_ID,
+        roles=["unknown-role"],
+    )
+    app = _build_app(ctx=unknown_ctx)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}")
+
+    assert resp.status_code == 403, (
+        f"Actor with unrecognised role must be denied at the router gate; "
+        f"got {resp.status_code}: {resp.text}"
+    )
