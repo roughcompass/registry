@@ -197,7 +197,7 @@ class SubscriptionService:
         )
         row = existing.first()
         if row is not None:
-            return row.subscription_id
+            return row.subscription_id  # type: ignore[no-any-return]
 
         now = self._clock.now()
         digest = await self._fetch_tenant_digest_window(session, tenant_id)

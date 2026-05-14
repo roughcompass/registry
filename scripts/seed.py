@@ -26,6 +26,7 @@ import os
 import re
 import sys
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1185,9 +1186,9 @@ def _emit_summary(
     counts: LoadCounts,
 ) -> None:
     tty = sys.stdout.isatty()
-    bold = lambda s: _ansi(s, "1", tty)  # noqa: E731
-    cyan = lambda s: _ansi(s, "36", tty)  # noqa: E731
-    dim = lambda s: _ansi(s, "2", tty)  # noqa: E731
+    bold: Callable[[str], str] = lambda s: _ansi(s, "1", tty)  # noqa: E731
+    cyan: Callable[[str], str] = lambda s: _ansi(s, "36", tty)  # noqa: E731
+    dim: Callable[[str], str] = lambda s: _ansi(s, "2", tty)  # noqa: E731
 
     print(bold(f"Seeded dev tenant {tenant_slug!r} ({tenant_id})"))
     print(f"  {dim('Bundles loaded')}: {len(bundle_paths)}")

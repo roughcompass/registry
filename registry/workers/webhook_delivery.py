@@ -240,7 +240,7 @@ class WebhookDeliveryWorker:
         if not rows:
             return 0
 
-        async def _deliver_row(row: dict) -> tuple[uuid.UUID, DeliveryResult]:
+        async def _deliver_row(row: dict[str, Any]) -> tuple[uuid.UUID, DeliveryResult]:
             sem = self._tenant_semaphores.setdefault(
                 row["tenant_id"],
                 asyncio.Semaphore(self._per_tenant_concurrency),
@@ -280,7 +280,7 @@ class WebhookDeliveryWorker:
     # SQL helpers
     # ------------------------------------------------------------------
 
-    async def _claim_pending(self, now: datetime.datetime, batch_size: int) -> list[dict]:
+    async def _claim_pending(self, now: datetime.datetime, batch_size: int) -> list[dict[str, Any]]:
         """Claim a batch of pending deliveries and increment attempt_number.
 
         Uses ``FOR UPDATE SKIP LOCKED`` so multiple workers do not
@@ -330,7 +330,7 @@ class WebhookDeliveryWorker:
             detail_map = {r["notification_id"]: r for r in details.mappings().all()}
 
         # Splice claim rows with notification details.
-        out: list[dict] = []
+        out: list[dict[str, Any]] = []
         for c in claimed_rows:
             d = detail_map.get(c["notification_id"])
             if d is None:
@@ -407,7 +407,7 @@ class WebhookDeliveryWorker:
         )
         async with self._session_factory() as session, session.begin():
             result = await session.execute(sql, params)
-            affected = result.rowcount if result.rowcount is not None else len(params)
+            affected = result.rowcount if result.rowcount is not None else len(params)  # type: ignore[attr-defined]
             if affected < len(params):
                 _log.warning(
                     "bulk outcome UPDATE affected %d rows but expected %d; "
@@ -458,7 +458,7 @@ def _classify_response(
     )
 
 
-def _row_to_event(row: dict) -> CapabilityRegistryEvent:
+def _row_to_event(row: dict[str, Any]) -> CapabilityRegistryEvent:
     return CapabilityRegistryEvent(
         notification_id=row["notification_id"],
         tenant_id=row["tenant_id"],

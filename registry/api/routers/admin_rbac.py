@@ -115,7 +115,7 @@ async def get_tenant(
         slug=tenant.slug,
         display_name=tenant.display_name,
         created_at=tenant.created_at,
-        links=Links(self=f"/v1/admin/tenants/{tenant.slug}"),
+        _links=Links(self=f"/v1/admin/tenants/{tenant.slug}"),
     )
     if view == "audit":
         response.is_active = tenant.is_active
@@ -161,7 +161,7 @@ async def get_actor(
         email=actor.email,
         actor_kind=actor.actor_kind,
         created_at=actor.created_at,
-        links=Links(self=f"/v1/admin/actors/{actor.actor_id}"),
+        _links=Links(self=f"/v1/admin/actors/{actor.actor_id}"),
     )
     if view == "audit":
         response.oidc_subject = actor.oidc_subject
@@ -226,7 +226,7 @@ async def list_actors(
             actor_kind=a.actor_kind,
             created_at=a.created_at,
             oidc_subject=a.oidc_subject if view == "audit" else None,
-            links=Links(self=f"/v1/admin/actors/{a.actor_id}"),
+            _links=Links(self=f"/v1/admin/actors/{a.actor_id}"),
         )
         for a in items
     ]

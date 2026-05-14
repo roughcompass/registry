@@ -155,7 +155,7 @@ class ClosureRefreshWorker:
                 text("DELETE FROM closure_cache WHERE refreshed_at < :cutoff"),
                 {"cutoff": cutoff},
             )
-            deleted: int = result.rowcount
+            deleted: int = result.rowcount  # type: ignore[attr-defined]
         _log.info("closure_refresh.evict_stale: deleted=%d cutoff=%s", deleted, cutoff)
         return deleted
 
@@ -275,7 +275,7 @@ class ClosureRefreshWorker:
         svc = RetrievalService(
             session_factory=self._session_factory,
             clock=self._clock,
-            embedder=_NoopEmbedder(),  # type: ignore[arg-type]
+            embedder=_NoopEmbedder(),
         )
 
         all_rows: list[dict[str, Any]] = []

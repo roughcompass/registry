@@ -242,7 +242,7 @@ def main(argv: list[str] | None = None) -> None:
     embedder = _build_embedder(settings.embedding_model, stub=args.stub)
 
     if args.reset_cursor:
-        model_id = embedder.model_version  # type: ignore[attr-defined]
+        model_id = embedder.model_version
         cursor_path = _get_cursor_path(model_id)
         if cursor_path.exists():
             cursor_path.unlink()

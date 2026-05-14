@@ -102,7 +102,7 @@ def _source_to_response(s: SyncSource, *, include_links: bool = False) -> SyncSo
         is_active=s.is_active,
         created_at=s.created_at,
         created_by=s.created_by,
-        links=Links(self=f"/v1/admin/sync-sources/{s.source_id}") if include_links else None,
+        _links=Links(self=f"/v1/admin/sync-sources/{s.source_id}") if include_links else None,
     )
 
 
@@ -118,7 +118,7 @@ def _run_to_response(r: SyncRun, *, include_links: bool = False) -> SyncRunRespo
         duration_s=r.duration_s,
         artifact_count=r.artifact_count,
         error_summary=r.error_summary,
-        links=Links(self=f"/v1/admin/sync-runs/{r.sync_run_id}") if include_links else None,
+        _links=Links(self=f"/v1/admin/sync-runs/{r.sync_run_id}") if include_links else None,
     )
 
 

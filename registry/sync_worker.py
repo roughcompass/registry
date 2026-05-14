@@ -26,12 +26,14 @@ log = logging.getLogger(__name__)
 async def _run() -> None:
     # Import here so startup errors surface with a clear traceback.
     from registry.config import get_settings
-    from sync.runner import create_scheduler  # type: ignore[import-untyped]
+    from sync.runner import create_scheduler
 
     settings = get_settings()
     scheduler = await create_scheduler(settings)
 
-    log.info("sync-worker: scheduler started (interval=%ss)", settings.sync_interval_seconds)
+    # Each sync source carries its own schedule (cron / interval), so there is
+    # no single sync-worker-level interval to report. Log the start event alone.
+    log.info("sync-worker: scheduler started")
 
     loop = asyncio.get_running_loop()
     stop = loop.create_future()

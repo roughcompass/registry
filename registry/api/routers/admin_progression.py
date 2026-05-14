@@ -479,7 +479,7 @@ async def supersede_progression_definition(
                             )
                         else:
                             # Check gate satisfaction for the current state under the new definition.
-                            state_def = next((s for s in states if s["id"] == current_state), {})
+                            state_def: dict[str, Any] = next((s for s in states if s["id"] == current_state), {})
                             gate_ids = state_def.get("gates", [])
                             # Load all active attributes for gate evaluation.
                             all_attrs_result = await scan_session.execute(

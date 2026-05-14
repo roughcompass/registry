@@ -109,7 +109,7 @@ async def upsert_rsam_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
     if existing_row is None:
         msg = f"upsert_rsam_tenant: DO NOTHING conflict but no row found for seal_id={seal_id!r}"
         raise RuntimeError(msg)
-    return existing_row[0]
+    return existing_row[0]  # type: ignore[no-any-return]
 
 
 async def upsert_rsam_actor(

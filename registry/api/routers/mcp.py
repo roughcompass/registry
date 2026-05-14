@@ -369,10 +369,10 @@ def create_registry_mcp_server(
                 exp = await includes.expand_depends_on(ctx, resolved.entity_id, handle_for_next=entity_id)
                 result["depends_on"] = _serialize(exp.model_dump(mode="json"))
             if "external_ids" in requested:
-                exp = await includes.expand_external_ids(ctx, resolved.entity_id)
+                exp = await includes.expand_external_ids(ctx, resolved.entity_id)  # type: ignore[assignment]
                 result["external_ids"] = _serialize(exp.model_dump(mode="json"))
             if "interface" in requested:
-                exp = await includes.expand_interface(ctx, resolved.entity_id, as_of=as_of_dt)
+                exp = await includes.expand_interface(ctx, resolved.entity_id, as_of=as_of_dt)  # type: ignore[assignment]
                 result["interface"] = _serialize(exp.model_dump(mode="json"))
 
         return json.dumps(result)

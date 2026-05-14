@@ -335,7 +335,7 @@ class AdoptionService:
         if row is None:
             msg = f"provider capability {provider_capability_id} not found"
             raise NotFoundError(msg)
-        return row.tenant_id
+        return row.tenant_id  # type: ignore[no-any-return]
 
     @staticmethod
     async def _insert_provides_to_edge(

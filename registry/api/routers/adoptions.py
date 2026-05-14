@@ -26,7 +26,7 @@ Error mapping
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from pydantic import BaseModel
@@ -85,7 +85,7 @@ def _ref_to_response(
     intentionally omit links. ``provider_cap_handle`` is the address form the
     caller used (slug or UUID) so the capability URL mirrors the request path.
     """
-    base: dict = dict(
+    base: dict[str, Any] = dict(
         adoption_id=ref.adoption_id,
         tenant_id=ref.tenant_id,
         provider_capability_id=ref.provider_capability_id,

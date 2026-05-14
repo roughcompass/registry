@@ -46,7 +46,7 @@ async def whoami(
         roles=payload.roles,
         token_id=payload.token_id,
         token_expires_at=payload.token_expires_at,
-        links=Links(
+        _links=Links(
             self="/v1/whoami",
             # Forward-looking pointers — these endpoints don't all exist
             # yet, but UI clients can plan around the stable shape.

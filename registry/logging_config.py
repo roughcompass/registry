@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from opentelemetry import trace as otel_trace
@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 def _add_otel_context(
     logger: object,
     method: str,
-    event_dict: dict,
-) -> dict:
+    event_dict: dict[str, Any],
+) -> dict[str, Any]:
     """Inject trace_id and span_id into the event dict when an active OTel span exists.
 
     Reads the current span from the OTel context at log-emit time. This is
@@ -92,7 +92,7 @@ def configure_logging(settings: Settings) -> None:
     # processors: [remove_processors_meta, final_renderer] — the terminal chain
     #   after the foreign_pre_chain has enriched the event dict.
     formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=foreign_pre_chain_procs,
+        foreign_pre_chain=foreign_pre_chain_procs,  # type: ignore[arg-type]
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             final_renderer,
@@ -114,7 +114,7 @@ def configure_logging(settings: Settings) -> None:
     # added in future work). This also sets up the stdlib wrapper so
     # structlog.get_logger() calls funnel through the same chain.
     structlog.configure(
-        processors=shared_processors
+        processors=shared_processors  # type: ignore[arg-type]
         + [
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],

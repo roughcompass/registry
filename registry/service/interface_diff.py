@@ -101,7 +101,7 @@ def _diff_operations(
 
     # Changed operations.
     for name in cur_ops.keys() & prop_ops.keys():
-        sub = _diff_one_operation(name, cur_ops[name], prop_ops[name], changes)
+        sub = _diff_one_operation(name, cur_ops[name], prop_ops[name], changes)  # type: ignore[arg-type]
         severity = _escalate(severity, sub)
 
     return severity

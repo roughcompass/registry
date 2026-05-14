@@ -21,6 +21,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from fastapi import HTTPException, status
 from sqlalchemy import text
@@ -153,7 +154,7 @@ class RsamClaimSource(ClaimResolverBase):
     # ------------------------------------------------------------------
     # ClaimResolverBase interface
 
-    def is_in_scope(self, claims: dict) -> bool:
+    def is_in_scope(self, claims: dict[str, Any]) -> bool:
         """Return True when the service is running in RSAM auth mode.
 
         The mode check lives in Settings; claims content is not inspected
@@ -161,7 +162,7 @@ class RsamClaimSource(ClaimResolverBase):
         """
         return self.settings.auth_mode == "rsam"
 
-    async def resolve(self, claims: dict) -> ResolvedIdentity:
+    async def resolve(self, claims: dict[str, Any]) -> ResolvedIdentity:
         """Resolve RSAM authorities into a `ResolvedIdentity`.
 
         Cache wrap algorithm:

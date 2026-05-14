@@ -111,7 +111,7 @@ class ProgressionError(Exception):
 # ---------------------------------------------------------------------------
 
 
-def validate_progression_definition(definition: dict) -> None:
+def validate_progression_definition(definition: dict[str, Any]) -> None:
     """Validate a progression definition JSONB body against the meta-schema.
 
     Raises ValidationError on failure. The error message includes all
@@ -270,14 +270,14 @@ class ProgressionService:
             # Build a quick lookup: state_id → {index, state_dict}
             states = definition.get("states", [])
             state_index: dict[str, int] = {s["id"]: i for i, s in enumerate(states)}
-            state_by_id: dict[str, dict] = {s["id"]: s for s in states}
+            state_by_id: dict[str, dict[str, Any]] = {s["id"]: s for s in states}
 
             # ---- Tier resolution ------------------------------------------------
             entity_attrs = self._get_attributes(entity)
             tier_rules = definition.get("tier_rules")
             tier: str | None = entity_attrs.get("tier")
 
-            resolved_tier_rule: dict | None = None
+            resolved_tier_rule: dict[str, Any] | None = None
             if tier_rules is not None:
                 if tier and tier in tier_rules:
                     resolved_tier_rule = tier_rules[tier]
@@ -469,7 +469,7 @@ class ProgressionService:
         a dict or an iterable of (key, value) pairs.
         """
         if isinstance(entity, dict):
-            return entity.get("attributes", {})
+            return entity.get("attributes", {})  # type: ignore[no-any-return]
         attrs = getattr(entity, "attributes", {})
         if isinstance(attrs, dict):
             return attrs

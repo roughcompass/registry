@@ -26,7 +26,7 @@ Error mapping
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from pydantic import BaseModel, Field
@@ -88,7 +88,7 @@ def _ref_to_response(ref: SubscriptionRef, *, audit: bool = False, include_links
     include ``_links.self`` + ``_links.capability``; list endpoint items
     intentionally omit links to keep payload size manageable.
     """
-    base: dict = dict(
+    base: dict[str, Any] = dict(
         subscription_id=ref.subscription_id,
         tenant_id=ref.tenant_id,
         actor_id=ref.actor_id,

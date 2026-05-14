@@ -26,6 +26,7 @@ import os
 import secrets
 import sys
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 # Ensure the repo root is importable when this script is invoked as a
@@ -243,9 +244,9 @@ def _emit_summary(
     env_file: Path | None,
 ) -> None:
     tty = sys.stdout.isatty()
-    bold = lambda s: _ansi(s, "1", tty)  # noqa: E731
-    cyan = lambda s: _ansi(s, "36", tty)  # noqa: E731
-    dim = lambda s: _ansi(s, "2", tty)  # noqa: E731
+    bold: Callable[[str], str] = lambda s: _ansi(s, "1", tty)  # noqa: E731
+    cyan: Callable[[str], str] = lambda s: _ansi(s, "36", tty)  # noqa: E731
+    dim: Callable[[str], str] = lambda s: _ansi(s, "2", tty)  # noqa: E731
 
     print(bold("Bootstrapped local-dev auth."))
     print(f"  {dim('Tenant ')}: {tenant_slug}  {dim('(' + str(tenant_id) + ')')}")

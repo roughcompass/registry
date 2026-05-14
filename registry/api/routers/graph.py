@@ -89,7 +89,7 @@ def _parse_as_of_dt(as_of: str | None) -> datetime.datetime | None:
 async def create_edge_property_schema(
     request: Request,
     ctx: TenantContext = Depends(_admin_required),
-) -> dict:
+) -> dict[str, Any]:
     """Register a JSON Schema for an edge_rel.  Edge-property schema management is not yet implemented."""
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -104,7 +104,7 @@ async def create_edge_property_schema(
 async def list_edge_property_schemas(
     request: Request,
     ctx: TenantContext = Depends(_admin_required),
-) -> list:
+) -> list[Any]:
     """List all active edge property schemas for the tenant.  Edge-property schema management is not yet implemented."""
     raise HTTPException(
         status_code=status.HTTP_501_NOT_IMPLEMENTED,
@@ -121,7 +121,7 @@ async def _update_edge_property_schema(
     schema_id: uuid.UUID,
     request: Request,
     ctx: TenantContext = Depends(_admin_required),
-) -> dict:
+) -> dict[str, Any]:
     """Supersede an existing edge property schema (bi-temporal).
 
     Full implementation is pending. Once wired, this endpoint will honour

@@ -226,7 +226,7 @@ async def _process_row(
                         "chunk_index": chunk_idx,
                         "model_id": embedder.model_version,
                         # pgvector via asyncpg requires a string literal, not a Python list.
-                        "vector": "[" + ",".join(str(x) for x in vector.tolist()) + "]",
+                        "vector": "[" + ",".join(str(x) for x in vector.tolist()) + "]",  # type: ignore[attr-defined]
                         "text_chunk": chunk_text,
                         "created_at": now,
                     },

@@ -1847,7 +1847,7 @@ class WorkspaceService:
                 ),
                 {"target_actor_id": target_actor_id},
             )
-            purged_entries: int = entries_result.rowcount or 0
+            purged_entries: int = entries_result.rowcount or 0  # type: ignore[attr-defined]
 
             # ------------------------------------------------------------------
             # Step 2: handle workspaces owned by the target actor.
@@ -1894,7 +1894,7 @@ class WorkspaceService:
                         text("DELETE FROM workspace_entries WHERE workspace_id = :ws_id"),
                         {"ws_id": ws_id},
                     )
-                    purged_entries += cascade_result.rowcount or 0
+                    purged_entries += cascade_result.rowcount or 0  # type: ignore[attr-defined]
                 await session.execute(
                     text("DELETE FROM workspaces WHERE workspace_id = :ws_id"),
                     {"ws_id": ws_id},

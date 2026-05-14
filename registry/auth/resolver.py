@@ -16,7 +16,7 @@ from __future__ import annotations
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -102,7 +102,7 @@ class ClaimResolverBase(ABC):
     """
 
     @abstractmethod
-    def is_in_scope(self, claims: dict) -> bool:
+    def is_in_scope(self, claims: dict[str, Any]) -> bool:
         """Return True if this resolver should handle the given claims dict.
 
         The factory calls this method to select the resolver; it must not
@@ -111,7 +111,7 @@ class ClaimResolverBase(ABC):
         """
 
     @abstractmethod
-    async def resolve(self, claims: dict) -> ResolvedIdentity:
+    async def resolve(self, claims: dict[str, Any]) -> ResolvedIdentity:
         """Convert raw token claims into a `ResolvedIdentity`.
 
         Implementations are responsible for:
@@ -155,7 +155,7 @@ def build_resolver(
         RsamClaimSource(settings=settings, session_factory=session_factory),
     ]
 
-    dummy_claims: dict = {}
+    dummy_claims: dict[str, Any] = {}
     for resolver in registered:
         if resolver.is_in_scope(dummy_claims):
             return resolver

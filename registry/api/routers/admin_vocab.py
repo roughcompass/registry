@@ -112,7 +112,7 @@ def _schema_to_response(s: CapabilityTypeSchema, *, include_links: bool = False)
         t_valid_to=s.t_valid_to,
         t_ingested_at=s.t_ingested_at,
         t_invalidated_at=s.t_invalidated_at,
-        links=Links(self=f"/v1/admin/capability-types/{s.type_name}") if include_links else None,
+        _links=Links(self=f"/v1/admin/capability-types/{s.type_name}") if include_links else None,
     )
 
 

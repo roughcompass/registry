@@ -66,7 +66,7 @@ import logging
 import uuid
 from typing import Any
 
-from cachetools import LRUCache
+from cachetools import LRUCache  # type: ignore[import-untyped]
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -248,7 +248,7 @@ class RetrievalService:
         async with self._embed_lock:
             cached = self._embed_cache.get(key)
             if cached is not None:
-                return cached
+                return cached  # type: ignore[no-any-return]
             vec = self._embedder.encode([query_text])
             result: list[float] = vec[0].tolist()
             self._embed_cache[key] = result

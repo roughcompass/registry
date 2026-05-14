@@ -84,7 +84,7 @@ class LifecycleService:
 
         # Resolve the typed successor value once so the rest of the method is
         # branch-free: replaced_by is either a UUID or None.
-        replaced_by: uuid.UUID | None = None if successor == "none" else successor
+        replaced_by: uuid.UUID | None = None if successor == "none" else successor  # type: ignore[assignment]
 
         now = self._clock.now()
         valid_from = normalize_utc(valid_from) if valid_from is not None else now

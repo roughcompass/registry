@@ -37,6 +37,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -84,7 +85,7 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
 # RSAM tenant-selector logic
 
 
-def _select_rsam_tenant(request: Request, resolved_identity) -> TenantContext:
+def _select_rsam_tenant(request: Request, resolved_identity: Any) -> TenantContext:
     """Apply the per-request tenant-selector rules to a ``ResolvedIdentity``.
 
     Returns a fully-populated ``TenantContext`` on success, or raises

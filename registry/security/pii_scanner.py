@@ -332,7 +332,7 @@ class PiiScanner:
         """
         if len(text) <= _CHUNK_SIZE:
             try:
-                return pat.scan(text)
+                return pat.scan(text)  # type: ignore[no-any-return]
             except Exception:  # noqa: BLE001
                 return []
 

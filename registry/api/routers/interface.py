@@ -158,7 +158,7 @@ async def get_interface(
         interface_source=record.interface_source,
         interface_format=record.interface_format,
         as_of=record.as_of.isoformat() if record.as_of else None,
-        links=Links(
+        _links=Links(
             self=f"/v1/capabilities/{capability_id}/interface",
             capability=f"/v1/capabilities/{capability_id}",
         ),

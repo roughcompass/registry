@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import datetime
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
 from sqlalchemy import select, tuple_
@@ -87,9 +87,9 @@ async def _run_pii_scan(
     scanner = build_builtin_scanner(tenant_policy="advisory")
 
     # Collect detection log rows for writing.
-    detection_rows: list[dict] = []
+    detection_rows: list[dict[str, Any]] = []
 
-    def _log_sink(row: dict) -> None:
+    def _log_sink(row: dict[str, Any]) -> None:
         row["tenant_id"] = str(ctx.tenant_id)
         row["actor_id"] = str(ctx.actor_id) if ctx.actor_id else None
         detection_rows.append(row)

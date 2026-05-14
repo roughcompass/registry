@@ -93,10 +93,10 @@ def _fact_ref_to_artifact(fact: FactRef) -> ArtifactResponse:
         category=fact.category,
         body=fact.body,
         is_authoritative=fact.is_authoritative,
-        t_valid_from=fact.t_valid_from,
-        t_valid_to=fact.t_valid_to,
-        t_ingested_at=fact.t_ingested_at,
-        t_invalidated_at=fact.t_invalidated_at,
+        valid_from=fact.t_valid_from,
+        valid_to=fact.t_valid_to,
+        ingested_at=fact.t_ingested_at,
+        invalidated_at=fact.t_invalidated_at,
     )
 
 
@@ -108,10 +108,10 @@ def _edge_ref_to_item(edge: EdgeRef) -> EdgeRefItem:
         rel=edge.rel,
         dst_entity_id=edge.dst_entity_id,
         properties=edge.properties,
-        t_valid_from=edge.t_valid_from,
-        t_valid_to=edge.t_valid_to,
-        t_ingested_at=edge.t_ingested_at,
-        t_invalidated_at=edge.t_invalidated_at,
+        valid_from=edge.t_valid_from,
+        valid_to=edge.t_valid_to,
+        ingested_at=edge.t_ingested_at,
+        invalidated_at=edge.t_invalidated_at,
     )
 
 

@@ -195,7 +195,7 @@ class ExternalIdService:
                 text("DELETE FROM external_systems " "WHERE tenant_id = :tid AND slug = :slug"),
                 {"tid": ctx.tenant_id, "slug": slug},
             )
-        if result.rowcount == 0:
+        if result.rowcount == 0:  # type: ignore[attr-defined]
             msg = f"external system slug={slug!r} not found for tenant {ctx.tenant_id}"
             raise NotFoundError(msg)
 

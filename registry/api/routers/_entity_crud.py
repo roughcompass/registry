@@ -64,7 +64,7 @@ def make_entity_router(
     prefix: str,
     tag: str,
     create_request_model: type[BaseModel],
-    update_request_model: type[BaseModel] = UpdateEntityRequest,  # type: ignore[assignment]
+    update_request_model: type[BaseModel] = UpdateEntityRequest,
 ) -> tuple[APIRouter, APIRouter]:
     """Build the CRUD router (POST + GET) and mutation router (PATCH + DELETE)
     for a parent-anchored entity type.
@@ -102,13 +102,16 @@ def make_entity_router(
 
         service = get_service(request)
         try:
+            # Dynamic request models supply name/external_id/attributes/valid_from
+            # at runtime; the factory's parameterized create_request_model erases
+            # those attributes from the static type.
             entity_ref = await service.create_entity(
                 ctx,
                 entity_type=entity_type,
-                name=body.name,  # type: ignore[union-attr]
-                external_id=body.external_id,  # type: ignore[union-attr]
-                attributes=body.attributes,  # type: ignore[union-attr]
-                valid_from=body.valid_from,  # type: ignore[union-attr]
+                name=body.name,  # type: ignore[attr-defined]
+                external_id=body.external_id,  # type: ignore[attr-defined]
+                attributes=body.attributes,  # type: ignore[attr-defined]
+                valid_from=body.valid_from,  # type: ignore[attr-defined]
             )
             parent_id = getattr(body, "parent_capability_id", None)
             if parent_id is not None:
@@ -117,7 +120,7 @@ def make_entity_router(
                     src_entity_id=entity_ref.entity_id,
                     rel=parent_edge_rel,
                     dst_entity_id=parent_id,
-                    valid_from=body.valid_from,  # type: ignore[union-attr]
+                    valid_from=body.valid_from,  # type: ignore[attr-defined]
                 )
             record = await service.get_full_capability(ctx, entity_ref.entity_id)
         except CatalogError as exc:
@@ -164,7 +167,7 @@ def make_entity_router(
             lifecycle=base.lifecycle,
             attributes=base.attributes,
             created_at=base.created_at,
-            links=Links(self=f"{prefix}/{entity_id}"),
+            _links=Links(self=f"{prefix}/{entity_id}"),
         )
         latest = latest_timestamp(
             record.entity.created_at,
@@ -205,11 +208,13 @@ def make_entity_router(
                 pre_etag,
                 resource_kind=entity_type,
             )
+            # Dynamic update_request_model exposes updates/valid_from at runtime
+            # but the parameterized type erases them.
             await service.update_entity(
                 ctx,
                 resolved.entity_id,
-                body.updates,  # type: ignore[union-attr]
-                valid_from=body.valid_from,  # type: ignore[union-attr]
+                body.updates,  # type: ignore[attr-defined]
+                valid_from=body.valid_from,  # type: ignore[attr-defined]
             )
             record = await service.get_full_capability(ctx, resolved.entity_id)
         except CatalogError as exc:

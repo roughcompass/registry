@@ -49,7 +49,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
+from fastapi import APIRouter, Depends, FastAPI, Path, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from registry.api.auth.context import ROLE_ADMIN, ROLE_CONSUMER, ROLE_PRODUCER, require_roles
@@ -218,7 +218,7 @@ class _AuditWriterAdapter:
         )
 
 
-def _build_annotation_service(app) -> AnnotationService:  # type: ignore[type-arg]
+def _build_annotation_service(app: FastAPI) -> AnnotationService:
     """Build the singleton AnnotationService from app state.
 
     Called once by the app factory at startup; the result is stored on
@@ -252,7 +252,7 @@ def get_annotation_service(request: Request) -> AnnotationService:
     Tests override this dependency via ``app.dependency_overrides`` to inject a
     mock AnnotationService — no live database needed.
     """
-    return request.app.state.annotation_service
+    return request.app.state.annotation_service  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

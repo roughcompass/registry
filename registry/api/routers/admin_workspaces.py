@@ -53,7 +53,7 @@ def _get_workspace_service(request: Request) -> WorkspaceService:
     _build_workspace_service factory. All callers — this RTBF endpoint and
     the main workspace/entry CRUD router — share the same instance.
     """
-    return request.app.state.workspace_service
+    return request.app.state.workspace_service  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------

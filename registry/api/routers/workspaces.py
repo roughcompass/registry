@@ -64,7 +64,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Request, Response, status
 from pydantic import BaseModel, Field
 
 from registry.api.auth.context import ROLE_ADMIN, ROLE_AUDITOR, ROLE_CONSUMER, ROLE_PRODUCER, require_roles
@@ -341,7 +341,7 @@ class _AuditWriterAdapter:
         )
 
 
-def _build_workspace_service(app: object) -> WorkspaceService:
+def _build_workspace_service(app: FastAPI) -> WorkspaceService:
     """Build the singleton WorkspaceService from app state.
 
     Called once by the app factory at startup; the result is stored on
@@ -354,7 +354,7 @@ def _build_workspace_service(app: object) -> WorkspaceService:
     get_workspace_service and reuse the same instance without re-building the
     dependency graph on every call.
     """
-    state = app.state  # type: ignore[union-attr]
+    state = app.state
     visibility = state.visibility
     session_factory = state.session_factory
     pii_scanner = getattr(state, "pii_scanner", None)
@@ -380,7 +380,7 @@ def get_workspace_service(request: Request) -> WorkspaceService:
     Tests override this dependency via ``app.dependency_overrides`` to inject a
     mock WorkspaceService — no live database needed.
     """
-    return request.app.state.workspace_service
+    return request.app.state.workspace_service  # type: ignore[no-any-return]
 
 
 # ---------------------------------------------------------------------------
