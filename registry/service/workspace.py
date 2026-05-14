@@ -290,6 +290,88 @@ class WorkspaceOperationDenied(WorkspaceAuthError):
 
 
 # ---------------------------------------------------------------------------
+# Role-based authorization helpers
+# ---------------------------------------------------------------------------
+
+
+async def _load_effective_roles(
+    session: AsyncSession,
+    actor_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> frozenset[str]:
+    """Return the set of role names the actor holds in the given tenant.
+
+    Executes one indexed lookup on the composite primary key of actor_roles.
+    Returns an empty frozenset when the actor has no roles in this tenant.
+    No caching — roles are queried at request time so revocation takes effect
+    immediately without a cache flush.
+    """
+    result = await session.execute(
+        text(
+            """
+            SELECT r.name
+            FROM actor_roles ar
+            JOIN roles r ON r.role_id = ar.role_id
+            WHERE ar.actor_id = :actor_id
+              AND ar.tenant_id = :tenant_id
+            """
+        ),
+        {"actor_id": actor_id, "tenant_id": tenant_id},
+    )
+    return frozenset(row.name for row in result)
+
+
+def _can_perceive_workspace(
+    effective_roles: frozenset[str],
+    actor_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+    ws_row: Any,
+) -> bool:
+    """Return True if the actor can perceive (read) the workspace.
+
+    Pure function — no I/O. Called after _load_effective_roles so the
+    role set is already available.
+
+    Decision sequence (all conditions must pass in order):
+    1. Workspace must belong to the same tenant as the actor.
+    2. Actor must hold at least one role in this tenant.
+    3. Workspace must not be soft-deleted (t_invalidated_at is None).
+    4. For tenant-owned workspaces: any role holder may perceive.
+    5. For actor-owned workspaces:
+       - Auditors may perceive any actor workspace (audit carve-out).
+       - The owner perceives their own workspace if they hold producer or consumer.
+       - All other combinations: not perceivable.
+
+    This function is extracted specifically so it can be exhaustively unit-tested
+    without a DB session, one test per authorization matrix cell.
+    """
+    # Condition 1: tenant boundary
+    if ws_row.tenant_id != tenant_id:
+        return False
+
+    # Condition 2: actor must hold at least one role
+    if not effective_roles:
+        return False
+
+    # Condition 3: workspace must not be soft-deleted
+    if ws_row.t_invalidated_at is not None:
+        return False
+
+    # Condition 4: tenant-owned workspaces are visible to any role holder
+    if ws_row.owner_kind == "tenant":
+        return True
+
+    # Condition 5: actor-owned workspaces — auditor carve-out and owner check
+    if "auditor" in effective_roles:
+        return True
+
+    if ws_row.owner_actor_id == actor_id and effective_roles & {"producer", "consumer"}:
+        return True
+
+    return False
+
+
+# ---------------------------------------------------------------------------
 # WorkspaceService
 # ---------------------------------------------------------------------------
 
