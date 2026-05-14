@@ -277,7 +277,6 @@ async def test_list_tools(mcp_harness: McpHarness) -> None:
         "add_workspace_entry",
         "update_workspace_entry",
         "search_workspace_entries",
-        "list_workspace_shares",
     }, f"unexpected tool set: {names}"
 
     # Each tool must carry a non-empty inputSchema dict.
