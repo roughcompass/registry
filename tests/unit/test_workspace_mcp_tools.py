@@ -1,13 +1,12 @@
 """Unit tests for workspace MCP tools.
 
-Covers the seven workspace tools registered in the MCP server:
+Covers the six workspace tools registered in the MCP server:
   - create_workspace
   - list_workspaces
   - get_workspace
   - add_workspace_entry
   - update_workspace_entry
   - search_workspace_entries
-  - list_workspace_shares
 
 All tests use AsyncMock for the WorkspaceService layer — no Postgres or
 Docker required. The _resolve_tenant auth shim is patched to inject a
