@@ -1418,3 +1418,480 @@ async def test_purge_rtbf_idempotent_second_run_returns_zero_counts() -> None:
 
     assert result.purged_entries == 0
     assert result.purged_workspaces == 0
+
+
+# ===========================================================================
+# Role-visibility matrix — list_workspaces (6 roles × 2 owner_kind)
+# ===========================================================================
+#
+# Each test verifies that list_workspaces issues the SQL query regardless of
+# the actor's roles (filtering is pushed into SQL, not Python). The SQL
+# visibility predicate contains 'actor_roles' so the DB enforces the role gate.
+# We verify that the service correctly forwards whatever rows the DB returns.
+# ---------------------------------------------------------------------------
+
+
+def _make_capturing_list_session(
+    *,
+    rows: list[MagicMock] | None = None,
+    sql_log: list[str] | None = None,
+) -> AsyncMock:
+    """Session mock that logs SQL and returns 'rows' for list queries."""
+    _rows = rows or []
+    _log = sql_log if sql_log is not None else []
+
+    async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
+        sql = " ".join(str(stmt).split())
+        _log.append(sql)
+        result = MagicMock()
+        result.fetchall = MagicMock(return_value=_rows)
+        result.first = MagicMock(return_value=None)
+        return result
+
+    session = AsyncMock()
+    session.execute = _execute
+    return session
+
+
+def _list_service_with_roles(roles: list[str], rows: list[MagicMock] | None = None, sql_log: list[str] | None = None) -> WorkspaceService:
+    """Build a WorkspaceService whose mock session captures SQL and returns rows."""
+    session = _make_capturing_list_session(rows=rows or [], sql_log=sql_log)
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=cm)
+    return WorkspaceService(
+        session_factory=factory,
+        visibility_svc=_visibility(),
+        pii_scanner=_pii_clean(),
+        audit_writer=_audit_writer(),
+        clock=FakeClock(_NOW),
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_consumer_sees_tenant_ws_when_db_returns_it() -> None:
+    """Consumer: DB returns a tenant-owned workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["consumer"])
+    ws_row = _make_workspace_row(owner_kind="tenant", owner_actor_id=None)
+    sql_log: list[str] = []
+    svc = _list_service_with_roles(["consumer"], rows=[ws_row], sql_log=sql_log)
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+    assert refs[0].owner_kind == "tenant"
+    assert any("actor_roles" in sql for sql in sql_log), "SQL must contain actor_roles predicate"
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_consumer_sees_own_actor_ws_when_db_returns_it() -> None:
+    """Consumer who is the owner: DB returns their actor workspace; list surfaces it."""
+    ctx = _ctx(roles=["consumer"])
+    ws_row = _make_workspace_row(owner_kind="actor", owner_actor_id=_ACTOR_A)
+    sql_log: list[str] = []
+    svc = _list_service_with_roles(["consumer"], rows=[ws_row], sql_log=sql_log)
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+    assert any("actor_roles" in sql for sql in sql_log)
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_producer_sees_tenant_ws_when_db_returns_it() -> None:
+    """Producer: DB returns a tenant workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["producer"])
+    ws_row = _make_workspace_row(owner_kind="tenant", owner_actor_id=None)
+    svc = _list_service_with_roles(["producer"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_producer_sees_own_actor_ws_when_db_returns_it() -> None:
+    """Producer: DB returns their own actor workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["producer"])
+    ws_row = _make_workspace_row(owner_kind="actor", owner_actor_id=_ACTOR_A)
+    svc = _list_service_with_roles(["producer"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_admin_pure_sees_tenant_ws_when_db_returns_it() -> None:
+    """Pure admin: DB returns a tenant workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["admin"])
+    ws_row = _make_workspace_row(owner_kind="tenant", owner_actor_id=None)
+    svc = _list_service_with_roles(["admin"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_admin_pure_no_actor_ws_returned() -> None:
+    """Pure admin: DB returns no actor workspaces (SQL predicate excludes them); list is empty."""
+    ctx = _ctx(roles=["admin"])
+    svc = _list_service_with_roles(["admin"], rows=[])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert refs == []
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_admin_producer_sees_tenant_ws() -> None:
+    """Admin+Producer: DB returns a tenant workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["admin", "producer"])
+    ws_row = _make_workspace_row(owner_kind="tenant", owner_actor_id=None)
+    svc = _list_service_with_roles(["admin", "producer"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_admin_producer_sees_own_actor_ws() -> None:
+    """Admin+Producer: DB returns their own actor workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["admin", "producer"])
+    ws_row = _make_workspace_row(owner_kind="actor", owner_actor_id=_ACTOR_A)
+    svc = _list_service_with_roles(["admin", "producer"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_auditor_sees_tenant_ws() -> None:
+    """Auditor: DB returns a tenant workspace; list_workspaces surfaces it."""
+    ctx = _ctx(roles=["auditor"])
+    ws_row = _make_workspace_row(owner_kind="tenant", owner_actor_id=None)
+    sql_log: list[str] = []
+    svc = _list_service_with_roles(["auditor"], rows=[ws_row], sql_log=sql_log)
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+    assert any("actor_roles" in sql for sql in sql_log)
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_auditor_sees_any_actor_ws() -> None:
+    """Auditor: DB returns an actor workspace (audit carve-out); list_workspaces surfaces it."""
+    ctx = _ctx(roles=["auditor"])
+    other = uuid.uuid4()
+    ws_row = _make_workspace_row(owner_kind="actor", owner_actor_id=other)
+    svc = _list_service_with_roles(["auditor"], rows=[ws_row])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert len(refs) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_no_role_returns_empty() -> None:
+    """No-role actor: DB enforces role gate; list_workspaces returns empty list."""
+    ctx = _ctx(roles=[])
+    svc = _list_service_with_roles([], rows=[])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert refs == []
+
+
+@pytest.mark.asyncio
+async def test_list_workspaces_no_role_actor_ws_returns_empty() -> None:
+    """No-role actor: DB returns no actor workspaces either; list is empty."""
+    ctx = _ctx(roles=[])
+    svc = _list_service_with_roles([], rows=[])
+
+    refs, _ = await svc.list_workspaces(ctx)
+
+    assert refs == []
+
+
+# ===========================================================================
+# Role-visibility matrix — search_workspaces (6 roles × 2 owner_kind)
+# ===========================================================================
+#
+# search_workspaces issues a WITH CTE + FROM workspace_entries query.
+# The mock session captures the SQL so we can assert the visibility CTE
+# contains 'actor_roles'. Result rows simulate entry rows from the entries table.
+# ---------------------------------------------------------------------------
+
+
+def _make_entry_row(workspace_id: uuid.UUID | None = None) -> MagicMock:
+    """Build a mock workspace_entries row for search_workspaces results."""
+    row = MagicMock()
+    row.entry_id = uuid.uuid4()
+    row.workspace_id = workspace_id or uuid.uuid4()
+    row.tenant_id = _TENANT_A
+    row.kind = "note"
+    row.body_md = "Search result entry body."
+    row.references_jsonb = None
+    row.reference_ids = []
+    row.expires_at = None
+    row.t_invalidated_at = None
+    row.created_at = _NOW
+    row.updated_at = _NOW
+    row.created_by = _ACTOR_A
+    return row
+
+
+def _make_search_session(
+    *,
+    entry_rows: list[MagicMock] | None = None,
+    sql_log: list[str] | None = None,
+) -> AsyncMock:
+    """Session mock that handles search_workspaces SQL (workspace_entries query)."""
+    _rows = entry_rows or []
+    _log = sql_log if sql_log is not None else []
+
+    async def _execute(stmt: Any, params: dict | None = None) -> MagicMock:
+        sql = " ".join(str(stmt).split())
+        _log.append(sql)
+        result = MagicMock()
+        result.fetchall = MagicMock(return_value=_rows)
+        result.first = MagicMock(return_value=None)
+        return result
+
+    session = AsyncMock()
+    session.execute = _execute
+    begin_cm = MagicMock()
+    begin_cm.__aenter__ = AsyncMock(return_value=None)
+    begin_cm.__aexit__ = AsyncMock(return_value=False)
+    session.begin = MagicMock(return_value=begin_cm)
+    return session
+
+
+def _search_service_with_roles(roles: list[str], entry_rows: list[MagicMock] | None = None, sql_log: list[str] | None = None) -> WorkspaceService:
+    """Build a WorkspaceService whose mock session routes search_workspaces SQL."""
+    session = _make_search_session(entry_rows=entry_rows or [], sql_log=sql_log)
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=session)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    factory = MagicMock(return_value=cm)
+    return WorkspaceService(
+        session_factory=factory,
+        visibility_svc=_visibility(),
+        pii_scanner=_pii_clean(),
+        audit_writer=_audit_writer(),
+        clock=FakeClock(_NOW),
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_consumer_sees_tenant_ws_entries() -> None:
+    """Consumer: search returns entries from tenant-owned workspaces when DB returns them."""
+    ctx = _ctx(roles=["consumer"])
+    entry = _make_entry_row()
+    sql_log: list[str] = []
+    svc = _search_service_with_roles(["consumer"], entry_rows=[entry], sql_log=sql_log)
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+    assert any("actor_roles" in sql or "visible_workspaces" in sql for sql in sql_log), (
+        "search_workspaces must include a visibility CTE with actor_roles"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_consumer_actor_ws_entries() -> None:
+    """Consumer who owns the workspace: search returns their actor-ws entries."""
+    ctx = _ctx(roles=["consumer"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["consumer"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_producer_sees_entries() -> None:
+    """Producer: search returns entries visible to them when DB returns them."""
+    ctx = _ctx(roles=["producer"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["producer"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_producer_actor_ws_entries() -> None:
+    """Producer: search returns entries from their own actor workspace."""
+    ctx = _ctx(roles=["producer"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["producer"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_admin_pure_sees_tenant_ws_entries() -> None:
+    """Pure admin: search returns entries from tenant workspaces when DB returns them."""
+    ctx = _ctx(roles=["admin"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["admin"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_admin_pure_no_actor_ws_entries() -> None:
+    """Pure admin: search returns no actor-ws entries (SQL predicate excludes them)."""
+    ctx = _ctx(roles=["admin"])
+    svc = _search_service_with_roles(["admin"], entry_rows=[])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_admin_producer_sees_entries() -> None:
+    """Admin+Producer: search returns entries from both tenant and actor workspaces."""
+    ctx = _ctx(roles=["admin", "producer"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["admin", "producer"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_admin_producer_own_actor_ws_entries() -> None:
+    """Admin+Producer: search surfaces entries from their own actor workspace."""
+    ctx = _ctx(roles=["admin", "producer"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["admin", "producer"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_auditor_sees_tenant_ws_entries() -> None:
+    """Auditor: search returns entries from tenant workspaces (auditor can perceive tenant ws)."""
+    ctx = _ctx(roles=["auditor"])
+    entry = _make_entry_row()
+    sql_log: list[str] = []
+    svc = _search_service_with_roles(["auditor"], entry_rows=[entry], sql_log=sql_log)
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+    assert any("actor_roles" in sql or "visible_workspaces" in sql for sql in sql_log)
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_auditor_sees_actor_ws_entries() -> None:
+    """Auditor: search returns entries from any actor workspace (audit carve-out)."""
+    ctx = _ctx(roles=["auditor"])
+    entry = _make_entry_row()
+    svc = _search_service_with_roles(["auditor"], entry_rows=[entry])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert len(result.items) == 1
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_no_role_returns_empty() -> None:
+    """No-role actor: DB returns no entries (role gate in SQL); search returns empty."""
+    ctx = _ctx(roles=[])
+    svc = _search_service_with_roles([], entry_rows=[])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert result.items == []
+
+
+@pytest.mark.asyncio
+async def test_search_workspaces_no_role_actor_ws_returns_empty() -> None:
+    """No-role actor: DB returns no actor-ws entries either; search is empty."""
+    ctx = _ctx(roles=[])
+    svc = _search_service_with_roles([], entry_rows=[])
+
+    result = await svc.search_workspaces(ctx)
+
+    assert result.items == []
+
+
+# ===========================================================================
+# create_workspace — full 12-cell role-check matrix (missing cells)
+# ===========================================================================
+# The cells for producer/actor, admin/tenant, admin+producer/both, no-role/actor
+# are already covered earlier. This section adds the remaining missing cells.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_consumer_denied_for_actor_kind() -> None:
+    """Consumer may not create actor-owned workspaces; only producers may."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["consumer"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="actor")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_consumer_denied_for_tenant_kind() -> None:
+    """Consumer may not create tenant-owned workspaces; admin role is required."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["consumer"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="tenant")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_auditor_denied_for_actor_kind() -> None:
+    """Auditor may not create actor-owned workspaces (auditor is read-only)."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["auditor"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="actor")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_auditor_denied_for_tenant_kind() -> None:
+    """Auditor may not create tenant-owned workspaces (auditor is read-only)."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=["auditor"])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="tenant")
+
+
+@pytest.mark.asyncio
+async def test_create_workspace_no_role_denied_for_tenant_kind() -> None:
+    """No-role actor may not create tenant-owned workspaces."""
+    ctx = _ctx()
+    svc = _make_service(actor_roles=[])
+
+    with pytest.raises(WorkspaceOperationDenied):
+        await svc.create_workspace(ctx, name="WS", owner_kind="tenant")
