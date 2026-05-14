@@ -372,6 +372,157 @@ def _can_perceive_workspace(
 
 
 # ---------------------------------------------------------------------------
+# Write-gate helpers — pure functions, no I/O
+# ---------------------------------------------------------------------------
+# All private helpers use the ordering (effective_roles, actor_id, ws).
+# All public aliases use the ordering (actor, workspace, effective_roles)
+# and delegate to the corresponding private helper by extracting actor.actor_id.
+# All helpers raise WorkspaceOperationDenied on denial and never raise
+# WorkspaceNotFound — perceivability must already be confirmed by get_workspace.
+
+
+def _assert_can_write_entries(
+    effective_roles: frozenset[str],
+    actor_id: uuid.UUID,
+    ws: WorkspaceRef,
+) -> None:
+    """Raise WorkspaceOperationDenied if the actor may not create or update entries.
+
+    For actor-owned workspaces the actor must be the owner AND hold producer.
+    For tenant-owned workspaces the actor must hold admin.
+    Archived workspaces reject all entry writes regardless of role or ownership.
+    """
+    if ws.owner_kind == "actor":
+        if ws.archived_at is not None:
+            raise WorkspaceOperationDenied("Workspace is archived; entry writes are not permitted.")
+        if ws.owner_actor_id != actor_id or "producer" not in effective_roles:
+            raise WorkspaceOperationDenied("Only the owning producer may write entries to actor-owned workspaces.")
+    else:
+        # tenant-owned workspace
+        if ws.archived_at is not None:
+            raise WorkspaceOperationDenied("Workspace is archived; entry writes are not permitted.")
+        if "admin" not in effective_roles:
+            raise WorkspaceOperationDenied("Only admins may write entries to tenant-owned workspaces.")
+
+
+def _assert_can_update_workspace(
+    effective_roles: frozenset[str],
+    actor_id: uuid.UUID,
+    ws: WorkspaceRef,
+) -> None:
+    """Raise WorkspaceOperationDenied if the actor may not update workspace metadata.
+
+    For actor-owned workspaces the actor must be the owner AND hold producer.
+    For tenant-owned workspaces the actor must hold admin.
+    Archived workspaces reject metadata updates regardless of role or ownership.
+    """
+    if ws.owner_kind == "actor":
+        if ws.archived_at is not None:
+            raise WorkspaceOperationDenied("Workspace is archived; metadata updates are not permitted.")
+        if ws.owner_actor_id != actor_id or "producer" not in effective_roles:
+            raise WorkspaceOperationDenied("Only the owning producer may update actor-owned workspace metadata.")
+    else:
+        # tenant-owned workspace
+        if ws.archived_at is not None:
+            raise WorkspaceOperationDenied("Workspace is archived; metadata updates are not permitted.")
+        if "admin" not in effective_roles:
+            raise WorkspaceOperationDenied("Only admins may update tenant-owned workspace metadata.")
+
+
+def _assert_can_delete_workspace(
+    effective_roles: frozenset[str],
+    actor_id: uuid.UUID,
+    ws: WorkspaceRef,
+) -> None:
+    """Raise WorkspaceOperationDenied if the actor may not soft-delete the workspace.
+
+    Archive state is irrelevant for soft-delete — admins can delete archived tenant
+    workspaces and producers can delete archived actor workspaces.
+    """
+    if ws.owner_kind == "actor":
+        if ws.owner_actor_id != actor_id or "producer" not in effective_roles:
+            raise WorkspaceOperationDenied("Only the owning producer may delete actor-owned workspaces.")
+    else:
+        # tenant-owned workspace
+        if "admin" not in effective_roles:
+            raise WorkspaceOperationDenied("Only admins may delete tenant-owned workspaces.")
+
+
+def _assert_can_archive_workspace(
+    effective_roles: frozenset[str],
+    actor_id: uuid.UUID,
+    ws: WorkspaceRef,
+) -> None:
+    """Raise WorkspaceOperationDenied if the actor may not archive/unarchive the workspace.
+
+    Same ownership/role rules as soft-delete. Auditors, consumers, and non-owning
+    producers all receive WorkspaceOperationDenied.
+    """
+    if ws.owner_kind == "actor":
+        if ws.owner_actor_id != actor_id or "producer" not in effective_roles:
+            raise WorkspaceOperationDenied("Only the owning producer may archive actor-owned workspaces.")
+    else:
+        # tenant-owned workspace
+        if "admin" not in effective_roles:
+            raise WorkspaceOperationDenied("Only admins may archive tenant-owned workspaces.")
+
+
+# ---------------------------------------------------------------------------
+# Public aliases — external call surface (actor, workspace, effective_roles ordering)
+# ---------------------------------------------------------------------------
+
+
+def assert_can_create_entry(
+    actor: TenantContext,
+    workspace: WorkspaceRef,
+    effective_roles: frozenset[str],
+) -> None:
+    """Raise WorkspaceOperationDenied if actor may not create an entry.
+
+    Perceivability must be confirmed by calling get_workspace first.
+    Extracts actor_id from actor.actor_id before delegating to the private helper.
+    """
+    _assert_can_write_entries(
+        effective_roles=effective_roles,
+        actor_id=actor.actor_id,
+        ws=workspace,
+    )
+
+
+def assert_can_update_entry(
+    actor: TenantContext,
+    workspace: WorkspaceRef,
+    effective_roles: frozenset[str],
+) -> None:
+    """Raise WorkspaceOperationDenied if actor may not update an entry.
+
+    Entry write capability is identical for create and update. Perceivability
+    must be confirmed by calling get_workspace first.
+    """
+    _assert_can_write_entries(
+        effective_roles=effective_roles,
+        actor_id=actor.actor_id,
+        ws=workspace,
+    )
+
+
+def assert_can_soft_delete_workspace(
+    actor: TenantContext,
+    workspace: WorkspaceRef,
+    effective_roles: frozenset[str],
+) -> None:
+    """Raise WorkspaceOperationDenied if actor may not soft-delete the workspace.
+
+    Perceivability must be confirmed by calling get_workspace first.
+    """
+    _assert_can_delete_workspace(
+        effective_roles=effective_roles,
+        actor_id=actor.actor_id,
+        ws=workspace,
+    )
+
+
+# ---------------------------------------------------------------------------
 # WorkspaceService
 # ---------------------------------------------------------------------------
 
