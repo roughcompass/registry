@@ -906,8 +906,9 @@ def create_catalog_mcp_server(
     ) -> str:
         """List workspaces visible to the calling actor.
 
-        Returns workspaces that are owned by the actor, owned by the actor's
-        tenant, or shared with the actor via an active workspace share.
+        Returns workspaces that the caller can access: actor-owned workspaces,
+        tenant-owned workspaces visible to the caller's role, or any workspace
+        the caller's tenant role grants access to.
 
         Args:
             include_archived: When ``True``, includes archived workspaces
@@ -1160,39 +1161,6 @@ def create_catalog_mcp_server(
                 "total_count": result.total_count,
             }
         )
-
-    @mcp_server.tool()
-    async def list_workspace_shares(
-        workspace_id: str,
-    ) -> str:
-        """List active shares on a workspace (revoked shares excluded).
-
-        Authorization: the calling actor must be the workspace owner or an
-        admin in the workspace's owning tenant.
-
-        Args:
-            workspace_id: UUID of the workspace whose shares to list.
-
-        Returns:
-            JSON array of share objects (share_id, grantee_actor_id,
-            grantee_tenant_id, role, granted_at, revoked_at).
-        """
-        ctx = await _resolve_tenant(session_factory, _clock)
-        try:
-            ws_uuid = uuid.UUID(workspace_id)
-        except ValueError as exc:
-            raise ToolError(f"workspace_id must be a valid UUID: {exc}") from exc
-        try:
-            shares = await workspace_service.list_shares(ctx, ws_uuid)
-        except HTTPException as exc:
-            if exc.status_code == 403:
-                raise ToolError(
-                    f"Not authorized to list shares for workspace {workspace_id}"
-                ) from exc
-            if exc.status_code == 404:
-                raise ToolError(f"Workspace {workspace_id} not found.") from exc
-            raise _ws_http_exc_to_tool_error(exc, workspace_id=workspace_id) from exc
-        return json.dumps(_serialize(shares))
 
     return mcp_server
 
