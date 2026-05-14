@@ -1225,3 +1225,61 @@ clients receive a stable disambiguation signal.
   3.42s under the role-based SQL predicate.
 - Role-transition integration suite: 12-scenario producer→consumer,
   producer→admin, off-boarding, and re-promotion traces all green.
+
+## Typecheck Hygiene Sweep (typecheck-hygiene-sweep, closed 2026-05-14)
+
+**Closed:** 2026-05-14
+**Tasks:** 1 / 1 done
+
+Follow-on phase to workspace-rbac. The workspace-rbac exit gate
+documented a pre-existing 110-error mypy baseline carry-forward; this
+phase drove the count to zero so `make typecheck` rejoins the standard
+release-gate set.
+
+### Task completion
+
+| Task | Title | Status | Commits |
+|------|-------|--------|---------|
+| THS-T01 | Clear the typecheck baseline (110 errors → 0) | done | f84da98 |
+
+### Before / after
+
+| Metric | Baseline | Post-sweep |
+|---|---|---|
+| mypy errors | 110 in 37 files | 0 in 0 files |
+| make typecheck exit | non-zero | 0 |
+| unit_test_count | 2096 | 2096 (no behavior change) |
+
+### Error taxonomy applied
+
+| Code | Count | Approach |
+|---|---|---|
+| `type-arg` | 21 | Add missing generic params (`dict[str, Any]`, `list[Any]`). |
+| `no-untyped-call` | 25 | Annotate lambda helpers in scripts/ with `Callable[[str], str]`; targeted ignore at one call boundary. |
+| `attr-defined` | 15 | `# type: ignore[attr-defined]` for `Result.rowcount` (5) and pydantic alias mismatches resolved upstream. |
+| `unused-ignore` | 13 | Delete stale comments. |
+| `call-arg` | 17 | Real call-site bug fixes — `links=` → `_links=` across 9 routers, `t_<field>` → `<field>` across 8 bitemporal kwargs in retrieval.py. |
+| `no-any-return` | 9 | Targeted ignore at boundary returns from untyped DB / dependency accessors. |
+| `assignment` (3), `arg-type` (3) | 6 | Targeted ignores with comments. |
+| `no-untyped-def` (2), `var-annotated` (1), `import-untyped` (1) | 4 | Add explicit annotations or scoped ignore. |
+
+### Gate state at close
+
+- `make typecheck` exits 0 — 150 source files clean.
+- `make lint`, `make doc-refs`, `make test-hygiene`, `make test-unit`
+  (2096 passing), `make test-conformance` (52 passing): all green.
+
+### Outcomes
+
+- **Two genuine bug-fix categories surfaced.** The `links=` vs `_links=`
+  mismatch across 9 routers and the `t_<bitemporal>` kwarg mistypes in
+  `retrieval.py` were silently working at runtime via pydantic's
+  `populate_by_name=True` but rejected by the pydantic-mypy plugin's
+  generated signatures. Static-check enforcement caught the drift.
+- **One stale Settings reference removed.** `sync_worker.py` logged
+  `settings.sync_interval_seconds` but that attribute never existed.
+  Removed the format-string argument; each sync source carries its own
+  schedule.
+- **No new `# type: ignore` markers without a stated reason.** Every
+  ignore added in this sweep has an adjacent comment or surrounding
+  code-context explaining why mypy cannot prove the property locally.
