@@ -521,25 +521,20 @@ class WorkspaceService:
         ctx: TenantContext,
         workspace_id: uuid.UUID,
     ) -> WorkspaceRef:
-        """Return a workspace if the caller is authorized.
+        """Return a workspace if the caller is authorized to perceive it.
 
         This is the workspace-level visibility chokepoint. Every service method
-        that touches workspace content must call this first. The three access paths
-        (in evaluation order) are:
+        that touches workspace content must call this first. Bypassing it is how
+        cross-actor content leaks happen.
 
-          1. Owning actor: ctx.actor_id == workspace.owner_actor_id.
-          2. Same-tenant member: workspace.tenant_id == ctx.tenant_id
-             (any actor in the owning tenant can access team-owned or personal workspaces
-             in their own tenant).
-          3. Active share holder: a workspace_shares row exists where
-             grantee_actor_id == ctx.actor_id and revoked_at IS NULL.
+        Authorization uses the role-based decision function _can_perceive_workspace:
+        the actor must hold at least one role in the workspace's tenant, the
+        workspace must not be soft-deleted, and the owner_kind/ownership rules
+        must pass. Auditors may perceive any actor-owned workspace in their tenant.
 
-        Raises 404 if the workspace does not exist or is soft-deleted.
-        Raises 403 if the caller satisfies none of the above paths.
-
-        On first cross-tenant read (grantee tenant differs from workspace tenant),
-        calls _log_acceptance_if_first to record a workspace_share_acceptances row.
-        The acceptance log is informational and does not gate access.
+        Raises WorkspaceNotFound when the workspace row does not exist or when the
+        actor cannot perceive it — the caller must not distinguish between these two
+        cases. WorkspaceNotFound maps to HTTP 404 in the router.
         """
         async with self._session_factory() as session, session.begin():
             ws_result = await session.execute(
@@ -552,56 +547,21 @@ class WorkspaceService:
                         created_at, updated_at, created_by
                     FROM workspaces
                     WHERE workspace_id = :workspace_id
-                      AND t_invalidated_at IS NULL
                     """
                 ),
                 {"workspace_id": workspace_id},
             )
             ws_row = ws_result.first()
             if ws_row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Workspace {workspace_id} not found.",
-                )
+                raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
-            # Path 1: owning actor.
-            is_owner = ws_row.owner_actor_id is not None and ctx.actor_id == ws_row.owner_actor_id
-
-            # Path 2: same-tenant member (any actor in the owning tenant).
-            is_same_tenant = ctx.tenant_id == ws_row.tenant_id
-
-            share_row = None
-            if not (is_owner or is_same_tenant):
-                # Path 3: active share holder.
-                share_result = await session.execute(
-                    text(
-                        """
-                        SELECT share_id, grantee_tenant_id
-                        FROM workspace_shares
-                        WHERE workspace_id = :workspace_id
-                          AND grantee_actor_id = :actor_id
-                          AND revoked_at IS NULL
-                        LIMIT 1
-                        """
-                    ),
-                    {
-                        "workspace_id": workspace_id,
-                        "actor_id": ctx.actor_id,
-                    },
-                )
-                share_row = share_result.first()
-                if share_row is None:
-                    raise HTTPException(
-                        status_code=403,
-                        detail=(
-                            f"Actor {ctx.actor_id} is not authorized to access workspace {workspace_id}."
-                        ),
-                    )
-
-        # Cross-tenant first access: grantee's tenant differs from workspace's tenant.
-        # Acceptance logging is informational — it does not gate the read path.
-        if share_row is not None and share_row.grantee_tenant_id != ws_row.tenant_id:
-            await self._log_acceptance_if_first(ctx, share_row.share_id, workspace_id)
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
+            )
+            if not _can_perceive_workspace(
+                effective_roles, ctx.actor_id, ctx.tenant_id, ws_row
+            ):
+                raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
         _log.info(
             "workspace.get workspace_id=%s actor=%s tenant=%s",

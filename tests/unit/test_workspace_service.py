@@ -22,6 +22,8 @@ import pytest
 from fastapi import HTTPException
 
 from registry.service.workspace import (
+    WorkspaceNotFound,
+    WorkspaceOperationDenied,
     WorkspaceRef,
     WorkspaceService,
 )
@@ -313,9 +315,10 @@ async def test_get_workspace_raises_404_for_no_roles() -> None:
         owner_kind="tenant",
         owner_actor_id=None,
     )
-    # actor_roles=[] → _load_effective_roles returns frozenset()
-    # After T04 service rewire this will raise WorkspaceNotFound; for now placeholder
-    _ = svc  # fixture seeded; test body complete after service rewire in T04
+    # actor_roles=[] → _load_effective_roles returns frozenset() → not perceivable
+    svc = _make_service(workspace_row=ws_row, actor_roles=[])
+    with pytest.raises(WorkspaceNotFound):
+        await svc.get_workspace(ctx, _WORKSPACE_ID)
 
 
 # ---------------------------------------------------------------------------
@@ -324,16 +327,14 @@ async def test_get_workspace_raises_404_for_no_roles() -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_workspace_raises_404_for_soft_deleted() -> None:
-    """get_workspace raises 404 when workspace_row is None (soft-deleted or missing)."""
+async def test_get_workspace_raises_not_found_for_missing() -> None:
+    """get_workspace raises WorkspaceNotFound when workspace_row is None (no such workspace)."""
     ctx = _ctx()
-    # workspace_row=None means the WHERE t_invalidated_at IS NULL filter excludes the row
+    # workspace_row=None means no row returned from the DB
     svc = _make_service(workspace_row=None)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceNotFound):
         await svc.get_workspace(ctx, _WORKSPACE_ID)
-
-    assert exc_info.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
