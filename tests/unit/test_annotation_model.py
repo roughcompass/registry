@@ -178,7 +178,7 @@ def test_serialize_body_returns_body_string() -> None:
 
 def test_serialize_body_returns_exact_body_value() -> None:
     """_serialize_body() must return the exact body without transformation."""
-    body = "Multi-line\nbody\nwith special chars: <>&\""
+    body = 'Multi-line\nbody\nwith special chars: <>&"'
     record = _make_record(body)
     assert record._serialize_body() == body
 

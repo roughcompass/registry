@@ -75,12 +75,12 @@ _AUTHORITY_RE = re.compile(
 # "producer"), but until that is confirmed externally the mapping errs toward
 # under-permission rather than over-permission.
 VERB_TO_ROLE: dict[str, str] = {
-    "Owner":   "admin",
+    "Owner": "admin",
     "Manager": "producer",
-    "Operate": "auditor",   # conservative — pending external confirmation
-    "CRUD":    "admin",
-    "RU":      "producer",
-    "R":       "viewer",
+    "Operate": "auditor",  # conservative — pending external confirmation
+    "CRUD": "admin",
+    "RU": "producer",
+    "R": "viewer",
 }
 
 # Alias used internally (tasks.md naming convention).
@@ -98,17 +98,19 @@ _ROLE_WEIGHT: dict[str, int] = {role: len(ROLE_PRECEDENCE) - i for i, role in en
 # ---------------------------------------------------------------------------
 # Data model
 
+
 @dataclass(frozen=True)
 class ParsedAuthority:
     """Decomposed RSAM authority string."""
 
-    seal_id: str   # 4–6 decimal digits; maps to tenant_external_id
+    seal_id: str  # 4–6 decimal digits; maps to tenant_external_id
     resource: str  # uppercase identifier; opaque for role derivation
-    verb: str      # one of Owner | Manager | Operate | CRUD | RU | R
+    verb: str  # one of Owner | Manager | Operate | CRUD | RU | R
 
 
 # ---------------------------------------------------------------------------
 # Helpers
+
 
 def _shape_label(authority: str) -> str:
     """Return a cardinality-safe label value for a given authority string.
@@ -125,6 +127,7 @@ def _shape_label(authority: str) -> str:
 
 # ---------------------------------------------------------------------------
 # Public API
+
 
 def parse_authority(authority: str) -> ParsedAuthority | None:
     """Return ParsedAuthority on match; None on non-match. Never raises.

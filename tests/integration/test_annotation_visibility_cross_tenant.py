@@ -246,15 +246,9 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
     client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, a_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-vis-a-{suffix}"
-    )
-    b_tid, _b_actor, b_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-vis-b-{suffix}"
-    )
-    _c_tid, _c_actor, c_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-vis-c-{suffix}"
-    )
+    a_tid, _a_actor, a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-a-{suffix}")
+    b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-b-{suffix}")
+    _c_tid, _c_actor, c_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-c-{suffix}")
 
     cap_id = await _seed_capability(
         pg_container,
@@ -295,8 +289,7 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
     assert "next_cursor" in a_body
     a_item_ids = [item["annotation_id"] for item in a_body["items"]]
     assert annotation_id in a_item_ids, (
-        f"Provider (Tenant A) should see Tenant B's annotation {annotation_id}; "
-        f"got items: {a_item_ids}"
+        f"Provider (Tenant A) should see Tenant B's annotation {annotation_id}; " f"got items: {a_item_ids}"
     )
 
     # Step 3: Tenant B (author) GET → sees only their own annotation.
@@ -307,15 +300,11 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
     assert b_resp.status_code == 200, b_resp.text
     b_body = b_resp.json()
     b_item_ids = [item["annotation_id"] for item in b_body["items"]]
-    assert annotation_id in b_item_ids, (
-        f"Author (Tenant B) should see their own annotation; got: {b_item_ids}"
-    )
+    assert annotation_id in b_item_ids, f"Author (Tenant B) should see their own annotation; got: {b_item_ids}"
     # Author path must not expose annotations from other tenants (no others here,
     # but each item must belong to Tenant B).
     for item in b_body["items"]:
-        assert item["author_tenant_id"] == str(b_tid), (
-            f"Author path returned an item not authored by Tenant B: {item}"
-        )
+        assert item["author_tenant_id"] == str(b_tid), f"Author path returned an item not authored by Tenant B: {item}"
 
     # Step 4: Tenant C GET → 200 with empty list (not 403).
     c_resp = await client.get(
@@ -323,19 +312,14 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
         headers={"Authorization": f"Bearer {c_token}"},
     )
     assert c_resp.status_code == 200, (
-        f"Third-tenant GET must return 200, not {c_resp.status_code}. "
-        f"Response: {c_resp.text}"
+        f"Third-tenant GET must return 200, not {c_resp.status_code}. " f"Response: {c_resp.text}"
     )
     c_body = c_resp.json()
-    assert c_body["items"] == [], (
-        f"Tenant C (third party) must see empty items list; got: {c_body['items']}"
-    )
+    assert c_body["items"] == [], f"Tenant C (third party) must see empty items list; got: {c_body['items']}"
     assert c_body["next_cursor"] is None
 
     # Step 5: Tenant C's response must not contain Tenant B's annotation_id anywhere.
-    assert annotation_id not in c_resp.text, (
-        f"Tenant C's response body leaks Tenant B's annotation_id {annotation_id}"
-    )
+    assert annotation_id not in c_resp.text, f"Tenant C's response body leaks Tenant B's annotation_id {annotation_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -354,15 +338,9 @@ async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_
     client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-db-a-{suffix}"
-    )
-    b_tid, _b_actor, b_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-db-b-{suffix}"
-    )
-    c_tid, _c_actor, _c_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-db-c-{suffix}"
-    )
+    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-a-{suffix}")
+    b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-b-{suffix}")
+    c_tid, _c_actor, _c_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-c-{suffix}")
 
     cap_id = await _seed_capability(
         pg_container,
@@ -400,9 +378,9 @@ async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_
         await engine.dispose()
 
     c_ids = [str(row.annotation_id) for row in c_rows]
-    assert str(annotation_id) not in c_ids, (
-        f"DB author-path query for Tenant C returned Tenant B's annotation {annotation_id}"
-    )
+    assert (
+        str(annotation_id) not in c_ids
+    ), f"DB author-path query for Tenant C returned Tenant B's annotation {annotation_id}"
     assert c_ids == [], f"Tenant C should have no annotations on this capability; got {c_ids}"
 
 
@@ -427,12 +405,8 @@ async def test_list_annotations_returns_404_for_private_capability_from_unrelate
     client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-priv-a-{suffix}"
-    )
-    _b_tid, _b_actor, b_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-priv-b-{suffix}"
-    )
+    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-priv-a-{suffix}")
+    _b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-priv-b-{suffix}")
 
     # Tenant A creates a PRIVATE capability — Tenant B has no visibility.
     cap_id = await _seed_capability(
@@ -452,8 +426,7 @@ async def test_list_annotations_returns_404_for_private_capability_from_unrelate
     # acceptable replacement for the leak; the assertion below rejects only the
     # vulnerable shape.
     assert resp.status_code != 200, (
-        f"private-capability list leaked existence as 200 from unrelated tenant; "
-        f"response={resp.text}"
+        f"private-capability list leaked existence as 200 from unrelated tenant; " f"response={resp.text}"
     )
 
 
@@ -478,12 +451,8 @@ async def test_list_annotations_p95_latency(pg_container: str, app_client) -> No
     suffix = uuid.uuid4().hex[:8]
     skip_assertion = os.environ.get("SKIP_LATENCY_TESTS", "").strip() == "1"
 
-    a_tid, a_actor, a_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-lat-a-{suffix}"
-    )
-    b_tid, b_actor, _b_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ann-lat-b-{suffix}"
-    )
+    a_tid, a_actor, a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-lat-a-{suffix}")
+    b_tid, b_actor, _b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-lat-b-{suffix}")
 
     cap_id = await _seed_capability(
         pg_container,

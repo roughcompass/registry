@@ -229,9 +229,7 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_rtbf_purge_personal_and_shared_workspace(
-    pg_container: str, app_client: AsyncClient
-) -> None:
+async def test_rtbf_purge_personal_and_shared_workspace(pg_container: str, app_client: AsyncClient) -> None:
     """Normative RTBF scenario: actor-owned workspaces fully erased.
 
     Setup:
@@ -356,20 +354,18 @@ async def test_rtbf_purge_personal_and_shared_workspace(
         f"/v1/admin/actors/{a_actor_id}/personal-data",
         headers={"Authorization": f"Bearer {a_token}"},
     )
-    assert resp.status_code == 200, (
-        f"Expected 200 from RTBF purge endpoint; got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 200, f"Expected 200 from RTBF purge endpoint; got {resp.status_code}: {resp.text}"
     body = resp.json()
 
     # -----------------------------------------------------------------------
     # Assertion 1: PurgeResult counts.
     # -----------------------------------------------------------------------
-    assert body["purged_entries"] == expected_purged_entries, (
-        f"purged_entries: expected {expected_purged_entries}, got {body['purged_entries']}"
-    )
-    assert body["purged_workspaces"] == expected_purged_workspaces, (
-        f"purged_workspaces: expected {expected_purged_workspaces}, got {body['purged_workspaces']}"
-    )
+    assert (
+        body["purged_entries"] == expected_purged_entries
+    ), f"purged_entries: expected {expected_purged_entries}, got {body['purged_entries']}"
+    assert (
+        body["purged_workspaces"] == expected_purged_workspaces
+    ), f"purged_workspaces: expected {expected_purged_workspaces}, got {body['purged_workspaces']}"
     assert "revoked_shares" not in body, (
         f"revoked_shares field must not appear in purge response under role-based access; "
         f"got body keys {sorted(body.keys())}"
@@ -383,9 +379,7 @@ async def test_rtbf_purge_personal_and_shared_workspace(
         "SELECT workspace_id FROM workspaces WHERE workspace_id = :wid",
         {"wid": personal_ws_id},
     )
-    assert personal_ws_row is None, (
-        f"Personal workspace {personal_ws_id} should have been deleted by RTBF purge"
-    )
+    assert personal_ws_row is None, f"Personal workspace {personal_ws_id} should have been deleted by RTBF purge"
 
     # -----------------------------------------------------------------------
     # Assertion 3: Personal workspace — entries deleted.
@@ -396,9 +390,9 @@ async def test_rtbf_purge_personal_and_shared_workspace(
         "entry_id = ANY(:eids)",
         {"eids": [a_entry1_id, a_entry2_id]},
     )
-    assert personal_entry_count == 0, (
-        f"Expected 0 entries from personal workspace after purge; got {personal_entry_count}"
-    )
+    assert (
+        personal_entry_count == 0
+    ), f"Expected 0 entries from personal workspace after purge; got {personal_entry_count}"
 
     # -----------------------------------------------------------------------
     # Assertion 4: Mixed workspace — workspace row deleted.
@@ -425,9 +419,7 @@ async def test_rtbf_purge_personal_and_shared_workspace(
             "SELECT entry_id FROM workspace_entries WHERE entry_id = :eid",
             {"eid": entry_id},
         )
-        assert entry_row is None, (
-            f"{label} entry {entry_id} should be deleted when the actor-owned workspace is purged"
-        )
+        assert entry_row is None, f"{label} entry {entry_id} should be deleted when the actor-owned workspace is purged"
 
 
 @pytest.mark.asyncio
@@ -480,21 +472,19 @@ async def test_rtbf_purge_idempotent(pg_container: str, app_client: AsyncClient)
     )
     assert resp2.status_code == 200, resp2.text
     body2 = resp2.json()
-    assert body2["purged_entries"] == 0, (
-        f"Second RTBF call should return purged_entries=0; got {body2['purged_entries']}"
-    )
-    assert body2["purged_workspaces"] == 0, (
-        f"Second RTBF call should return purged_workspaces=0; got {body2['purged_workspaces']}"
-    )
-    assert "revoked_shares" not in body2, (
-        f"revoked_shares field must not appear in purge response; got body keys {sorted(body2.keys())}"
-    )
+    assert (
+        body2["purged_entries"] == 0
+    ), f"Second RTBF call should return purged_entries=0; got {body2['purged_entries']}"
+    assert (
+        body2["purged_workspaces"] == 0
+    ), f"Second RTBF call should return purged_workspaces=0; got {body2['purged_workspaces']}"
+    assert (
+        "revoked_shares" not in body2
+    ), f"revoked_shares field must not appear in purge response; got body keys {sorted(body2.keys())}"
 
 
 @pytest.mark.asyncio
-async def test_rtbf_purge_non_admin_forbidden(
-    pg_container: str, app_client: AsyncClient
-) -> None:
+async def test_rtbf_purge_non_admin_forbidden(pg_container: str, app_client: AsyncClient) -> None:
     """Non-admin caller receives 403 from the RTBF purge endpoint.
 
     The endpoint requires the admin role. An actor that holds only producer and
@@ -520,6 +510,5 @@ async def test_rtbf_purge_non_admin_forbidden(
         headers={"Authorization": f"Bearer {b_token}"},
     )
     assert resp.status_code == 403, (
-        f"Non-admin caller must receive 403 from RTBF endpoint; "
-        f"got {resp.status_code}: {resp.text}"
+        f"Non-admin caller must receive 403 from RTBF endpoint; " f"got {resp.status_code}: {resp.text}"
     )

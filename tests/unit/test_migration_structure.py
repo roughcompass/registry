@@ -34,18 +34,14 @@ def _captured_sql_and_params(bind: MagicMock) -> list[tuple[str, dict[str, Any]]
     captured: list[tuple[str, dict[str, Any]]] = []
     for call in bind.execute.call_args_list:
         text_obj = call.args[0]
-        params: dict[str, Any] = (
-            call.args[1] if len(call.args) > 1 else (call.kwargs.get("parameters") or {})
-        )
+        params: dict[str, Any] = call.args[1] if len(call.args) > 1 else (call.kwargs.get("parameters") or {})
         captured.append((str(text_obj), params))
     return captured
 
 
 def test_mig0018_upgrade_does_not_interpolate_user_controlled_data() -> None:
     """0018 vocabulary seed inserts must use :tid / :kind / :value placeholders."""
-    mod = importlib.import_module(
-        "registry.storage.migrations.versions.0018_annotations_plaintext"
-    )
+    mod = importlib.import_module("registry.storage.migrations.versions.0018_annotations_plaintext")
 
     bind = MagicMock()
     with (
@@ -61,9 +57,9 @@ def test_mig0018_upgrade_does_not_interpolate_user_controlled_data() -> None:
     assert seeds, "expected at least one parameterized vocabulary INSERT via bind.execute"
 
     for sql_text, params in seeds:
-        assert ":tid" in sql_text and ":kind" in sql_text and ":value" in sql_text, (
-            f"missing named placeholder in SQL: {sql_text}"
-        )
+        assert (
+            ":tid" in sql_text and ":kind" in sql_text and ":value" in sql_text
+        ), f"missing named placeholder in SQL: {sql_text}"
         assert "'annotation_category'" not in sql_text, sql_text
         assert "'annotation_status'" not in sql_text, sql_text
         assert params.get("kind") in {"annotation_category", "annotation_status"}, params
@@ -72,9 +68,7 @@ def test_mig0018_upgrade_does_not_interpolate_user_controlled_data() -> None:
 
 def test_mig0007_downgrade_sql_is_parameterized() -> None:
     """0007 downgrade DELETEs must bind ids as a list and seeds as named params."""
-    mod = importlib.import_module(
-        "registry.storage.migrations.versions.0007_phase6_graph_primitives"
-    )
+    mod = importlib.import_module("registry.storage.migrations.versions.0007_phase6_graph_primitives")
 
     bind = MagicMock()
     with (
@@ -111,9 +105,7 @@ def test_mig0006_upgrade_uses_fixed_partition_origin() -> None:
     """
     import datetime as _dt
 
-    mod = importlib.import_module(
-        "registry.storage.migrations.versions.0006_phase5_partitions"
-    )
+    mod = importlib.import_module("registry.storage.migrations.versions.0006_phase5_partitions")
 
     def _capture_sqls(patched_today: _dt.date) -> list[str]:
         captured: list[str] = []
@@ -150,9 +142,7 @@ def test_mig0006_upgrade_uses_fixed_partition_origin() -> None:
 
 def test_mig0009_downgrade_sql_is_parameterized() -> None:
     """0009 downgrade DELETEs must use named placeholders for kind/value/schema_id."""
-    mod = importlib.import_module(
-        "registry.storage.migrations.versions.0009_phase7_provider_consumer"
-    )
+    mod = importlib.import_module("registry.storage.migrations.versions.0009_phase7_provider_consumer")
 
     bind = MagicMock()
     with (

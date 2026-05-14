@@ -670,20 +670,14 @@ class ProgressionOverride(Base, TenantMixin):
     __tablename__ = "progression_overrides"
 
     override_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False
-    )
-    entity_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("entities.entity_id"), nullable=False
-    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
+    entity_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("entities.entity_id"), nullable=False)
     from_state: Mapped[str] = mapped_column(Text, nullable=False)
     to_state: Mapped[str] = mapped_column(Text, nullable=False)
     gate_id: Mapped[str] = mapped_column(Text, nullable=False)
     bypass_skip_rules: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    authorized_by: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False
-    )
+    authorized_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False)
     t_valid_from: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     t_valid_to: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     consumed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

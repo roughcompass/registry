@@ -17,9 +17,7 @@ def test_claim_batch_template_uses_literal_interval() -> None:
     """_CLAIM_BATCH_SQL must embed the cooldown as a SQL literal, not a placeholder."""
     template = closure_refresh._CLAIM_BATCH_SQL
 
-    assert "interval '60 seconds'" in template, (
-        f"expected literal interval '60 seconds' in template; got:\n{template}"
-    )
+    assert "interval '60 seconds'" in template, f"expected literal interval '60 seconds' in template; got:\n{template}"
     assert ":cooldown" not in template, (
         "placeholder :cooldown must not appear — it was a side-effect of the "
         f".replace() indirection that has been removed. Got:\n{template}"

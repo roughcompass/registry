@@ -269,9 +269,7 @@ async def test_create_workspace_regulated_tenant_raises_tool_error() -> None:
         "Configure a higher encryption tier before creating workspaces."
     )
     ws_svc = MagicMock()
-    ws_svc.create_workspace = AsyncMock(
-        side_effect=HTTPException(status_code=422, detail=regulated_msg)
-    )
+    ws_svc.create_workspace = AsyncMock(side_effect=HTTPException(status_code=422, detail=regulated_msg))
     mcp = _build_mcp(workspace_service=ws_svc)
     ctx = _make_ctx()
 

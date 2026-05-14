@@ -37,10 +37,7 @@ from registry.auth.rsam.tenant_store import upsert_rsam_actor, upsert_rsam_tenan
 
 async def _count_tenant_rows(session: AsyncSession, seal_id: str) -> int:
     result = await session.execute(
-        text(
-            "SELECT COUNT(*) FROM tenants "
-            "WHERE external_tenant_id = :seal AND provider = 'jit'"
-        ),
+        text("SELECT COUNT(*) FROM tenants " "WHERE external_tenant_id = :seal AND provider = 'jit'"),
         {"seal": seal_id},
     )
     row = result.fetchone()
@@ -64,10 +61,7 @@ async def _fetch_tenant_row(session: AsyncSession, seal_id: str) -> dict[str, An
 
 async def _count_actor_rows(session: AsyncSession, tenant_id: uuid.UUID, oidc_subject: str) -> int:
     result = await session.execute(
-        text(
-            "SELECT COUNT(*) FROM actors "
-            "WHERE tenant_id = :tid AND oidc_subject = :sub"
-        ),
+        text("SELECT COUNT(*) FROM actors " "WHERE tenant_id = :tid AND oidc_subject = :sub"),
         {"tid": tenant_id, "sub": oidc_subject},
     )
     row = result.fetchone()
@@ -82,10 +76,7 @@ async def _fetch_audit_rows(
     """Fetch audit_log rows for the given action, optionally scoped to a tenant."""
     if tenant_id is not None:
         result = await session.execute(
-            text(
-                "SELECT action, after_jsonb FROM audit_log "
-                "WHERE action = :action AND tenant_id = :tid"
-            ),
+            text("SELECT action, after_jsonb FROM audit_log " "WHERE action = :action AND tenant_id = :tid"),
             {"action": action, "tid": tenant_id},
         )
     else:
@@ -186,9 +177,7 @@ async def test_concurrent_first_sight_idempotent(session_factory) -> None:
     tenant_ids = await asyncio.gather(_provision(), _provision())
 
     # Both calls must return the same tenant UUID.
-    assert tenant_ids[0] == tenant_ids[1], (
-        "concurrent upserts must return the same tenant_id"
-    )
+    assert tenant_ids[0] == tenant_ids[1], "concurrent upserts must return the same tenant_id"
 
     # Exactly one tenants row must exist.
     async with session_factory() as session:
@@ -264,12 +253,8 @@ async def test_re_sight_is_idempotent(session_factory) -> None:
 
     # Record audit counts after first sight
     async with session_factory() as session:
-        tenant_audit_after_first = await _fetch_audit_rows(
-            session, "tenant.jit_created", tenant_id
-        )
-        actor_audit_after_first = await _fetch_audit_rows(
-            session, "actor.jit_created", tenant_id
-        )
+        tenant_audit_after_first = await _fetch_audit_rows(session, "tenant.jit_created", tenant_id)
+        actor_audit_after_first = await _fetch_audit_rows(session, "actor.jit_created", tenant_id)
 
     tenant_audit_count_first = len(tenant_audit_after_first)
     actor_audit_count_first = len(actor_audit_after_first)
@@ -287,18 +272,14 @@ async def test_re_sight_is_idempotent(session_factory) -> None:
     async with session_factory() as session:
         tenant_count = await _count_tenant_rows(session, seal_id)
         actor_count = await _count_actor_rows(session, tenant_id, oidc_subject)
-        tenant_audit_after_second = await _fetch_audit_rows(
-            session, "tenant.jit_created", tenant_id
-        )
-        actor_audit_after_second = await _fetch_audit_rows(
-            session, "actor.jit_created", tenant_id
-        )
+        tenant_audit_after_second = await _fetch_audit_rows(session, "tenant.jit_created", tenant_id)
+        actor_audit_after_second = await _fetch_audit_rows(session, "actor.jit_created", tenant_id)
 
     assert tenant_count == 1, "re-sight must not create a second tenants row"
     assert actor_count == 1, "re-sight must not create a second actors row"
-    assert len(tenant_audit_after_second) == tenant_audit_count_first, (
-        "re-sight must not emit a duplicate tenant.jit_created audit event"
-    )
-    assert len(actor_audit_after_second) == actor_audit_count_first, (
-        "re-sight must not emit a duplicate actor.jit_created audit event"
-    )
+    assert (
+        len(tenant_audit_after_second) == tenant_audit_count_first
+    ), "re-sight must not emit a duplicate tenant.jit_created audit event"
+    assert (
+        len(actor_audit_after_second) == actor_audit_count_first
+    ), "re-sight must not emit a duplicate actor.jit_created audit event"

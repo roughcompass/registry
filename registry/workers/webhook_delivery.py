@@ -342,8 +342,7 @@ class WebhookDeliveryWorker:
                 continue
             if not d["hmac_secret"]:
                 _log.warning(
-                    "subscription %s has no HMAC secret configured — "
-                    "delivery will not include a signature header",
+                    "subscription %s has no HMAC secret configured — " "delivery will not include a signature header",
                     d["subscription_id"],
                 )
             out.append(

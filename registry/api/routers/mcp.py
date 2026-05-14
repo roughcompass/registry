@@ -178,9 +178,7 @@ def _http_exc_to_tool_error(exc: HTTPException) -> ToolError:
             short_field = field.split(".")[-1] if "." in field else field
             categories: list[str] = detail.get("categories", [])
             cats_str = ", ".join(categories)
-            return ToolError(
-                f"Annotation rejected: PII detected in {short_field} [{cats_str}]"
-            )
+            return ToolError(f"Annotation rejected: PII detected in {short_field} [{cats_str}]")
         if isinstance(detail, str):
             return ToolError(detail)
         return ToolError(str(detail))
@@ -742,9 +740,7 @@ def create_registry_mcp_server(
             # that names the valid vocabulary (matching the REST error shape).
             if exc.status_code == 422 and isinstance(exc.detail, str) and "Invalid category" in exc.detail:
                 valid = "feedback, bug, suggestion, question, doc_gap"
-                raise ToolError(
-                    f"Invalid category: '{category}'. Must be one of: {valid}"
-                ) from exc
+                raise ToolError(f"Invalid category: '{category}'. Must be one of: {valid}") from exc
             raise _http_exc_to_tool_error(exc) from exc
         return json.dumps(_serialize(ref))
 
@@ -963,9 +959,7 @@ def create_registry_mcp_server(
             ref = await workspace_service.get_workspace(ctx, ws_uuid)
         except HTTPException as exc:
             if exc.status_code == 403:
-                raise ToolError(
-                    f"Workspace {workspace_id} is not visible to the calling actor."
-                ) from exc
+                raise ToolError(f"Workspace {workspace_id} is not visible to the calling actor.") from exc
             if exc.status_code == 404:
                 raise ToolError(f"Workspace {workspace_id} not found.") from exc
             raise _ws_http_exc_to_tool_error(exc, workspace_id=workspace_id) from exc
@@ -1015,18 +1009,14 @@ def create_registry_mcp_server(
                 try:
                     ref_uuids.append(uuid.UUID(rid))
                 except ValueError as exc:
-                    raise ToolError(
-                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
-                    ) from exc
+                    raise ToolError(f"reference_ids contains an invalid UUID: {rid!r}: {exc}") from exc
 
         expires_at_dt = None
         if expires_at is not None:
             try:
                 expires_at_dt = datetime.fromisoformat(expires_at)
             except (ValueError, TypeError) as exc:
-                raise ToolError(
-                    f"expires_at must be a timezone-aware ISO-8601 datetime: {exc}"
-                ) from exc
+                raise ToolError(f"expires_at must be a timezone-aware ISO-8601 datetime: {exc}") from exc
 
         try:
             ref = await workspace_service.create_entry(
@@ -1044,9 +1034,7 @@ def create_registry_mcp_server(
                 if isinstance(detail, dict) and detail.get("code") == "pii_detected":
                     categories_list: list[str] = detail.get("categories", [])
                     cats_str = ", ".join(categories_list)
-                    raise ToolError(
-                        f"Entry rejected: PII detected in body [{cats_str}]"
-                    ) from exc
+                    raise ToolError(f"Entry rejected: PII detected in body [{cats_str}]") from exc
                 if isinstance(detail, str):
                     # Pass through service validation messages (invalid kind,
                     # regulated-tenant block, empty body) as-is so the caller
@@ -1095,9 +1083,7 @@ def create_registry_mcp_server(
                 try:
                     ref_uuids.append(uuid.UUID(rid))
                 except ValueError as exc:
-                    raise ToolError(
-                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
-                    ) from exc
+                    raise ToolError(f"reference_ids contains an invalid UUID: {rid!r}: {exc}") from exc
 
         try:
             ref = await workspace_service.update_entry(
@@ -1113,9 +1099,7 @@ def create_registry_mcp_server(
                 if isinstance(detail, dict) and detail.get("code") == "pii_detected":
                     categories_list_u: list[str] = detail.get("categories", [])
                     cats_str = ", ".join(categories_list_u)
-                    raise ToolError(
-                        f"Entry rejected: PII detected in body [{cats_str}]"
-                    ) from exc
+                    raise ToolError(f"Entry rejected: PII detected in body [{cats_str}]") from exc
                 if isinstance(detail, str):
                     raise ToolError(detail) from exc
                 raise ToolError(str(detail)) from exc
@@ -1156,9 +1140,7 @@ def create_registry_mcp_server(
                 try:
                     ref_uuids.append(uuid.UUID(rid))
                 except ValueError as exc:
-                    raise ToolError(
-                        f"reference_ids contains an invalid UUID: {rid!r}: {exc}"
-                    ) from exc
+                    raise ToolError(f"reference_ids contains an invalid UUID: {rid!r}: {exc}") from exc
 
         try:
             result = await workspace_service.search_workspaces(

@@ -35,7 +35,7 @@ from registry.types import FakeClock, TenantContext
 _NOW = datetime.datetime(2026, 5, 12, 12, 0, 0, tzinfo=datetime.UTC)
 _TENANT_A = uuid.uuid4()
 _ACTOR_A = uuid.uuid4()
-_ACTOR_B = uuid.uuid4()   # different actor — used in auth tests
+_ACTOR_B = uuid.uuid4()  # different actor — used in auth tests
 _WS_ID = uuid.uuid4()
 _ENTRY_ID = uuid.uuid4()
 _REF_ID = uuid.uuid4()
@@ -174,9 +174,7 @@ async def test_search_fts_returns_matching_entry() -> None:
 @pytest.mark.asyncio
 async def test_search_kind_filter_returns_only_matching_kind() -> None:
     """When kind is provided, only entries with that kind appear in the result."""
-    decision_entry = _make_entry_row(
-        entry_id=uuid.uuid4(), kind="decision", body_md="some decision"
-    )
+    decision_entry = _make_entry_row(entry_id=uuid.uuid4(), kind="decision", body_md="some decision")
     # The mock session returns whatever rows we give it regardless of SQL —
     # what matters is that the service passes kind through to the WHERE clause.
     # We verify the contract by providing only the right-kind row and checking
@@ -257,10 +255,7 @@ async def test_search_invisible_entries_excluded() -> None:
 @pytest.mark.asyncio
 async def test_search_no_filters_returns_all_visible_entries() -> None:
     """With q=None and reference_ids=None, all visible entries are returned paginated."""
-    entries = [
-        _make_entry_row(entry_id=uuid.uuid4(), body_md=f"entry {i}")
-        for i in range(3)
-    ]
+    entries = [_make_entry_row(entry_id=uuid.uuid4(), body_md=f"entry {i}") for i in range(3)]
     svc = _make_service(entries)
 
     result = await svc.search_workspaces(_ctx())
@@ -275,10 +270,7 @@ async def test_search_no_filters_next_cursor_when_page_full() -> None:
     from registry.service.workspace import _DEFAULT_PAGE_SIZE
 
     # Build page_size + 1 rows so the service detects a next page.
-    entries = [
-        _make_entry_row(entry_id=uuid.uuid4(), body_md=f"entry {i}")
-        for i in range(_DEFAULT_PAGE_SIZE + 1)
-    ]
+    entries = [_make_entry_row(entry_id=uuid.uuid4(), body_md=f"entry {i}") for i in range(_DEFAULT_PAGE_SIZE + 1)]
     svc = _make_service(entries)
 
     result = await svc.search_workspaces(_ctx())
@@ -298,9 +290,7 @@ async def test_search_owner_actor_id_self_allowed() -> None:
     entry = _make_entry_row()
     svc = _make_service([entry])
 
-    result = await svc.search_workspaces(
-        _ctx(actor=_ACTOR_A), owner_actor_id=_ACTOR_A
-    )
+    result = await svc.search_workspaces(_ctx(actor=_ACTOR_A), owner_actor_id=_ACTOR_A)
 
     assert len(result.items) == 1
 
@@ -311,9 +301,7 @@ async def test_search_owner_actor_id_other_actor_raises_403() -> None:
     svc = _make_service([])
 
     with pytest.raises(HTTPException) as exc_info:
-        await svc.search_workspaces(
-            _ctx(actor=_ACTOR_A), owner_actor_id=_ACTOR_B
-        )
+        await svc.search_workspaces(_ctx(actor=_ACTOR_A), owner_actor_id=_ACTOR_B)
 
     assert exc_info.value.status_code == 403
 
@@ -324,9 +312,7 @@ async def test_search_owner_actor_id_admin_can_filter_other_actor() -> None:
     entry = _make_entry_row()
     svc = _make_service([entry])
 
-    result = await svc.search_workspaces(
-        _ctx(actor=_ACTOR_A, roles=["admin"]), owner_actor_id=_ACTOR_B
-    )
+    result = await svc.search_workspaces(_ctx(actor=_ACTOR_A, roles=["admin"]), owner_actor_id=_ACTOR_B)
 
     assert len(result.items) == 1
 

@@ -114,9 +114,7 @@ def test_logger_field_is_module_name(capsys):
     logging.getLogger(logger_name).info("logger name test")
     captured = capsys.readouterr().out
     record = _first_json_line(captured)
-    assert record["logger"] == logger_name, (
-        f"expected logger={logger_name!r}, got {record['logger']!r}"
-    )
+    assert record["logger"] == logger_name, f"expected logger={logger_name!r}, got {record['logger']!r}"
 
 
 def test_event_carries_message(capsys):
@@ -125,9 +123,7 @@ def test_event_carries_message(capsys):
     logging.getLogger("test.event").info("the quick brown fox")
     captured = capsys.readouterr().out
     record = _first_json_line(captured)
-    assert record["event"] == "the quick brown fox", (
-        f"unexpected event: {record['event']!r}"
-    )
+    assert record["event"] == "the quick brown fox", f"unexpected event: {record['event']!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +136,7 @@ def test_trace_span_injected_inside_span(capsys):
     # Install a real TracerProvider (not the default Noop) so spans have valid IDs.
     provider = TracerProvider()
     from opentelemetry import trace as otel_trace
+
     otel_trace.set_tracer_provider(provider)
     tracer = provider.get_tracer(__name__)
 
@@ -162,18 +159,15 @@ def test_trace_span_absent_outside_span(capsys):
     logging.getLogger("test.trace.outside").info("outside span")
     captured = capsys.readouterr().out
     record = _first_json_line(captured)
-    assert "trace_id" not in record, (
-        f"trace_id should be absent outside a span, got {record.get('trace_id')!r}"
-    )
-    assert "span_id" not in record, (
-        f"span_id should be absent outside a span, got {record.get('span_id')!r}"
-    )
+    assert "trace_id" not in record, f"trace_id should be absent outside a span, got {record.get('trace_id')!r}"
+    assert "span_id" not in record, f"span_id should be absent outside a span, got {record.get('span_id')!r}"
 
 
 def test_trace_id_format(capsys):
     """When present, trace_id is a 32-character lowercase hex string."""
     provider = TracerProvider()
     from opentelemetry import trace as otel_trace
+
     otel_trace.set_tracer_provider(provider)
     tracer = provider.get_tracer(__name__)
 
@@ -195,6 +189,7 @@ def test_span_id_format(capsys):
     """When present, span_id is a 16-character lowercase hex string."""
     provider = TracerProvider()
     from opentelemetry import trace as otel_trace
+
     otel_trace.set_tracer_provider(provider)
     tracer = provider.get_tracer(__name__)
 
@@ -247,9 +242,7 @@ def test_exception_field_absent_on_regular_log(capsys):
     logging.getLogger("test.exception.absent").info("just a regular message")
     captured = capsys.readouterr().out
     record = _first_json_line(captured)
-    assert "exception" not in record, (
-        f"'exception' key should be absent for a normal log call: {record}"
-    )
+    assert "exception" not in record, f"'exception' key should be absent for a normal log call: {record}"
 
 
 # ---------------------------------------------------------------------------
@@ -279,9 +272,7 @@ def test_log_format_text_produces_text(capsys):
     for line in non_empty_lines:
         try:
             json.loads(line)
-            raise AssertionError(
-                f"text-mode output parsed as JSON — expected human-readable: {line!r}"
-            )
+            raise AssertionError(f"text-mode output parsed as JSON — expected human-readable: {line!r}")
         except json.JSONDecodeError:
             pass  # expected
 
@@ -301,9 +292,7 @@ def test_positional_args_rendered_in_event(capsys):
     logging.getLogger("test.positional").info("x=%s y=%s", 1, 2)
     captured = capsys.readouterr().out
     record = _first_json_line(captured)
-    assert record["event"] == "x=1 y=2", (
-        f"expected 'x=1 y=2', got {record['event']!r}"
-    )
+    assert record["event"] == "x=1 y=2", f"expected 'x=1 y=2', got {record['event']!r}"
 
 
 # ---------------------------------------------------------------------------

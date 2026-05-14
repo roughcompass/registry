@@ -596,6 +596,5 @@ async def test_validate_oidc_token_logs_warning_when_audience_unconfigured(
         await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
 
     assert any(
-        "OIDC audience validation is disabled" in r.message
-        for r in caplog.records
+        "OIDC audience validation is disabled" in r.message for r in caplog.records
     ), f"warning not logged; got records: {[r.message for r in caplog.records]}"

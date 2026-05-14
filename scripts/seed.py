@@ -32,7 +32,6 @@ from typing import Any
 
 from sqlalchemy import text
 
-
 _SCHEMA_VERSION = 1
 _DEFAULT_VISIBILITY = "private"
 
@@ -133,8 +132,7 @@ def load_bundle(path: Path) -> SeedBundle:
     schema_version = raw.get("schema_version")
     if schema_version != _SCHEMA_VERSION:
         raise ValueError(
-            f"{path}: schema_version {schema_version!r} not supported "
-            f"(loader speaks {_SCHEMA_VERSION})."
+            f"{path}: schema_version {schema_version!r} not supported " f"(loader speaks {_SCHEMA_VERSION})."
         )
 
     name = raw.get("name") or path.stem
@@ -213,9 +211,7 @@ class TenantRegistry:
             ) from e
 
 
-def deterministic_edge_id(
-    tenant_id: uuid.UUID, src: uuid.UUID, rel: str, dst: uuid.UUID
-) -> uuid.UUID:
+def deterministic_edge_id(tenant_id: uuid.UUID, src: uuid.UUID, rel: str, dst: uuid.UUID) -> uuid.UUID:
     return uuid.uuid5(uuid.NAMESPACE_OID, f"{tenant_id}:{src}:{rel}:{dst}")
 
 
@@ -382,11 +378,7 @@ async def _insert_fact(
     # operating against a tenant we own is allowed to nudge facts forward
     # without exploding the row count on every minor copy-edit.
     fid, existing_title, existing_body, existing_format, existing_from = existing
-    needs_update = (
-        existing_body != body
-        or existing_format != body_format
-        or existing_from != valid_from
-    )
+    needs_update = existing_body != body or existing_format != body_format or existing_from != valid_from
     if needs_update:
         await session.execute(
             text(
@@ -480,9 +472,7 @@ async def _resolve_or_insert_entity(
         # to make a capability cross-tenant-visible.
         if declared_visibility and existing[0] != declared_visibility:
             await session.execute(
-                text(
-                    "UPDATE entities SET visibility = :vis WHERE entity_id = :eid"
-                ),
+                text("UPDATE entities SET visibility = :vis WHERE entity_id = :eid"),
                 {"vis": declared_visibility, "eid": entity_id},
             )
             counts.visibility_changes += 1
@@ -503,26 +493,20 @@ async def _apply_entities(
     name_to_id: dict[str, uuid.UUID] = {}
 
     for entity in rows:
-        entity_id = await _resolve_or_insert_entity(
-            session, tenant_id, actor_id, entity, default_valid_from, counts
-        )
+        entity_id = await _resolve_or_insert_entity(session, tenant_id, actor_id, entity, default_valid_from, counts)
         name_to_id[entity["name"]] = entity_id
 
         # Attributes — simple upsert (insert only if no current row).
         valid_from = _parse_iso(entity.get("valid_from")) or default_valid_from
         for key, value in (entity.get("attributes") or {}).items():
-            created = await _upsert_attribute(
-                session, tenant_id, entity_id, actor_id, key, value, valid_from
-            )
+            created = await _upsert_attribute(session, tenant_id, entity_id, actor_id, key, value, valid_from)
             if created:
                 counts.attributes_created += 1
 
         # Parent edge: composes from parent to this entity.
         parent_name = entity.get("parent")
         if parent_name:
-            parent_id = name_to_id.get(parent_name) or deterministic_entity_id(
-                tenant_id, parent_name
-            )
+            parent_id = name_to_id.get(parent_name) or deterministic_entity_id(tenant_id, parent_name)
             edge_id = deterministic_edge_id(tenant_id, parent_id, "composes", entity_id)
             existing_edge = (
                 await session.execute(
@@ -553,9 +537,7 @@ async def _apply_entities(
 
         # Inline facts on this entity.
         for fact in entity.get("facts") or []:
-            await _insert_fact(
-                session, tenant_id, entity_id, actor_id, fact, valid_from, counts
-            )
+            await _insert_fact(session, tenant_id, entity_id, actor_id, fact, valid_from, counts)
 
         # External-system mappings.
         for mapping in entity.get("external_ids") or []:
@@ -588,9 +570,7 @@ async def _apply_cross_entity_facts(
                 f"cross-entity fact references entity {entity_name!r} which does "
                 f"not exist; load the file that defines it first."
             )
-        await _insert_fact(
-            session, tenant_id, entity_id, actor_id, fact, default_valid_from, counts
-        )
+        await _insert_fact(session, tenant_id, entity_id, actor_id, fact, default_valid_from, counts)
 
 
 async def _apply_bitemporal_attributes(
@@ -610,11 +590,7 @@ async def _apply_bitemporal_attributes(
 
         if replace:
             await session.execute(
-                text(
-                    "DELETE FROM attributes "
-                    "WHERE entity_id = :eid AND key = :key "
-                    "AND t_invalidated_at IS NULL"
-                ),
+                text("DELETE FROM attributes " "WHERE entity_id = :eid AND key = :key " "AND t_invalidated_at IS NULL"),
                 {"eid": entity_id, "key": key},
             )
 
@@ -805,10 +781,7 @@ async def _apply_adoptions(
         if consumer_actor_name:
             actor_row = (
                 await session.execute(
-                    text(
-                        "SELECT actor_id FROM actors "
-                        "WHERE tenant_id = :tid AND display_name = :name"
-                    ),
+                    text("SELECT actor_id FROM actors " "WHERE tenant_id = :tid AND display_name = :name"),
                     {"tid": consumer_tid, "name": consumer_actor_name},
                 )
             ).first()
@@ -863,9 +836,7 @@ async def _apply_adoptions(
         # entity, with the consumer tenant encoded in the JSONB
         # properties. The producer-side "who depends on this?" query
         # reads properties.consumer_tenant_id.
-        edge_id = deterministic_edge_id(
-            provider_tid, capability_id, f"provides_to:{consumer_slug}", capability_id
-        )
+        edge_id = deterministic_edge_id(provider_tid, capability_id, f"provides_to:{consumer_slug}", capability_id)
         existing_edge = (
             await session.execute(
                 text("SELECT 1 FROM edges WHERE edge_id = :eid"),
@@ -1019,18 +990,12 @@ async def _apply_progression_definitions(
 
         new_def_text = json.dumps(definition, sort_keys=True)
         if existing is not None:
-            existing_def_text = json.dumps(
-                json.loads(existing[1]), sort_keys=True
-            )
+            existing_def_text = json.dumps(json.loads(existing[1]), sort_keys=True)
             if existing_def_text == new_def_text:
                 continue
             # Definition has drifted — invalidate the live row.
             await session.execute(
-                text(
-                    "UPDATE progression_definitions "
-                    "SET t_invalidated_at = :now "
-                    "WHERE progression_id = :pid"
-                ),
+                text("UPDATE progression_definitions " "SET t_invalidated_at = :now " "WHERE progression_id = :pid"),
                 {"now": now, "pid": existing[0]},
             )
 
@@ -1101,30 +1066,20 @@ async def apply_bundles(
 
         await _apply_vocabulary(session, t_id, bundle.vocabulary, counts, now)
         await _apply_external_systems(session, t_id, bundle.external_systems, counts, now)
-        await _apply_entities(
-            session, t_id, a_id, bundle.entities, counts, default_valid_from
-        )
-        await _apply_cross_entity_facts(
-            session, t_id, a_id, bundle.facts, counts, default_valid_from
-        )
-        await _apply_bitemporal_attributes(
-            session, t_id, a_id, bundle.bitemporal_attributes, counts, now
-        )
+        await _apply_entities(session, t_id, a_id, bundle.entities, counts, default_valid_from)
+        await _apply_cross_entity_facts(session, t_id, a_id, bundle.facts, counts, default_valid_from)
+        await _apply_bitemporal_attributes(session, t_id, a_id, bundle.bitemporal_attributes, counts, now)
         # General edges (depends_on, integrates_with, …) — must run
         # after `entities` so within-bundle src/dst references resolve,
         # and works across bundles too because lexical load order
         # guarantees earlier bundles' entities exist by now.
         if bundle.edges:
-            await _apply_edges(
-                session, bundle.edges, t_id, a_id, counts, default_valid_from, now
-            )
+            await _apply_edges(session, bundle.edges, t_id, a_id, counts, default_valid_from, now)
 
         # Cross-tenant adoptions + per-tenant progression definitions go
         # last, after their referenced entities have been resolved.
         if bundle.adoptions:
-            await _apply_adoptions(
-                session, bundle.adoptions, registry, target_slug, counts, now
-            )
+            await _apply_adoptions(session, bundle.adoptions, registry, target_slug, counts, now)
         if bundle.progression_definitions:
             await _apply_progression_definitions(
                 session, bundle.progression_definitions, registry, target_slug, counts, now
@@ -1217,8 +1172,7 @@ async def _resolve_dev_tenant(session: Any, slug: str) -> tuple[uuid.UUID, uuid.
     ).first()
     if actor_row is None:
         raise SystemExit(
-            f"error: actor {_DEFAULT_ACTOR_NAME!r} not found in tenant {slug!r}. "
-            f"Run `make dev-token` first."
+            f"error: actor {_DEFAULT_ACTOR_NAME!r} not found in tenant {slug!r}. " f"Run `make dev-token` first."
         )
     actor_id = uuid.UUID(str(actor_row[0]))
     return tenant_id, actor_id
@@ -1239,45 +1193,27 @@ def _emit_summary(
     print(f"  {dim('Bundles loaded')}: {len(bundle_paths)}")
     for path in bundle_paths:
         print(f"    {path.relative_to(_REPO_ROOT)}")
-    print(
-        f"  {dim('Vocabulary')}: {counts.vocabulary} new value(s) "
-        f"(existing values left alone)"
-    )
+    print(f"  {dim('Vocabulary')}: {counts.vocabulary} new value(s) " f"(existing values left alone)")
     print(f"  {dim('External systems')}: {counts.external_systems} new system(s)")
-    print(
-        f"  {dim('Entities')}: "
-        f"{counts.entities_created} created, {counts.entities_present} already present"
-    )
+    print(f"  {dim('Entities')}: " f"{counts.entities_created} created, {counts.entities_present} already present")
     for name, info in counts.per_entity.items():
         marker = "+ created" if info["created_new"] else "= already present"
         print(f"    {name:25s}  {cyan(info['entity_id'])}  {dim(marker)}")
     print(f"  {dim('Edges')}: {counts.edges_created} new (composes + provides_to)")
     print(f"  {dim('Attributes')}: {counts.attributes_created} new attribute row(s)")
-    print(
-        f"  {dim('Facts')}: "
-        f"{counts.facts_created} new, {counts.facts_updated} updated in place"
-    )
+    print(f"  {dim('Facts')}: " f"{counts.facts_created} new, {counts.facts_updated} updated in place")
     print(f"  {dim('External IDs')}: {counts.external_ids_created} new mapping(s)")
     print(f"  {dim('Bitemporal rows')}: {counts.bitemporal_rows_replaced} row(s) inserted")
     if counts.visibility_changes:
         print(f"  {dim('Visibility changes')}: {counts.visibility_changes}")
     if counts.tenants_created or counts.tenants_present:
-        print(
-            f"  {dim('Tenants')}: "
-            f"{counts.tenants_created} created, {counts.tenants_present} already present"
-        )
+        print(f"  {dim('Tenants')}: " f"{counts.tenants_created} created, {counts.tenants_present} already present")
     if counts.actors_created or counts.role_grants_created:
-        print(
-            f"  {dim('Actors')}: "
-            f"{counts.actors_created} created, {counts.role_grants_created} role grant(s)"
-        )
+        print(f"  {dim('Actors')}: " f"{counts.actors_created} created, {counts.role_grants_created} role grant(s)")
     if counts.adoptions_created:
         print(f"  {dim('Adoptions')}: {counts.adoptions_created} cross-tenant adoption(s)")
     if counts.progression_definitions_created:
-        print(
-            f"  {dim('Progression')}: "
-            f"{counts.progression_definitions_created} definition(s) installed"
-        )
+        print(f"  {dim('Progression')}: " f"{counts.progression_definitions_created} definition(s) installed")
     print()
     print(bold("Try it:"))
     print("  curl -H 'Authorization: Bearer <token>' http://localhost:8000/v1/capabilities")

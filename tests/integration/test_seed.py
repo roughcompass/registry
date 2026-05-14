@@ -96,8 +96,7 @@ async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
             for row in (
                 await conn.execute(
                     sqlalchemy.text(
-                        "SELECT category FROM facts "
-                        "WHERE entity_id = :sid AND t_invalidated_at IS NULL"
+                        "SELECT category FROM facts " "WHERE entity_id = :sid AND t_invalidated_at IS NULL"
                     ),
                     {"sid": salt_id},
                 )
@@ -210,9 +209,7 @@ async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
                 )
             )
         ).first()
-        assert web_runtime_to_sdk is not None, (
-            "missing web-runtime --depends_on--> web-sdk edge"
-        )
+        assert web_runtime_to_sdk is not None, "missing web-runtime --depends_on--> web-sdk edge"
 
         # --- Web SDK v2→v3 breaking change story ---
         web_sdk_id_row = (
@@ -237,9 +234,7 @@ async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
                 {"sid": web_sdk_id},
             )
         ).first()
-        assert migration_guide is not None, (
-            "expected a migration_guide fact on web-sdk for the v2→v3 breaking change"
-        )
+        assert migration_guide is not None, "expected a migration_guide fact on web-sdk for the v2→v3 breaking change"
 
         # Bitemporal current_version: v2.4.0 valid before 2026-02-01, v3.0.0 after.
         version_rows = (
@@ -288,9 +283,10 @@ async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
                     )
                 ).all()
             )
-            assert owner_rels == ["owned_by", "product_owned_by"], (
-                f"{cap_name}: expected one owned_by + one product_owned_by edge, got {owner_rels}"
-            )
+            assert owner_rels == [
+                "owned_by",
+                "product_owned_by",
+            ], f"{cap_name}: expected one owned_by + one product_owned_by edge, got {owner_rels}"
 
         # Web SDK's technical owner is Alice Chen (led the v2→v3 breaking change).
         sdk_tech_owner = (
@@ -329,6 +325,4 @@ async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
             )
         ).scalar_one()
     await engine2.dispose()
-    assert adoption_after == 8, (
-        f"re-run created duplicate adoptions: was 8, now {adoption_after}"
-    )
+    assert adoption_after == 8, f"re-run created duplicate adoptions: was 8, now {adoption_after}"

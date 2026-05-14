@@ -301,8 +301,7 @@ async def test_create_entry_succeeds() -> None:
 
     # PII scanner must be invoked on the body.
     scanner.scan.assert_called()
-    scan_calls = [c.kwargs.get("field_type") or c.args[1] if c.args else None
-                  for c in scanner.scan.call_args_list]
+    scan_calls = [c.kwargs.get("field_type") or c.args[1] if c.args else None for c in scanner.scan.call_args_list]
     assert any("workspace_entry.body" in str(ft) for ft in scan_calls)
 
 
@@ -976,9 +975,7 @@ async def test_create_entry_pii_scan_body_md() -> None:
         reference_ids=[],
     )
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     assert any("workspace_entry.body" in ft for ft in scan_field_types)
 
 
@@ -1002,9 +999,7 @@ async def test_create_entry_pii_scan_references_jsonb_when_present() -> None:
         references_jsonb={"link": "https://example.com"},
     )
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     assert any("workspace_entry.references" in ft for ft in scan_field_types)
 
 
@@ -1028,9 +1023,7 @@ async def test_create_entry_no_pii_scan_when_references_jsonb_absent() -> None:
         references_jsonb=None,
     )
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     # Body scan fires; references scan must NOT fire.
     assert not any("workspace_entry.references" in ft for ft in scan_field_types)
 
@@ -1049,9 +1042,7 @@ async def test_update_entry_pii_scan_body_md() -> None:
 
     await svc.update_entry(ctx, entry_id=_ENTRY_ID, body_md="Updated body")
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     assert any("workspace_entry.body" in ft for ft in scan_field_types)
 
 
@@ -1070,9 +1061,7 @@ async def test_update_entry_no_pii_scan_when_body_md_omitted() -> None:
     # Only update reference_ids; body_md is left unchanged.
     await svc.update_entry(ctx, entry_id=_ENTRY_ID, reference_ids=[])
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     assert not any("workspace_entry.body" in ft for ft in scan_field_types)
 
 

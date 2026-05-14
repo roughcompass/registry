@@ -68,6 +68,7 @@ _MIN_TTL_SECONDS = 30
 # without an injected callable fails loudly with NotImplementedError — an
 # immediate, unambiguous signal rather than a silent empty-grant return.
 
+
 async def _default_stub(subject: str) -> list[str]:
     raise NotImplementedError(
         "RSAM fetch_authorities is not yet wired — inject a callable to enable "
@@ -77,6 +78,7 @@ async def _default_stub(subject: str) -> list[str]:
 
 # ---------------------------------------------------------------------------
 # Cache entry dataclass
+
 
 @dataclass
 class _GrantCacheEntry:
@@ -101,6 +103,7 @@ class _GrantCacheEntry:
 
 # ---------------------------------------------------------------------------
 # Resolver implementation
+
 
 class RsamClaimSource(ClaimResolverBase):
     """ClaimResolverBase implementation for IDA+RSAM deployments.
@@ -252,8 +255,7 @@ class RsamClaimSource(ClaimResolverBase):
             tenant_id = entry.grants[0].tenant_id if entry.grants else None
             await self._emit_stale_cache_event(subject, tenant_id, stale_age)
             _log.warning(
-                "RSAM fetch_authorities failed; serving stale grant cache for subject=%s "
-                "stale_age_seconds=%d",
+                "RSAM fetch_authorities failed; serving stale grant cache for subject=%s " "stale_age_seconds=%d",
                 subject,
                 int(stale_age),
             )
@@ -267,15 +269,12 @@ class RsamClaimSource(ClaimResolverBase):
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=(
-                "The RSAM authority service is temporarily unavailable. "
-                f"Retry after {self._ttl_seconds} seconds."
+                "The RSAM authority service is temporarily unavailable. " f"Retry after {self._ttl_seconds} seconds."
             ),
             headers={"Retry-After": str(self._ttl_seconds)},
         )
 
-    async def _fetch_and_resolve(
-        self, subject: str
-    ) -> tuple[list[TenantGrant], AuditIdentity]:
+    async def _fetch_and_resolve(self, subject: str) -> tuple[list[TenantGrant], AuditIdentity]:
         """Run the full fetch + parse + JIT + audit emission flow.
 
         This is the core resolution path extracted from `resolve()` so the cache
@@ -318,13 +317,9 @@ class RsamClaimSource(ClaimResolverBase):
         # When there are zero grants, no actor row exists — fall back to subject-only
         # identity (the resolver layer translates zero grants to 403 separately).
         if tenant_grants:
-            audit_identity = await self._build_audit_identity(
-                subject, tenant_grants[0].tenant_id
-            )
+            audit_identity = await self._build_audit_identity(subject, tenant_grants[0].tenant_id)
         else:
-            audit_identity = AuditIdentity(
-                sub=subject, email=None, preferred_username=subject
-            )
+            audit_identity = AuditIdentity(sub=subject, email=None, preferred_username=subject)
 
         # Log RSAM authority resolution summary so operators can track resolver
         # activity, latency, and authority counts without a dedicated audit row.
@@ -383,13 +378,9 @@ class RsamClaimSource(ClaimResolverBase):
                 )
                 await _audit_session.commit()
         except Exception:  # noqa: BLE001
-            _log.exception(
-                "Failed to emit auth.stale_cache.served audit event for subject=%s", subject
-            )
+            _log.exception("Failed to emit auth.stale_cache.served audit event for subject=%s", subject)
 
-    async def _build_audit_identity(
-        self, subject: str, tenant_id: uuid.UUID
-    ) -> AuditIdentity:
+    async def _build_audit_identity(self, subject: str, tenant_id: uuid.UUID) -> AuditIdentity:
         """Fetch the actor row for (tenant_id, oidc_subject=subject) and build the
         full AuditIdentity. The actor row is guaranteed to exist because Step 5a
         upserted it; a miss is a programming error and raises RuntimeError.
@@ -412,9 +403,7 @@ class RsamClaimSource(ClaimResolverBase):
             )
             actor = row.first()
         if actor is None:
-            raise RuntimeError(
-                "actor row missing after JIT upsert — programming error"
-            )
+            raise RuntimeError("actor row missing after JIT upsert — programming error")
         display_name, email = actor
         return AuditIdentity(
             sub=subject,

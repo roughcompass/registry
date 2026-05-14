@@ -109,13 +109,11 @@ CREATE TABLE capability_annotations (
 # Partial indexes exclude soft-deleted rows, keeping the index small and
 # ensuring the common read path (active annotations only) is always covered.
 _CREATE_IDX_CAPABILITY = (
-    "CREATE INDEX idx_ann_capability ON capability_annotations (capability_id) "
-    "WHERE t_invalidated_at IS NULL"
+    "CREATE INDEX idx_ann_capability ON capability_annotations (capability_id) " "WHERE t_invalidated_at IS NULL"
 )
 
 _CREATE_IDX_AUTHOR = (
-    "CREATE INDEX idx_ann_author ON capability_annotations (author_actor_id) "
-    "WHERE t_invalidated_at IS NULL"
+    "CREATE INDEX idx_ann_author ON capability_annotations (author_actor_id) " "WHERE t_invalidated_at IS NULL"
 )
 
 _CREATE_IDX_STATUS = (
@@ -126,8 +124,7 @@ _CREATE_IDX_STATUS = (
 _DROP_TABLE = "DROP TABLE IF EXISTS capability_annotations"
 
 _DELETE_VOCAB = (
-    "DELETE FROM vocabulary_values "
-    "WHERE is_system = TRUE AND kind IN ('annotation_category', 'annotation_status')"
+    "DELETE FROM vocabulary_values " "WHERE is_system = TRUE AND kind IN ('annotation_category', 'annotation_status')"
 )
 
 

@@ -295,9 +295,7 @@ class EntityService:
                         session_factory=self._session_factory,
                         clock=self._clock,
                     )
-                    await progression_svc.validate_transition(
-                        ctx, _attr_view, old_state, new_state
-                    )
+                    await progression_svc.validate_transition(ctx, _attr_view, old_state, new_state)
                     # validate_transition returns ValidationResult(valid=True)
                     # or raises ProgressionError (HTTP 422).
 

@@ -295,8 +295,6 @@ async def test_restart_mid_run_is_idempotent() -> None:
     worker2, params_log2 = _make_worker(batch_sequence=[7, 0], batch_size=1000)
     result2 = await worker2.run()
 
-    assert result2.expired_count == 7, (
-        "re-run should count only newly invalidated rows, not rows from run 1"
-    )
+    assert result2.expired_count == 7, "re-run should count only newly invalidated rows, not rows from run 1"
     # Two execute calls: [7-row batch, 0-row terminator]
     assert len(params_log2) == 2

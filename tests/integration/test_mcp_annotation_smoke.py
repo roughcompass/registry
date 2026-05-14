@@ -267,22 +267,14 @@ async def test_annotation_tools_in_tool_list(mcp_annotation_harness: dict[str, A
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
 
-    assert "submit_annotation" in names, (
-        f"submit_annotation not found in registered tools: {names}"
-    )
-    assert "list_my_annotations" in names, (
-        f"list_my_annotations not found in registered tools: {names}"
-    )
-    assert "triage_annotation" in names, (
-        f"triage_annotation not found in registered tools: {names}"
-    )
+    assert "submit_annotation" in names, f"submit_annotation not found in registered tools: {names}"
+    assert "list_my_annotations" in names, f"list_my_annotations not found in registered tools: {names}"
+    assert "triage_annotation" in names, f"triage_annotation not found in registered tools: {names}"
 
     # Each annotation tool must carry a non-empty inputSchema.
     for tool in tools:
         if tool.name in {"submit_annotation", "list_my_annotations", "triage_annotation"}:
-            assert isinstance(tool.inputSchema, dict), (
-                f"{tool.name}: inputSchema is not a dict"
-            )
+            assert isinstance(tool.inputSchema, dict), f"{tool.name}: inputSchema is not a dict"
             assert tool.inputSchema, f"{tool.name}: inputSchema is empty"
 
 
@@ -329,9 +321,7 @@ async def test_submit_annotation_returns_result(mcp_annotation_harness: dict[str
 
     parsed = json.loads(first.text)
     assert isinstance(parsed, dict), "submit_annotation must return a JSON object"
-    assert "annotation_id" in parsed, (
-        f"Response must contain annotation_id; got keys: {list(parsed.keys())}"
-    )
+    assert "annotation_id" in parsed, f"Response must contain annotation_id; got keys: {list(parsed.keys())}"
     assert "capability_id" in parsed
     assert parsed["capability_id"] == str(cap_id)
     assert parsed["status"] == "open"
@@ -350,12 +340,8 @@ async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[s
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, _pact, _ptok = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-list-prov-{suffix}"
-    )
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-list-cons-{suffix}"
-    )
+    provider_tid, _pact, _ptok = await _seed_tenant_with_token(pg_url, slug=f"mcp-list-prov-{suffix}")
+    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-list-cons-{suffix}")
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -388,9 +374,7 @@ async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[s
 
     parsed = json.loads(first.text)
     assert isinstance(parsed, dict), "list_my_annotations must return a JSON object"
-    assert "items" in parsed, (
-        f"Response must contain 'items'; got keys: {list(parsed.keys())}"
-    )
+    assert "items" in parsed, f"Response must contain 'items'; got keys: {list(parsed.keys())}"
     assert "next_cursor" in parsed
     # The annotation we just submitted must appear in the list.
     assert isinstance(parsed["items"], list)
@@ -410,12 +394,8 @@ async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, provider_actor, provider_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-tri-prov-{suffix}"
-    )
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-tri-cons-{suffix}"
-    )
+    provider_tid, provider_actor, provider_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-tri-prov-{suffix}")
+    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-tri-cons-{suffix}")
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -456,9 +436,7 @@ async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str
 
     parsed = json.loads(first.text)
     assert isinstance(parsed, dict), "triage_annotation must return a JSON object"
-    assert parsed.get("status") == "triaged", (
-        f"Expected status='triaged', got: {parsed.get('status')!r}"
-    )
+    assert parsed.get("status") == "triaged", f"Expected status='triaged', got: {parsed.get('status')!r}"
     assert parsed.get("annotation_id") == annotation_id
 
 
@@ -480,12 +458,8 @@ async def test_submit_annotation_pii_block_returns_tool_error(
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, _pact, _ptok = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-pii-prov-{suffix}"
-    )
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-pii-cons-{suffix}"
-    )
+    provider_tid, _pact, _ptok = await _seed_tenant_with_token(pg_url, slug=f"mcp-pii-prov-{suffix}")
+    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-pii-cons-{suffix}")
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -511,6 +485,4 @@ async def test_submit_annotation_pii_block_returns_tool_error(
         )
 
     error_message = str(exc_info.value)
-    assert "PII detected" in error_message, (
-        f"ToolError message must mention 'PII detected'; got: {error_message!r}"
-    )
+    assert "PII detected" in error_message, f"ToolError message must mention 'PII detected'; got: {error_message!r}"

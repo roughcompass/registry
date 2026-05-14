@@ -45,9 +45,7 @@ def _pii_block(field: str = "email") -> MagicMock:
     scanner = MagicMock()
     scanner.scan = MagicMock(
         return_value=PiiScanResponse(
-            matched_patterns=[
-                PiiMatchResult(name=field, offset=0, length=10, category="CONTACT")
-            ],
+            matched_patterns=[PiiMatchResult(name=field, offset=0, length=10, category="CONTACT")],
             action_taken="block",
         )
     )
@@ -59,9 +57,7 @@ def _pii_warn(field: str = "email") -> MagicMock:
     scanner = MagicMock()
     scanner.scan = MagicMock(
         return_value=PiiScanResponse(
-            matched_patterns=[
-                PiiMatchResult(name=field, offset=0, length=10, category="CONTACT")
-            ],
+            matched_patterns=[PiiMatchResult(name=field, offset=0, length=10, category="CONTACT")],
             action_taken="warn",
         )
     )
@@ -71,9 +67,7 @@ def _pii_warn(field: str = "email") -> MagicMock:
 def _pii_advisory() -> MagicMock:
     """PIIScanner mock that always returns advisory action (no PII)."""
     scanner = MagicMock()
-    scanner.scan = MagicMock(
-        return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory")
-    )
+    scanner.scan = MagicMock(return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory"))
     return scanner
 
 
@@ -85,8 +79,8 @@ def _audit_writer() -> MagicMock:
 
 def _visibility(visible: bool = True) -> MagicMock:
     vis = MagicMock()
-    vis.assert_visible = AsyncMock(return_value=None) if visible else AsyncMock(
-        side_effect=PermissionError("not visible")
+    vis.assert_visible = (
+        AsyncMock(return_value=None) if visible else AsyncMock(side_effect=PermissionError("not visible"))
     )
     return vis
 

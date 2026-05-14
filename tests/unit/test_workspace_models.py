@@ -59,9 +59,7 @@ def test_entry_has_no_ciphertext_columns() -> None:
         "references_nonce",
     }
     overlap = cols & forbidden
-    assert not overlap, (
-        f"WorkspaceEntryRecord must not declare ciphertext columns yet; found: {overlap}"
-    )
+    assert not overlap, f"WorkspaceEntryRecord must not declare ciphertext columns yet; found: {overlap}"
 
 
 def test_entry_body_md_is_not_null() -> None:

@@ -562,19 +562,13 @@ class WorkspaceService:
             # Load roles before any validation so a no-role actor is rejected
             # before owner_kind is even evaluated — avoiding information leakage
             # about which owner_kind values are valid for a given role.
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
             if owner_kind == "actor":
                 if "producer" not in effective_roles:
-                    raise WorkspaceOperationDenied(
-                        "Only producers may create actor-owned workspaces."
-                    )
+                    raise WorkspaceOperationDenied("Only producers may create actor-owned workspaces.")
             elif owner_kind == "tenant":
                 if "admin" not in effective_roles:
-                    raise WorkspaceOperationDenied(
-                        "Only admins may create tenant-owned workspaces."
-                    )
+                    raise WorkspaceOperationDenied("Only admins may create tenant-owned workspaces.")
             # Unknown owner_kind values are caught in the next step; no-role
             # actors with an unknown kind will fall through to the vocabulary
             # check and receive a 422 (which is acceptable — 403 would also
@@ -599,10 +593,7 @@ class WorkspaceService:
             if owner_kind not in VALID_OWNER_KINDS:
                 raise HTTPException(
                     status_code=422,
-                    detail=(
-                        f"Invalid owner_kind {owner_kind!r}. "
-                        f"Must be one of: {sorted(VALID_OWNER_KINDS)}."
-                    ),
+                    detail=(f"Invalid owner_kind {owner_kind!r}. " f"Must be one of: {sorted(VALID_OWNER_KINDS)}."),
                 )
 
             owner_actor_id = ctx.actor_id if owner_kind == "actor" else None
@@ -709,12 +700,8 @@ class WorkspaceService:
             if ws_row is None:
                 raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
-            if not _can_perceive_workspace(
-                effective_roles, ctx.actor_id, ctx.tenant_id, ws_row
-            ):
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            if not _can_perceive_workspace(effective_roles, ctx.actor_id, ctx.tenant_id, ws_row):
                 raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
         _log.info(
@@ -897,9 +884,7 @@ class WorkspaceService:
         # An already-archived workspace must still be un-archivable by the right role
         # holder, so the gate must be archive-state-independent.
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
         _assert_can_archive_workspace(effective_roles, ctx.actor_id, existing)
 
         now = self._clock.now()
@@ -1017,9 +1002,7 @@ class WorkspaceService:
             # Build a minimal WorkspaceRef so the helper can evaluate owner_kind
             # and owner_actor_id. archived_at is included because the helper
             # signature accepts the full ref shape.
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
             _ws_ref = WorkspaceRef(
                 workspace_id=ws_row.workspace_id,
                 tenant_id=ws_row.tenant_id,
@@ -1128,19 +1111,14 @@ class WorkspaceService:
         # the write gate before any mutation proceeds.
         ws = await self.get_workspace(ctx, workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
         assert_can_create_entry(ctx, ws, effective_roles)
 
         # Step 2 — validate kind.
         if kind not in VALID_ENTRY_KINDS:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Invalid entry kind {kind!r}. "
-                    f"Must be one of: {sorted(VALID_ENTRY_KINDS)}."
-                ),
+                detail=(f"Invalid entry kind {kind!r}. " f"Must be one of: {sorted(VALID_ENTRY_KINDS)}."),
             )
 
         # Step 3 — validate body_md is non-empty.
@@ -1250,6 +1228,7 @@ class WorkspaceService:
 
         # Build a synthetic record object so _read_body is the sole body accessor.
         from types import SimpleNamespace
+
         _synthetic = SimpleNamespace(body_md=body_md)
 
         return WorkspaceEntryRef(
@@ -1316,9 +1295,7 @@ class WorkspaceService:
         # Access check via the entry's workspace: perceivability first, then write gate.
         ws = await self.get_workspace(ctx, entry_row.workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
         assert_can_update_entry(ctx, ws, effective_roles)
 
         # PII scan on body_md (when provided). Three-outcome dispatch:
@@ -1372,12 +1349,8 @@ class WorkspaceService:
         # Read existing body through _read_body so ENC-phase decryption funnels
         # through one helper instead of a codebase-wide audit.
         effective_body_md = body_md if body_md is not None else _read_body(entry_row)
-        effective_reference_ids = (
-            reference_ids if reference_ids is not None else entry_row.reference_ids
-        )
-        effective_references_jsonb = (
-            references_jsonb if references_jsonb is not None else entry_row.references_jsonb
-        )
+        effective_reference_ids = reference_ids if reference_ids is not None else entry_row.reference_ids
+        effective_references_jsonb = references_jsonb if references_jsonb is not None else entry_row.references_jsonb
 
         async with self._session_factory() as session, session.begin():
             await session.execute(
@@ -1420,6 +1393,7 @@ class WorkspaceService:
         # _read_body is the sole accessor; build a synthetic object so
         # the helper is exercised even when no ORM row is available.
         from types import SimpleNamespace
+
         _synthetic = SimpleNamespace(body_md=effective_body_md)
 
         return WorkspaceEntryRef(
@@ -1485,9 +1459,7 @@ class WorkspaceService:
         # Access check via the entry's workspace: perceivability first, then write gate.
         ws = await self.get_workspace(ctx, entry_row.workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(
-                session, ctx.actor_id, ctx.tenant_id
-            )
+            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
         _assert_can_write_entries(effective_roles, ctx.actor_id, ws)
 
         async with self._session_factory() as session, session.begin():
@@ -1724,9 +1696,7 @@ class WorkspaceService:
         ]
 
         if q is not None:
-            where_clauses.append(
-                "to_tsvector('english', e.body_md) @@ to_tsquery('english', :q)"
-            )
+            where_clauses.append("to_tsvector('english', e.body_md) @@ to_tsquery('english', :q)")
             params["q"] = q
 
         if reference_ids is not None:
@@ -1854,10 +1824,7 @@ class WorkspaceService:
         if "admin" not in ctx.roles:
             raise HTTPException(
                 status_code=403,
-                detail=(
-                    f"Actor {ctx.actor_id} does not hold the admin role and cannot "
-                    "invoke personal-data purge."
-                ),
+                detail=(f"Actor {ctx.actor_id} does not hold the admin role and cannot " "invoke personal-data purge."),
             )
 
         now = self._clock.now()
@@ -1897,9 +1864,7 @@ class WorkspaceService:
                 ),
                 {"target_actor_id": target_actor_id},
             )
-            owned_ws_ids: list[uuid.UUID] = [
-                row.workspace_id for row in owned_ws_result.fetchall()
-            ]
+            owned_ws_ids: list[uuid.UUID] = [row.workspace_id for row in owned_ws_result.fetchall()]
 
             purged_workspaces = 0
             for ws_id in owned_ws_ids:
@@ -1926,9 +1891,7 @@ class WorkspaceService:
                     # container disappears entirely. Count those cascade
                     # deletions against purged_entries.
                     cascade_result = await session.execute(
-                        text(
-                            "DELETE FROM workspace_entries WHERE workspace_id = :ws_id"
-                        ),
+                        text("DELETE FROM workspace_entries WHERE workspace_id = :ws_id"),
                         {"ws_id": ws_id},
                     )
                     purged_entries += cascade_result.rowcount or 0

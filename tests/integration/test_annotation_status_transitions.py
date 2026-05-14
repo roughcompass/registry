@@ -158,10 +158,7 @@ async def _get_annotation_db_status(pg_url: str, annotation_id: uuid.UUID) -> st
     try:
         async with factory() as session:
             result = await session.execute(
-                text(
-                    "SELECT status FROM capability_annotations "
-                    "WHERE annotation_id = :ann_id"
-                ),
+                text("SELECT status FROM capability_annotations " "WHERE annotation_id = :ann_id"),
                 {"ann_id": annotation_id},
             )
             row = result.first()
@@ -276,8 +273,7 @@ async def test_forward_status_chain_open_to_closed(pg_container: str, app_client
     # Audit log: exactly 3 annotation.triaged rows for this annotation.
     audit_count = await _count_audit_rows(pg_container, annotation_id)
     assert audit_count == 3, (
-        f"Expected 3 audit rows (one per PATCH) for annotation {annotation_id}; "
-        f"got {audit_count}"
+        f"Expected 3 audit rows (one per PATCH) for annotation {annotation_id}; " f"got {audit_count}"
     )
 
 
@@ -352,9 +348,7 @@ async def test_reverse_transition_closed_to_triaged(pg_container: str, app_clien
 
     # A second audit row must have been written for the reverse transition.
     audit_after = await _count_audit_rows(pg_container, annotation_id)
-    assert audit_after == 2, (
-        f"Expected 2 audit rows after reverse transition; got {audit_after}"
-    )
+    assert audit_after == 2, f"Expected 2 audit rows after reverse transition; got {audit_after}"
 
 
 # ---------------------------------------------------------------------------
@@ -443,9 +437,7 @@ async def test_list_status_filter(pg_container: str, app_client) -> None:
     )
     assert flt_triaged.status_code == 200, flt_triaged.text
     triaged_items = flt_triaged.json()["items"]
-    assert len(triaged_items) == 1, (
-        f"Expected 1 triaged annotation; got {len(triaged_items)}: {triaged_items}"
-    )
+    assert len(triaged_items) == 1, f"Expected 1 triaged annotation; got {len(triaged_items)}: {triaged_items}"
     assert triaged_items[0]["annotation_id"] == str(ann2_id)
 
     # GET ?status=open → exactly 1 item.
@@ -456,9 +448,7 @@ async def test_list_status_filter(pg_container: str, app_client) -> None:
     )
     assert flt_open.status_code == 200, flt_open.text
     open_items = flt_open.json()["items"]
-    assert len(open_items) == 1, (
-        f"Expected 1 open annotation; got {len(open_items)}: {open_items}"
-    )
+    assert len(open_items) == 1, f"Expected 1 open annotation; got {len(open_items)}: {open_items}"
     assert open_items[0]["annotation_id"] == ann1_id
 
     # GET (no filter) → all 3 items.
@@ -468,9 +458,7 @@ async def test_list_status_filter(pg_container: str, app_client) -> None:
     )
     assert flt_all.status_code == 200, flt_all.text
     all_items = flt_all.json()["items"]
-    assert len(all_items) == 3, (
-        f"Expected 3 total annotations (no filter); got {len(all_items)}: {all_items}"
-    )
+    assert len(all_items) == 3, f"Expected 3 total annotations (no filter); got {len(all_items)}: {all_items}"
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +513,5 @@ async def test_non_owner_tenant_cannot_triage(pg_container: str, app_client) -> 
         json={"status": "triaged"},
     )
     assert patch_resp.status_code == 403, (
-        f"Expected 403 when non-owner Tenant B tries to triage; "
-        f"got {patch_resp.status_code}: {patch_resp.text}"
+        f"Expected 403 when non-owner Tenant B tries to triage; " f"got {patch_resp.status_code}: {patch_resp.text}"
     )

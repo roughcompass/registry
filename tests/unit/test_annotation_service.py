@@ -53,9 +53,7 @@ def _ctx(tenant: uuid.UUID = _TENANT_B, actor: uuid.UUID = _ACTOR_B) -> TenantCo
 def _pii_clean() -> MagicMock:
     """Return a PIIScanner mock that always reports no PII (advisory)."""
     scanner = MagicMock()
-    scanner.scan = MagicMock(
-        return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory")
-    )
+    scanner.scan = MagicMock(return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory"))
     return scanner
 
 
@@ -328,9 +326,7 @@ async def test_create_annotation_accepts_all_valid_categories(category: str) -> 
     """All five valid categories are accepted without raising."""
     ctx = _ctx()
     svc = _make_service()
-    ref = await svc.create_annotation(
-        ctx, capability_id=_CAPABILITY_ID, body="Test body.", category=category
-    )
+    ref = await svc.create_annotation(ctx, capability_id=_CAPABILITY_ID, body="Test body.", category=category)
     assert ref.category == category
 
 
@@ -367,9 +363,7 @@ async def test_create_annotation_pii_scan_called_with_correct_field_type() -> No
     scanner = _pii_clean()
     svc = _make_service(pii_scanner=scanner)
 
-    await svc.create_annotation(
-        _ctx(), capability_id=_CAPABILITY_ID, body="Clean text.", category="feedback"
-    )
+    await svc.create_annotation(_ctx(), capability_id=_CAPABILITY_ID, body="Clean text.", category="feedback")
 
     scanner.scan.assert_called_once()
     call_kwargs = scanner.scan.call_args.kwargs
@@ -414,9 +408,7 @@ async def test_create_annotation_no_audit_on_pii_block() -> None:
     svc = _make_service(pii_scanner=_pii_block(), audit_writer=writer)
 
     with pytest.raises(HTTPException):
-        await svc.create_annotation(
-            _ctx(), capability_id=_CAPABILITY_ID, body="pii body", category="feedback"
-        )
+        await svc.create_annotation(_ctx(), capability_id=_CAPABILITY_ID, body="pii body", category="feedback")
 
     writer.emit.assert_not_called()
 
@@ -623,10 +615,7 @@ async def test_triage_sets_version_target() -> None:
     assert ref.version_target == "v2.3"
 
     # The UPDATE binds version_target='v2.3'.
-    update_idx = next(
-        i for i, sql in enumerate(session._executed)
-        if sql.upper().lstrip().startswith("UPDATE")
-    )
+    update_idx = next(i for i, sql in enumerate(session._executed) if sql.upper().lstrip().startswith("UPDATE"))
     update_sql = session._executed[update_idx]
     update_params = session._executed_params[update_idx]
     assert update_params is not None
@@ -719,10 +708,7 @@ async def test_triage_without_triage_note_preserves_existing_note_in_db() -> Non
     # The UPDATE's SET clause does not mention triage_note — the column is
     # omitted entirely so the stored value is left unchanged. Bind params do
     # not include triage_note either.
-    update_idx = next(
-        i for i, sql in enumerate(session._executed)
-        if sql.upper().lstrip().startswith("UPDATE")
-    )
+    update_idx = next(i for i, sql in enumerate(session._executed) if sql.upper().lstrip().startswith("UPDATE"))
     update_sql = session._executed[update_idx]
     update_params = session._executed_params[update_idx]
     assert "triage_note" not in update_sql
@@ -1278,9 +1264,7 @@ async def test_list_annotations_status_filter() -> None:
     returning only the triaged row — confirming the service propagates the
     filter without raising and returns what the DB sends back.
     """
-    triaged_row = _make_list_row(
-        author_tenant_id=_TENANT_B, status="triaged"
-    )
+    triaged_row = _make_list_row(author_tenant_id=_TENANT_B, status="triaged")
     # Provider context — provider sees all, filtered by status.
     svc, _session = _make_list_service(annotation_rows=[triaged_row], capability_tenant_id=_TENANT_A)
     ctx = TenantContext(tenant_id=_TENANT_A, actor_id=uuid.uuid4(), roles=["provider"])
@@ -1744,10 +1728,14 @@ def _build_annotation_app(
 
     app.dependency_overrides[get_annotation_service] = _fake_svc
 
-    effective_ctx = ctx if ctx is not None else TenantContext(
-        tenant_id=_TENANT_B,
-        actor_id=_ACTOR_B,
-        roles=["consumer"],
+    effective_ctx = (
+        ctx
+        if ctx is not None
+        else TenantContext(
+            tenant_id=_TENANT_B,
+            actor_id=_ACTOR_B,
+            roles=["consumer"],
+        )
     )
 
     async def _fake_ctx() -> TenantContext:

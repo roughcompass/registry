@@ -82,15 +82,9 @@ CREATE TABLE workspaces (
 
 # Partial indexes exclude soft-deleted rows so the common read path (active
 # workspaces only) is always covered by a small, focused index.
-_CREATE_IDX_WS_TENANT = (
-    "CREATE INDEX idx_ws_tenant ON workspaces (tenant_id) "
-    "WHERE t_invalidated_at IS NULL"
-)
+_CREATE_IDX_WS_TENANT = "CREATE INDEX idx_ws_tenant ON workspaces (tenant_id) " "WHERE t_invalidated_at IS NULL"
 
-_CREATE_IDX_WS_OWNER = (
-    "CREATE INDEX idx_ws_owner ON workspaces (owner_actor_id) "
-    "WHERE owner_actor_id IS NOT NULL"
-)
+_CREATE_IDX_WS_OWNER = "CREATE INDEX idx_ws_owner ON workspaces (owner_actor_id) " "WHERE owner_actor_id IS NOT NULL"
 
 # BEFORE UPDATE trigger: rejects owner_kind changes while active cross-tenant
 # shares exist. The DB trigger is the backstop — a service-layer guard already
@@ -149,14 +143,10 @@ CREATE TABLE workspace_entries (
 """
 
 _CREATE_IDX_WE_WORKSPACE = (
-    "CREATE INDEX idx_we_workspace ON workspace_entries (workspace_id) "
-    "WHERE t_invalidated_at IS NULL"
+    "CREATE INDEX idx_we_workspace ON workspace_entries (workspace_id) " "WHERE t_invalidated_at IS NULL"
 )
 
-_CREATE_IDX_WE_TENANT = (
-    "CREATE INDEX idx_we_tenant ON workspace_entries (tenant_id) "
-    "WHERE t_invalidated_at IS NULL"
-)
+_CREATE_IDX_WE_TENANT = "CREATE INDEX idx_we_tenant ON workspace_entries (tenant_id) " "WHERE t_invalidated_at IS NULL"
 
 # GIN index on the UUID array column for efficient ANY(reference_ids) lookups.
 _CREATE_IDX_WE_REFS = "CREATE INDEX idx_we_refs ON workspace_entries USING GIN (reference_ids)"
@@ -200,13 +190,11 @@ CREATE TABLE workspace_shares (
 # share sets revoked_at which excludes the row from this index, allowing a new
 # share grant to the same grantee after revocation.
 _CREATE_IDX_UQ_SHARE = (
-    "CREATE UNIQUE INDEX uq_share ON workspace_shares (workspace_id, grantee_actor_id) "
-    "WHERE revoked_at IS NULL"
+    "CREATE UNIQUE INDEX uq_share ON workspace_shares (workspace_id, grantee_actor_id) " "WHERE revoked_at IS NULL"
 )
 
 _CREATE_IDX_SHARE_GRANTEE = (
-    "CREATE INDEX idx_share_grantee ON workspace_shares (grantee_actor_id) "
-    "WHERE revoked_at IS NULL"
+    "CREATE INDEX idx_share_grantee ON workspace_shares (grantee_actor_id) " "WHERE revoked_at IS NULL"
 )
 
 # BEFORE INSERT trigger: Layer 1 cross-tenant share enforcement. The trigger
@@ -254,8 +242,7 @@ CREATE TABLE workspace_share_acceptances (
 # One acceptance record per (share, actor): idempotent on repeated cross-tenant
 # first-access, and prevents double-billing of the acceptance audit trail.
 _CREATE_IDX_UQ_ACCEPTANCE = (
-    "CREATE UNIQUE INDEX uq_acceptance ON workspace_share_acceptances "
-    "(share_id, accepting_actor_id)"
+    "CREATE UNIQUE INDEX uq_acceptance ON workspace_share_acceptances " "(share_id, accepting_actor_id)"
 )
 
 # ---------------------------------------------------------------------------
@@ -264,14 +251,10 @@ _CREATE_IDX_UQ_ACCEPTANCE = (
 
 _DROP_WORKSPACE_SHARE_ACCEPTANCES = "DROP TABLE IF EXISTS workspace_share_acceptances"
 _DROP_WORKSPACE_SHARES = "DROP TABLE IF EXISTS workspace_shares"
-_DROP_TRIGGER_SHARE_CROSS_TENANT = (
-    "DROP TRIGGER IF EXISTS trg_ws_share_cross_tenant ON workspace_shares"
-)
+_DROP_TRIGGER_SHARE_CROSS_TENANT = "DROP TRIGGER IF EXISTS trg_ws_share_cross_tenant ON workspace_shares"
 _DROP_FUNC_SHARE_CROSS_TENANT = "DROP FUNCTION IF EXISTS check_workspace_share_cross_tenant"
 _DROP_WORKSPACE_ENTRIES = "DROP TABLE IF EXISTS workspace_entries"
-_DROP_TRIGGER_OWNER_KIND = (
-    "DROP TRIGGER IF EXISTS trg_ws_owner_kind_change ON workspaces"
-)
+_DROP_TRIGGER_OWNER_KIND = "DROP TRIGGER IF EXISTS trg_ws_owner_kind_change ON workspaces"
 _DROP_FUNC_OWNER_KIND_CHANGE = "DROP FUNCTION IF EXISTS check_workspace_owner_kind_change"
 _DROP_WORKSPACES = "DROP TABLE IF EXISTS workspaces"
 

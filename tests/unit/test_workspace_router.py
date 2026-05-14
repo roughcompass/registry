@@ -224,10 +224,14 @@ def _build_app(
 
     app.dependency_overrides[get_workspace_service] = _fake_svc
 
-    effective_ctx = ctx if ctx is not None else TenantContext(
-        tenant_id=_TENANT_ID,
-        actor_id=_ACTOR_ID,
-        roles=["producer"],
+    effective_ctx = (
+        ctx
+        if ctx is not None
+        else TenantContext(
+            tenant_id=_TENANT_ID,
+            actor_id=_ACTOR_ID,
+            roles=["producer"],
+        )
     )
 
     async def _fake_ctx() -> TenantContext:
@@ -907,9 +911,7 @@ def test_auditor_role_can_reach_get_workspace() -> None:
 
     resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}")
 
-    assert resp.status_code == 200, (
-        f"Auditor must reach GET /workspaces/{{id}}; got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 200, f"Auditor must reach GET /workspaces/{{id}}; got {resp.status_code}: {resp.text}"
 
 
 def test_auditor_role_can_reach_list_workspaces() -> None:
@@ -927,9 +929,7 @@ def test_auditor_role_can_reach_list_workspaces() -> None:
 
     resp = client.get("/v1/workspaces")
 
-    assert resp.status_code == 200, (
-        f"Auditor must reach GET /workspaces; got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code == 200, f"Auditor must reach GET /workspaces; got {resp.status_code}: {resp.text}"
 
 
 def test_unknown_role_denied_at_router_gate() -> None:
@@ -945,6 +945,5 @@ def test_unknown_role_denied_at_router_gate() -> None:
     resp = client.get(f"/v1/workspaces/{_WORKSPACE_ID}")
 
     assert resp.status_code == 403, (
-        f"Actor with unrecognised role must be denied at the router gate; "
-        f"got {resp.status_code}: {resp.text}"
+        f"Actor with unrecognised role must be denied at the router gate; " f"got {resp.status_code}: {resp.text}"
     )

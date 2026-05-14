@@ -952,9 +952,7 @@ class TestMig0018UpgradeDdl:
         stmts = _capture_0018_upgrade()
         idx_stmts = [s for s in stmts if "CREATE INDEX" in s and "capability_annotations" in s]
         for stmt in idx_stmts:
-            assert "t_invalidated_at IS NULL" in stmt, (
-                f"Partial index predicate missing from: {stmt!r}"
-            )
+            assert "t_invalidated_at IS NULL" in stmt, f"Partial index predicate missing from: {stmt!r}"
 
     def test_no_ciphertext_columns(self) -> None:
         """Plaintext-only invariant: no ENC-phase columns may appear in this migration."""
@@ -993,13 +991,11 @@ class TestMig0018VocabSeeds:
         stmts = _capture_0018_upgrade()
         insert_stmts = [s for s in stmts if "INSERT INTO vocabulary_values" in s]
         total_seeds = len(_AN_CATEGORY_SEEDS) + len(_AN_STATUS_SEEDS)
-        assert len(insert_stmts) == total_seeds, (
-            f"Expected {total_seeds} vocab INSERT statements, got {len(insert_stmts)}"
-        )
+        assert (
+            len(insert_stmts) == total_seeds
+        ), f"Expected {total_seeds} vocab INSERT statements, got {len(insert_stmts)}"
         for stmt in insert_stmts:
-            assert "ON CONFLICT DO NOTHING" in stmt, (
-                f"ON CONFLICT DO NOTHING missing from vocab seed: {stmt!r}"
-            )
+            assert "ON CONFLICT DO NOTHING" in stmt, f"ON CONFLICT DO NOTHING missing from vocab seed: {stmt!r}"
 
     def test_seeds_have_is_system_true(self) -> None:
         stmts = _capture_0018_upgrade()
@@ -1045,9 +1041,7 @@ class TestMig0018DowngradeDdl:
 # Migration 0019_workspaces_plaintext unit tests
 # ===========================================================================
 
-_MIG19_PATH = (
-    _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0019_workspaces_plaintext.py"
-)
+_MIG19_PATH = _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0019_workspaces_plaintext.py"
 _MIG19_SPEC = importlib.util.spec_from_file_location("migration_0019", _MIG19_PATH)
 assert _MIG19_SPEC is not None and _MIG19_SPEC.loader is not None
 _mig19 = importlib.util.module_from_spec(_MIG19_SPEC)
@@ -1117,9 +1111,7 @@ class TestMig0019UpgradeDdl:
     def test_all_four_tables_created(self) -> None:
         combined = "\n".join(_capture_0019_upgrade())
         for table in _WS_NEW_TABLES:
-            assert f"CREATE TABLE {table}" in combined, (
-                f"CREATE TABLE {table} not found in upgrade() DDL"
-            )
+            assert f"CREATE TABLE {table}" in combined, f"CREATE TABLE {table} not found in upgrade() DDL"
 
     def test_workspaces_encryption_tier_column(self) -> None:
         stmts = _capture_0019_upgrade()
@@ -1240,15 +1232,12 @@ class TestMig0019UpgradeDdl:
     def test_no_bitemporal_columns_on_workspace_tables(self) -> None:
         """Workspace tables defer bi-temporal columns to v2; t_invalidated_at IS allowed."""
         stmts = _capture_0019_upgrade()
-        ws_table_stmts = [
-            s for s in stmts
-            if any(f"CREATE TABLE {t}" in s for t in _WS_NEW_TABLES)
-        ]
+        ws_table_stmts = [s for s in stmts if any(f"CREATE TABLE {t}" in s for t in _WS_NEW_TABLES)]
         for stmt in ws_table_stmts:
             for col in ("t_valid_from", "t_valid_to", "t_ingested_at"):
-                assert col not in stmt, (
-                    f"Bi-temporal column '{col}' must not appear in WS-phase table DDL: {stmt[:80]!r}"
-                )
+                assert (
+                    col not in stmt
+                ), f"Bi-temporal column '{col}' must not appear in WS-phase table DDL: {stmt[:80]!r}"
 
 
 class TestMig0019DowngradeDdl:
@@ -1282,7 +1271,8 @@ class TestMig0019DowngradeDdl:
         entries_pos = next((i for i, s in enumerate(drop_stmts) if "workspace_entries" in s), None)
         ws_pos = next(
             (
-                i for i, s in enumerate(drop_stmts)
+                i
+                for i, s in enumerate(drop_stmts)
                 if "workspaces" in s
                 and "workspace_entries" not in s
                 and "workspace_shares" not in s

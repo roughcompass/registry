@@ -123,8 +123,8 @@ async def test_update_entity_valid_attributes_passes() -> None:
     # validate_capability must have been called once with the merged attributes.
     schema_mock.validate_capability.assert_awaited_once()
     call_args = schema_mock.validate_capability.call_args
-    assert call_args.args[1] == "api-capability"          # capability_type == entity_type
-    assert call_args.args[2] == {"owner": "team-b"}       # merged: existing overridden by update
+    assert call_args.args[1] == "api-capability"  # capability_type == entity_type
+    assert call_args.args[2] == {"owner": "team-b"}  # merged: existing overridden by update
 
 
 @pytest.mark.asyncio
@@ -183,9 +183,7 @@ async def test_update_entity_no_rows_written_on_validation_failure() -> None:
     ]
 
     schema_mock = MagicMock()
-    schema_mock.validate_capability = AsyncMock(
-        side_effect=ValidationError("schema violation")
-    )
+    schema_mock.validate_capability = AsyncMock(side_effect=ValidationError("schema violation"))
 
     svc, session = _build_service(entity, existing, schema_mock)
 

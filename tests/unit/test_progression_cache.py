@@ -98,12 +98,8 @@ class TestCacheHit:
         # it to pass through to the uncached loader on a miss.
         session = AsyncMock()
 
-        first = await svc._load_active_definition_cached(
-            session, tenant_id, entity_type, _FIXED_TS
-        )
-        second = await svc._load_active_definition_cached(
-            session, tenant_id, entity_type, _FIXED_TS
-        )
+        first = await svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS)
+        second = await svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS)
 
         assert svc._load_active_definition_uncached.call_count == 1
         assert first is second  # same object identity, not just equality
@@ -128,9 +124,7 @@ class TestTTLExpiry:
         svc._load_active_definition_uncached = AsyncMock(return_value=row)  # type: ignore[method-assign]
 
         # First call populates the cache.
-        await svc._load_active_definition_cached(
-            session, tenant_id, entity_type, _FIXED_TS
-        )
+        await svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS)
         assert svc._load_active_definition_uncached.call_count == 1
 
         # Simulate expiry by rewinding the entry's expires_at into the past.
@@ -138,9 +132,7 @@ class TestTTLExpiry:
         svc._cache[key].expires_at = monotonic() - 1.0
 
         # Second call should hit the loader again.
-        await svc._load_active_definition_cached(
-            session, tenant_id, entity_type, _FIXED_TS
-        )
+        await svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS)
         assert svc._load_active_definition_uncached.call_count == 2
 
 
@@ -177,9 +169,7 @@ class TestSingleFlight:
             svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS),
         )
 
-        assert call_count == 1, (
-            f"expected exactly 1 DB call due to single-flight coalescing, got {call_count}"
-        )
+        assert call_count == 1, f"expected exactly 1 DB call due to single-flight coalescing, got {call_count}"
         assert result_a is result_b
         assert result_a is row
 
@@ -203,9 +193,7 @@ class TestCacheDisabled:
         svc._load_active_definition_uncached = AsyncMock(return_value=row)  # type: ignore[method-assign]
 
         for _ in range(3):
-            await svc._load_active_definition_cached(
-                session, tenant_id, entity_type, _FIXED_TS
-            )
+            await svc._load_active_definition_cached(session, tenant_id, entity_type, _FIXED_TS)
 
         assert svc._load_active_definition_uncached.call_count == 3
         # The cache dict must remain empty — TTL=0 must not populate it.
@@ -241,23 +229,16 @@ class TestIndependentKeys:
 
         svc._load_active_definition_uncached = _loader  # type: ignore[method-assign]
 
-        r1 = await svc._load_active_definition_cached(
-            session, tenant_id, "initiative", _FIXED_TS
-        )
-        r2 = await svc._load_active_definition_cached(
-            session, tenant_id, "epic", _FIXED_TS
-        )
+        r1 = await svc._load_active_definition_cached(session, tenant_id, "initiative", _FIXED_TS)
+        r2 = await svc._load_active_definition_cached(session, tenant_id, "epic", _FIXED_TS)
         # Second hits for the same types — should come from cache.
-        r3 = await svc._load_active_definition_cached(
-            session, tenant_id, "initiative", _FIXED_TS
-        )
-        r4 = await svc._load_active_definition_cached(
-            session, tenant_id, "epic", _FIXED_TS
-        )
+        r3 = await svc._load_active_definition_cached(session, tenant_id, "initiative", _FIXED_TS)
+        r4 = await svc._load_active_definition_cached(session, tenant_id, "epic", _FIXED_TS)
 
-        assert call_log == ["initiative", "epic"], (
-            "each type should be loaded exactly once; subsequent calls must use cache"
-        )
+        assert call_log == [
+            "initiative",
+            "epic",
+        ], "each type should be loaded exactly once; subsequent calls must use cache"
         assert r1 is row_a
         assert r2 is row_b
         assert r3 is row_a
@@ -280,15 +261,11 @@ class TestNoneDefinitionCached:
 
         svc._load_active_definition_uncached = AsyncMock(return_value=None)  # type: ignore[method-assign]
 
-        first = await svc._load_active_definition_cached(
-            session, tenant_id, "unmanaged_type", _FIXED_TS
-        )
-        second = await svc._load_active_definition_cached(
-            session, tenant_id, "unmanaged_type", _FIXED_TS
-        )
+        first = await svc._load_active_definition_cached(session, tenant_id, "unmanaged_type", _FIXED_TS)
+        second = await svc._load_active_definition_cached(session, tenant_id, "unmanaged_type", _FIXED_TS)
 
         assert first is None
         assert second is None
-        assert svc._load_active_definition_uncached.call_count == 1, (
-            "None result must be cached so unmanaged entity types do not cause repeated DB hits"
-        )
+        assert (
+            svc._load_active_definition_uncached.call_count == 1
+        ), "None result must be cached so unmanaged entity types do not cause repeated DB hits"

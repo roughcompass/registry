@@ -74,16 +74,8 @@ _triage_required = require_roles(_triage_roles)
 # Pydantic request models
 # ---------------------------------------------------------------------------
 
-_CATEGORY_DESCRIPTION = (
-    "Annotation category. Must be one of: "
-    + ", ".join(sorted(VALID_CATEGORIES))
-    + "."
-)
-_STATUS_DESCRIPTION = (
-    "Annotation triage status. Must be one of: "
-    + ", ".join(sorted(VALID_STATUSES))
-    + "."
-)
+_CATEGORY_DESCRIPTION = "Annotation category. Must be one of: " + ", ".join(sorted(VALID_CATEGORIES)) + "."
+_STATUS_DESCRIPTION = "Annotation triage status. Must be one of: " + ", ".join(sorted(VALID_STATUSES)) + "."
 
 
 class AnnotationCreateRequest(BaseModel):
@@ -92,9 +84,7 @@ class AnnotationCreateRequest(BaseModel):
     body: str = Field(..., min_length=1, description="Annotation text (min 1 character).")
     category: str = Field(..., description=_CATEGORY_DESCRIPTION)
     triage_note: str | None = Field(default=None, description="Optional provider triage note.")
-    version_target: str | None = Field(
-        default=None, description="Optional version string this annotation targets."
-    )
+    version_target: str | None = Field(default=None, description="Optional version string this annotation targets.")
 
 
 class AnnotationTriageRequest(BaseModel):
@@ -102,9 +92,7 @@ class AnnotationTriageRequest(BaseModel):
 
     status: str = Field(..., description=_STATUS_DESCRIPTION)
     triage_note: str | None = Field(default=None, description="Optional provider triage note.")
-    version_target: str | None = Field(
-        default=None, description="Optional version string this annotation targets."
-    )
+    version_target: str | None = Field(default=None, description="Optional version string this annotation targets.")
 
 
 # ---------------------------------------------------------------------------
@@ -165,10 +153,7 @@ def _ref_to_response(ref: AnnotationRef) -> AnnotationResponse:
     """
     warnings: list[WarningEntry] | None = None
     if ref.warnings:
-        warnings = [
-            WarningEntry(field=w["field"], categories=w["categories"])
-            for w in ref.warnings
-        ]
+        warnings = [WarningEntry(field=w["field"], categories=w["categories"]) for w in ref.warnings]
 
     # Read temporal fields defensively — they are not on AnnotationRef in this phase.
     raw_t_valid_from = getattr(ref, "t_valid_from", None)

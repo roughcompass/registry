@@ -981,7 +981,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     # Mount MCP server under /mcp — same process, same port, no sidecar.
     from registry.api.routers.annotations import _build_annotation_service  # noqa: PLC0415
-    from registry.api.routers.mcp import create_registry_mcp_server, create_mcp_app  # noqa: PLC0415
+    from registry.api.routers.mcp import create_mcp_app, create_registry_mcp_server  # noqa: PLC0415
     from registry.api.routers.workspaces import _build_workspace_service  # noqa: PLC0415
 
     annotation_svc = _build_annotation_service(app)

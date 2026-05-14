@@ -30,10 +30,10 @@ from registry.service.workspace import (
 from registry.types import FakeClock, TenantContext
 
 _NOW = datetime.datetime(2026, 5, 12, 12, 0, 0, tzinfo=datetime.UTC)
-_TENANT_A = uuid.uuid4()   # workspace owning tenant
-_TENANT_B = uuid.uuid4()   # second tenant (for cross-tenant isolation tests)
-_ACTOR_A = uuid.uuid4()    # owner actor
-_ACTOR_B = uuid.uuid4()    # second actor
+_TENANT_A = uuid.uuid4()  # workspace owning tenant
+_TENANT_B = uuid.uuid4()  # second tenant (for cross-tenant isolation tests)
+_ACTOR_A = uuid.uuid4()  # owner actor
+_ACTOR_B = uuid.uuid4()  # second actor
 _WORKSPACE_ID = uuid.uuid4()
 
 
@@ -469,9 +469,9 @@ async def test_list_workspaces_excludes_archived_by_default() -> None:
 
     await svc.list_workspaces(ctx, include_archived=False)
 
-    assert any("archived_at IS NULL" in sql for sql in sql_issued), (
-        "Expected 'archived_at IS NULL' in the issued SQL when include_archived=False"
-    )
+    assert any(
+        "archived_at IS NULL" in sql for sql in sql_issued
+    ), "Expected 'archived_at IS NULL' in the issued SQL when include_archived=False"
 
 
 # ---------------------------------------------------------------------------
@@ -514,9 +514,9 @@ async def test_list_workspaces_includes_archived_when_requested() -> None:
     refs, _ = await svc.list_workspaces(ctx, include_archived=True)
 
     # Archived clause must NOT appear in the SQL when include_archived=True
-    assert not any("archived_at IS NULL" in sql for sql in sql_issued), (
-        "archived_at IS NULL clause must be absent when include_archived=True"
-    )
+    assert not any(
+        "archived_at IS NULL" in sql for sql in sql_issued
+    ), "archived_at IS NULL clause must be absent when include_archived=True"
     assert len(refs) == 1
     assert refs[0].archived_at == _NOW
 
@@ -1128,9 +1128,7 @@ async def test_create_workspace_with_description() -> None:
     ctx = _ctx()
     svc = _make_service()
 
-    ref = await svc.create_workspace(
-        ctx, name="Described WS", owner_kind="actor", description="My description"
-    )
+    ref = await svc.create_workspace(ctx, name="Described WS", owner_kind="actor", description="My description")
 
     assert ref.description == "My description"
 
@@ -1362,7 +1360,7 @@ async def test_purge_rtbf_only_owned_entries_deletes_workspace() -> None:
     svc = _make_rtbf_service(
         entries_rowcount=3,
         owned_workspace_ids=[ws_id],
-        ws_has_other_entries=False,   # only the target actor's entries existed
+        ws_has_other_entries=False,  # only the target actor's entries existed
         track_calls=calls,
     )
 
@@ -1372,11 +1370,11 @@ async def test_purge_rtbf_only_owned_entries_deletes_workspace() -> None:
 
     assert isinstance(result, PurgeResult)
     assert result.purged_entries == 3
-    assert result.purged_workspaces == 1   # workspace was deleted (2a path)
+    assert result.purged_workspaces == 1  # workspace was deleted (2a path)
 
     # Step 2a path: workspace row deleted
     assert "DELETE_workspace" in calls
-    assert "UPDATE_workspace_archive" not in calls   # 2b path must NOT fire
+    assert "UPDATE_workspace_archive" not in calls  # 2b path must NOT fire
 
 
 # ---------------------------------------------------------------------------
@@ -1401,8 +1399,8 @@ async def test_purge_rtbf_owned_workspace_with_other_entries_cascade_deletes() -
     svc = _make_rtbf_service(
         entries_rowcount=1,
         owned_workspace_ids=[ws_id],
-        ws_has_other_entries=True,    # another actor has entries → cascade-delete them
-        cascade_entries_rowcount=2,   # two residual entries authored by other actors
+        ws_has_other_entries=True,  # another actor has entries → cascade-delete them
+        cascade_entries_rowcount=2,  # two residual entries authored by other actors
         track_calls=calls,
     )
 
@@ -1410,11 +1408,11 @@ async def test_purge_rtbf_owned_workspace_with_other_entries_cascade_deletes() -
 
     # Workspace deleted; residual entries counted against purged_entries
     assert result.purged_workspaces == 1
-    assert result.purged_entries == 3   # 1 from Step 1 + 2 from cascade
+    assert result.purged_entries == 3  # 1 from Step 1 + 2 from cascade
 
-    assert "DELETE_workspace_entries_cascade" in calls   # cascade fired
-    assert "DELETE_workspace" in calls                   # workspace row deleted
-    assert "UPDATE_workspace_archive" not in calls       # no preservation path
+    assert "DELETE_workspace_entries_cascade" in calls  # cascade fired
+    assert "DELETE_workspace" in calls  # workspace row deleted
+    assert "UPDATE_workspace_archive" not in calls  # no preservation path
 
 
 # ---------------------------------------------------------------------------
@@ -1434,7 +1432,6 @@ async def test_purge_rtbf_idempotent_second_run_returns_zero_counts() -> None:
         owned_workspace_ids=[],
     )
 
-    from registry.service.workspace import PurgeResult  # noqa: PLC0415
 
     result = await svc.purge_actor_personal_data(ctx, target_actor_id=target)
 
@@ -1475,7 +1472,9 @@ def _make_capturing_list_session(
     return session
 
 
-def _list_service_with_roles(roles: list[str], rows: list[MagicMock] | None = None, sql_log: list[str] | None = None) -> WorkspaceService:
+def _list_service_with_roles(
+    roles: list[str], rows: list[MagicMock] | None = None, sql_log: list[str] | None = None
+) -> WorkspaceService:
     """Build a WorkspaceService whose mock session captures SQL and returns rows."""
     session = _make_capturing_list_session(rows=rows or [], sql_log=sql_log)
     begin_cm = MagicMock()
@@ -1698,7 +1697,9 @@ def _make_search_session(
     return session
 
 
-def _search_service_with_roles(roles: list[str], entry_rows: list[MagicMock] | None = None, sql_log: list[str] | None = None) -> WorkspaceService:
+def _search_service_with_roles(
+    roles: list[str], entry_rows: list[MagicMock] | None = None, sql_log: list[str] | None = None
+) -> WorkspaceService:
     """Build a WorkspaceService whose mock session routes search_workspaces SQL."""
     session = _make_search_session(entry_rows=entry_rows or [], sql_log=sql_log)
     cm = MagicMock()
@@ -1725,9 +1726,9 @@ async def test_search_workspaces_consumer_sees_tenant_ws_entries() -> None:
     result = await svc.search_workspaces(ctx)
 
     assert len(result.items) == 1
-    assert any("actor_roles" in sql or "visible_workspaces" in sql for sql in sql_log), (
-        "search_workspaces must include a visibility CTE with actor_roles"
-    )
+    assert any(
+        "actor_roles" in sql or "visible_workspaces" in sql for sql in sql_log
+    ), "search_workspaces must include a visibility CTE with actor_roles"
 
 
 @pytest.mark.asyncio

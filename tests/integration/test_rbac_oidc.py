@@ -558,9 +558,7 @@ async def test_oidc_jwt_resolves_to_tenant_context(
             mock_router.get(url__regex=r"https://idp\.test/\.well-known/openid-configuration").mock(
                 return_value=MockResponse(200, json=discovery_doc)
             )
-            mock_router.get(url__regex=r"https://idp\.test/jwks").mock(
-                return_value=MockResponse(200, json=public_jwks)
-            )
+            mock_router.get(url__regex=r"https://idp\.test/jwks").mock(return_value=MockResponse(200, json=public_jwks))
 
             app = create_app(oidc_settings)
             transport = httpx.ASGITransport(app=app)

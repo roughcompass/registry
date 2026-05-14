@@ -102,10 +102,7 @@ async def upsert_rsam_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
 
     # Re-sight — the DO NOTHING path; return the existing tenant's UUID.
     existing = await session.execute(
-        text(
-            "SELECT tenant_id FROM tenants "
-            "WHERE external_tenant_id = :seal_id AND provider = 'jit'"
-        ),
+        text("SELECT tenant_id FROM tenants " "WHERE external_tenant_id = :seal_id AND provider = 'jit'"),
         {"seal_id": seal_id},
     )
     existing_row = existing.fetchone()

@@ -48,9 +48,7 @@ _DEFAULT_SCOPE: tuple[str, ...] = ("registry/registry",)
 # Subtrees that are never flagged even when inside the default scope.
 # Migrations are excluded because they legitimately seed tenant rows during
 # schema bootstrapping — the migration runner controls when they execute.
-_EXCLUDE_SUBTREES: tuple[str, ...] = (
-    "registry/registry/storage/migrations",
-)
+_EXCLUDE_SUBTREES: tuple[str, ...] = ("registry/registry/storage/migrations",)
 
 _EXCLUDE_DIRS: frozenset[str] = frozenset(
     {
@@ -120,11 +118,7 @@ def _check_file(path: Path) -> list[tuple[int, str]]:
         lines = path.read_text(encoding="utf-8").splitlines()
     except UnicodeDecodeError:
         return []
-    return [
-        (i + 1, line)
-        for i, line in enumerate(lines)
-        if _INSERT_TENANTS.search(line)
-    ]
+    return [(i + 1, line) for i, line in enumerate(lines) if _INSERT_TENANTS.search(line)]
 
 
 # ---------------------------------------------------------------------------

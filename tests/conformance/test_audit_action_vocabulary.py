@@ -35,18 +35,14 @@ from registry.audit import actions
 # Collected for diagnostic display only — the pass/fail rule does NOT consult
 # this set.  Any ast.Constant in an action= kwarg is a failure, regardless of
 # whether its string value is a known action name.
-VALID_ACTIONS: frozenset[str] = frozenset(
-    getattr(actions, name) for name in actions.__all__
-)
+VALID_ACTIONS: frozenset[str] = frozenset(getattr(actions, name) for name in actions.__all__)
 
 # The source tree to walk.  Resolve from this file's location:
 # tests/conformance/ → tests/ → registry/ (the Python package root's parent)
 # registry/registry/ is the actual source package.
 REGISTRY_ROOT = Path(__file__).parent.parent.parent / "registry"
 
-EXCLUDED_FILES: frozenset[Path] = frozenset(
-    {REGISTRY_ROOT / "api" / "middleware" / "http_methods.py"}
-)
+EXCLUDED_FILES: frozenset[Path] = frozenset({REGISTRY_ROOT / "api" / "middleware" / "http_methods.py"})
 
 
 # ---------------------------------------------------------------------------
@@ -124,8 +120,7 @@ def test_no_bare_action_literals_in_audit_emit_calls() -> None:
     the excluded middleware file and any call nodes that target add_mutation_route.
     """
     assert REGISTRY_ROOT.is_dir(), (
-        f"REGISTRY_ROOT does not exist: {REGISTRY_ROOT}. "
-        "Adjust the path computation in this file."
+        f"REGISTRY_ROOT does not exist: {REGISTRY_ROOT}. " "Adjust the path computation in this file."
     )
 
     all_failures: list[str] = []
@@ -156,7 +151,7 @@ def test_negative_fixture_catches_literal_in_synthetic_source() -> None:
     synthetic_source = (
         "import uuid\n"
         "async def f():\n"
-        '    await audit.emit(\n'
+        "    await audit.emit(\n"
         '        ctx, action="annotation.created", target_type="t", target_id=uuid.uuid4()\n'
         "    )\n"
     )
@@ -171,9 +166,7 @@ def test_negative_fixture_catches_literal_in_synthetic_source() -> None:
             continue
         for kw in node.keywords:
             if kw.arg == "action" and isinstance(kw.value, ast.Constant):
-                found_violations.append(
-                    f"synthetic literal detected: {kw.value.value!r} at line {kw.value.lineno}"
-                )
+                found_violations.append(f"synthetic literal detected: {kw.value.value!r} at line {kw.value.lineno}")
 
     assert found_violations, (
         "Detection logic failed to catch action='annotation.created' literal in "

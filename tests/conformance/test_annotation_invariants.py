@@ -161,10 +161,7 @@ async def _fetch_annotation_status(
     try:
         async with factory() as session:
             result = await session.execute(
-                text(
-                    "SELECT status FROM capability_annotations "
-                    "WHERE annotation_id = :aid"
-                ),
+                text("SELECT status FROM capability_annotations " "WHERE annotation_id = :aid"),
                 {"aid": annotation_id},
             )
             row = result.fetchone()
@@ -241,12 +238,8 @@ async def test_pii_chokepoint_blocks_create(
     must exist for the capability — the partial-index count must not grow.
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, _actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"pii-create-{suffix}"
-    )
-    cap_id = await _seed_capability(
-        pg_container, tenant_id=tenant_id, name=f"cap-pii-create-{suffix}"
-    )
+    tenant_id, _actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"pii-create-{suffix}")
+    cap_id = await _seed_capability(pg_container, tenant_id=tenant_id, name=f"cap-pii-create-{suffix}")
 
     before_count = await _count_annotations(pg_container, capability_id=cap_id)
 
@@ -269,14 +262,11 @@ async def test_pii_chokepoint_blocks_create(
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert resp.status_code >= 500, (
-        f"Expected 5xx when PII scanner raises; got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code >= 500, f"Expected 5xx when PII scanner raises; got {resp.status_code}: {resp.text}"
 
     after_count = await _count_annotations(pg_container, capability_id=cap_id)
     assert after_count == before_count, (
-        f"No annotation rows must be written when PII scanner raises; "
-        f"before={before_count} after={after_count}"
+        f"No annotation rows must be written when PII scanner raises; " f"before={before_count} after={after_count}"
     )
 
 
@@ -292,12 +282,8 @@ async def test_pii_chokepoint_blocks_triage_note(
     5xx and the annotation's status must be unchanged in the DB.
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, _actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"pii-triage-{suffix}"
-    )
-    cap_id = await _seed_capability(
-        pg_container, tenant_id=tenant_id, name=f"cap-pii-triage-{suffix}"
-    )
+    tenant_id, _actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"pii-triage-{suffix}")
+    cap_id = await _seed_capability(pg_container, tenant_id=tenant_id, name=f"cap-pii-triage-{suffix}")
 
     # Step 1 — create annotation with healthy scanner.
     healthy_app = create_app(app_settings)
@@ -308,9 +294,9 @@ async def test_pii_chokepoint_blocks_triage_note(
             json={"body": "Initial annotation body.", "category": "bug"},
             headers={"Authorization": f"Bearer {token}"},
         )
-    assert create_resp.status_code == 201, (
-        f"Annotation creation should succeed; got {create_resp.status_code}: {create_resp.text}"
-    )
+    assert (
+        create_resp.status_code == 201
+    ), f"Annotation creation should succeed; got {create_resp.status_code}: {create_resp.text}"
     annotation_id = uuid.UUID(create_resp.json()["annotation_id"])
 
     status_before = await _fetch_annotation_status(pg_container, annotation_id=annotation_id)
@@ -336,8 +322,7 @@ async def test_pii_chokepoint_blocks_triage_note(
         )
 
     assert patch_resp.status_code >= 500, (
-        f"Expected 5xx when PII scanner raises on triage_note; "
-        f"got {patch_resp.status_code}: {patch_resp.text}"
+        f"Expected 5xx when PII scanner raises on triage_note; " f"got {patch_resp.status_code}: {patch_resp.text}"
     )
 
     status_after = await _fetch_annotation_status(pg_container, annotation_id=annotation_id)
@@ -379,9 +364,7 @@ async def test_status_state_machine_all_reachable(
     _tenant_b_id, _actor_b, token_b = await _seed_tenant_with_token(
         pg_container, slug=f"sm-b-{suffix}", roles=["consumer", "producer", "admin"]
     )
-    cap_id = await _seed_capability(
-        pg_container, tenant_id=tenant_a_id, name=f"cap-sm-{suffix}"
-    )
+    cap_id = await _seed_capability(pg_container, tenant_id=tenant_a_id, name=f"cap-sm-{suffix}")
 
     app = create_app(app_settings)
     transport = ASGITransport(app=app)
@@ -393,9 +376,9 @@ async def test_status_state_machine_all_reachable(
             json={"body": "State machine test annotation.", "category": "suggestion"},
             headers={"Authorization": f"Bearer {token_b}"},
         )
-        assert create_resp.status_code == 201, (
-            f"Annotation creation must succeed; got {create_resp.status_code}: {create_resp.text}"
-        )
+        assert (
+            create_resp.status_code == 201
+        ), f"Annotation creation must succeed; got {create_resp.status_code}: {create_resp.text}"
         annotation_id = uuid.UUID(create_resp.json()["annotation_id"])
 
         # Forward walk: open → triaged → acknowledged → closed.
@@ -406,16 +389,13 @@ async def test_status_state_machine_all_reachable(
                 headers={"Authorization": f"Bearer {token_a}"},
             )
             assert resp.status_code == 200, (
-                f"PATCH to status={target_status!r} must return 200; "
-                f"got {resp.status_code}: {resp.text}"
+                f"PATCH to status={target_status!r} must return 200; " f"got {resp.status_code}: {resp.text}"
             )
             assert resp.json()["status"] == target_status
 
         # Verify DB row after forward walk.
         db_status = await _fetch_annotation_status(pg_container, annotation_id=annotation_id)
-        assert db_status == "closed", (
-            f"DB must show status='closed' after forward walk; got {db_status!r}"
-        )
+        assert db_status == "closed", f"DB must show status='closed' after forward walk; got {db_status!r}"
 
         # Reverse transition: closed → triaged.
         reverse_resp = await client.patch(
@@ -431,9 +411,9 @@ async def test_status_state_machine_all_reachable(
 
     # Verify DB row after reverse transition.
     db_status_final = await _fetch_annotation_status(pg_container, annotation_id=annotation_id)
-    assert db_status_final == "triaged", (
-        f"DB must show status='triaged' after reverse transition; got {db_status_final!r}"
-    )
+    assert (
+        db_status_final == "triaged"
+    ), f"DB must show status='triaged' after reverse transition; got {db_status_final!r}"
 
     # Audit log must have 4 annotation.triaged rows (3 forward + 1 reverse).
     # The initial open→triaged step is the first triage event.
@@ -444,8 +424,7 @@ async def test_status_state_machine_all_reachable(
         action="annotation.triaged",
     )
     assert len(triage_rows) == 4, (
-        f"Expected 4 annotation.triaged audit rows (3 forward + 1 reverse); "
-        f"got {len(triage_rows)}"
+        f"Expected 4 annotation.triaged audit rows (3 forward + 1 reverse); " f"got {len(triage_rows)}"
     )
 
 
@@ -470,12 +449,8 @@ async def test_assert_visible_invoked_per_create(
     from registry.service.visibility import VisibilityService  # noqa: PLC0415
 
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, _actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"vis-count-{suffix}"
-    )
-    cap_id = await _seed_capability(
-        pg_container, tenant_id=tenant_id, name=f"cap-vis-count-{suffix}"
-    )
+    tenant_id, _actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"vis-count-{suffix}")
+    cap_id = await _seed_capability(pg_container, tenant_id=tenant_id, name=f"cap-vis-count-{suffix}")
 
     app = create_app(app_settings)
 
@@ -501,12 +476,9 @@ async def test_assert_visible_invoked_per_create(
             json={"body": "Visibility check annotation one.", "category": "feedback"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp1.status_code == 201, (
-            f"First annotation must succeed; got {resp1.status_code}: {resp1.text}"
-        )
+        assert resp1.status_code == 201, f"First annotation must succeed; got {resp1.status_code}: {resp1.text}"
         assert call_count == 1, (
-            f"assert_visible must be called exactly once after first create; "
-            f"got call_count={call_count}"
+            f"assert_visible must be called exactly once after first create; " f"got call_count={call_count}"
         )
 
         # Second annotation — counter must reach 2.
@@ -515,9 +487,7 @@ async def test_assert_visible_invoked_per_create(
             json={"body": "Visibility check annotation two.", "category": "question"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp2.status_code == 201, (
-            f"Second annotation must succeed; got {resp2.status_code}: {resp2.text}"
-        )
+        assert resp2.status_code == 201, f"Second annotation must succeed; got {resp2.status_code}: {resp2.text}"
         assert call_count == 2, (
             f"assert_visible must be called exactly once per create; "
             f"got call_count={call_count} after second create"

@@ -682,11 +682,8 @@ async def test_run_sync_job_opens_sync_run_row_within_explicit_transaction() -> 
     begin_idx = call_order.index("session.begin().__aenter__")
     assert "session.add" in call_order, call_order
     add_idx = call_order.index("session.add")
-    assert begin_idx < add_idx, (
-        f"session.begin must run before session.add; got {call_order}"
-    )
+    assert begin_idx < add_idx, f"session.begin must run before session.add; got {call_order}"
 
     assert "session.commit" not in call_order, (
-        f"bare session.commit() must not be called when session.begin() owns "
-        f"the transaction; got {call_order}"
+        f"bare session.commit() must not be called when session.begin() owns " f"the transaction; got {call_order}"
     )

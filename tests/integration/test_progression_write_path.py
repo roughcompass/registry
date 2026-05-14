@@ -128,8 +128,7 @@ async def _seed_entity(
                     "(entity_id, tenant_id, entity_type, name, is_active, created_at) "
                     "VALUES (:eid, :tid, :etype, :name, TRUE, :now)"
                 ),
-                {"eid": entity_id, "tid": tenant_id, "etype": entity_type,
-                 "name": name, "now": _NOW},
+                {"eid": entity_id, "tid": tenant_id, "etype": entity_type, "name": name, "now": _NOW},
             )
             if stage_progression is not None:
                 attr_id = uuid.uuid4()
@@ -141,8 +140,7 @@ async def _seed_entity(
                         "VALUES (:aid, :tid, :eid, 'stage_progression', "
                         "        CAST(:val AS jsonb), :now, NULL, :now, NULL)"
                     ),
-                    {"aid": attr_id, "tid": tenant_id, "eid": entity_id,
-                     "val": f'"{stage_progression}"', "now": _NOW},
+                    {"aid": attr_id, "tid": tenant_id, "eid": entity_id, "val": f'"{stage_progression}"', "now": _NOW},
                 )
     finally:
         await engine.dispose()
@@ -172,8 +170,7 @@ async def _seed_attribute(
                     "VALUES (gen_random_uuid(), :tid, :eid, :key, "
                     "        CAST(:val AS jsonb), :now, NULL, :now, NULL)"
                 ),
-                {"tid": tenant_id, "eid": entity_id,
-                 "key": key, "val": _json.dumps(value), "now": _NOW},
+                {"tid": tenant_id, "eid": entity_id, "key": key, "val": _json.dumps(value), "now": _NOW},
             )
     finally:
         await engine.dispose()
@@ -288,14 +285,20 @@ async def test_accepted_transition_writes_attribute_and_emits_audit(pg_container
 
         # Seed entity in state "1".
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
-            name=f"ent-accept-{secrets.token_hex(4)}", stage_progression="1",
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
+            name=f"ent-accept-{secrets.token_hex(4)}",
+            stage_progression="1",
         )
 
         # Satisfy the gate attribute so the transition is accepted.
         await _seed_attribute(
-            pg_container, tenant_id=tenant_id, entity_id=entity_id,
-            key="review_approved", value=True,
+            pg_container,
+            tenant_id=tenant_id,
+            entity_id=entity_id,
+            key="review_approved",
+            value=True,
         )
 
         # PATCH: move to state "2".
@@ -311,8 +314,10 @@ async def test_accepted_transition_writes_attribute_and_emits_audit(pg_container
 
     # Assert audit event accepted was emitted.
     audit = await _fetch_audit_row(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.accepted", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.accepted",
+        entity_id=entity_id,
     )
     assert audit is not None, "progression.transition.accepted audit row must exist"
     payload = audit["after_jsonb"]
@@ -353,23 +358,26 @@ async def test_rejected_transition_returns_422_and_does_not_write(pg_container: 
 
         # Seed entity in state "1" — gate NOT satisfied.
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
-            name=f"ent-reject-{secrets.token_hex(4)}", stage_progression="1",
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
+            name=f"ent-reject-{secrets.token_hex(4)}",
+            stage_progression="1",
         )
 
         patch_resp = await client.patch(
             f"/v1/capabilities/{entity_id}",
             json={"updates": {"stage_progression": "2"}},
         )
-        assert patch_resp.status_code == 422, (
-            f"expected 422 for rejected enforcing transition, got {patch_resp.status_code}: {patch_resp.text}"
-        )
+        assert (
+            patch_resp.status_code == 422
+        ), f"expected 422 for rejected enforcing transition, got {patch_resp.status_code}: {patch_resp.text}"
         body = patch_resp.json()
         # Response carries progression_rejected code inside the errors envelope.
         errors = body.get("errors", [])
-        assert any("progression_rejected" in str(e) for e in errors), (
-            f"expected progression_rejected code in errors: {body}"
-        )
+        assert any(
+            "progression_rejected" in str(e) for e in errors
+        ), f"expected progression_rejected code in errors: {body}"
 
     # The stage_progression attribute must not have changed.
     current_state = await _get_stage_progression(pg_container, tenant_id=tenant_id, entity_id=entity_id)
@@ -377,8 +385,10 @@ async def test_rejected_transition_returns_422_and_does_not_write(pg_container: 
 
     # Rejected audit event must exist.
     audit = await _fetch_audit_row(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.rejected", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.rejected",
+        entity_id=entity_id,
     )
     assert audit is not None, "progression.transition.rejected audit row must exist"
     payload = audit["after_jsonb"]
@@ -418,17 +428,20 @@ async def test_warned_transition_succeeds_and_emits_warned_audit(pg_container: s
 
         # Seed entity in state "1" — gate NOT satisfied.
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
-            name=f"ent-warn-{secrets.token_hex(4)}", stage_progression="1",
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
+            name=f"ent-warn-{secrets.token_hex(4)}",
+            stage_progression="1",
         )
 
         patch_resp = await client.patch(
             f"/v1/capabilities/{entity_id}",
             json={"updates": {"stage_progression": "2"}},
         )
-        assert patch_resp.status_code == 200, (
-            f"advisory mode must allow the write; got {patch_resp.status_code}: {patch_resp.text}"
-        )
+        assert (
+            patch_resp.status_code == 200
+        ), f"advisory mode must allow the write; got {patch_resp.status_code}: {patch_resp.text}"
 
     # Stage changed in DB.
     current_state = await _get_stage_progression(pg_container, tenant_id=tenant_id, entity_id=entity_id)
@@ -436,8 +449,10 @@ async def test_warned_transition_succeeds_and_emits_warned_audit(pg_container: s
 
     # Warned audit event exists.
     audit = await _fetch_audit_row(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.warned", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.warned",
+        entity_id=entity_id,
     )
     assert audit is not None, "progression.transition.warned audit row must exist"
     payload = audit["after_jsonb"]
@@ -477,8 +492,11 @@ async def test_overridden_transition_consumes_override_and_emits_audit(pg_contai
 
         # Seed entity in state "1".
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
-            name=f"ent-over-{secrets.token_hex(4)}", stage_progression="1",
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
+            name=f"ent-over-{secrets.token_hex(4)}",
+            stage_progression="1",
         )
 
         # Create a matching override for this entity (from_state=1, to_state=2, gate_id=review_approved).
@@ -501,9 +519,9 @@ async def test_overridden_transition_consumes_override_and_emits_audit(pg_contai
             f"/v1/capabilities/{entity_id}",
             json={"updates": {"stage_progression": "2"}},
         )
-        assert patch_resp.status_code == 200, (
-            f"override must allow the write; got {patch_resp.status_code}: {patch_resp.text}"
-        )
+        assert (
+            patch_resp.status_code == 200
+        ), f"override must allow the write; got {patch_resp.status_code}: {patch_resp.text}"
 
     # Stage changed in DB.
     current_state = await _get_stage_progression(pg_container, tenant_id=tenant_id, entity_id=entity_id)
@@ -515,10 +533,7 @@ async def test_overridden_transition_consumes_override_and_emits_audit(pg_contai
     try:
         async with factory() as session:
             result = await session.execute(
-                text(
-                    "SELECT consumed_at FROM progression_overrides "
-                    "WHERE override_id = :oid"
-                ),
+                text("SELECT consumed_at FROM progression_overrides " "WHERE override_id = :oid"),
                 {"oid": uuid.UUID(override_id)},
             )
             row = result.fetchone()
@@ -529,8 +544,10 @@ async def test_overridden_transition_consumes_override_and_emits_audit(pg_contai
 
     # Overridden audit event exists.
     audit = await _fetch_audit_row(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.overridden", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.overridden",
+        entity_id=entity_id,
     )
     assert audit is not None, "progression.transition.overridden audit row must exist"
     payload = audit["after_jsonb"]
@@ -576,8 +593,11 @@ async def test_tenant_isolation_definition_does_not_affect_other_tenant(pg_conta
 
         # Seed entity in state "1" under tenant B — no definition for B.
         entity_b_id = await _seed_entity(
-            pg_container, tenant_id=tenant_b_id, entity_type=entity_type,
-            name=f"ent-iso-b-{secrets.token_hex(4)}", stage_progression="1",
+            pg_container,
+            tenant_id=tenant_b_id,
+            entity_type=entity_type,
+            name=f"ent-iso-b-{secrets.token_hex(4)}",
+            stage_progression="1",
         )
 
         # Tenant B's write must pass through (no definition → no gate).
@@ -592,9 +612,5 @@ async def test_tenant_isolation_definition_does_not_affect_other_tenant(pg_conta
         )
 
     # Tenant B's entity must be in state "2".
-    current_state = await _get_stage_progression(
-        pg_container, tenant_id=tenant_b_id, entity_id=entity_b_id
-    )
-    assert current_state == "2", (
-        f"tenant B entity must reach '2' unblocked; got {current_state!r}"
-    )
+    current_state = await _get_stage_progression(pg_container, tenant_id=tenant_b_id, entity_id=entity_b_id)
+    assert current_state == "2", f"tenant B entity must reach '2' unblocked; got {current_state!r}"

@@ -39,6 +39,7 @@ from registry.config import Settings
 # ---------------------------------------------------------------------------
 # Helpers
 
+
 def _settings(
     ttl: int = 300,
     stale_ceiling: int = 86400,
@@ -130,6 +131,7 @@ _STALE_DISABLED_MONO = [500.0, 500.0, 500.0]
 # ---------------------------------------------------------------------------
 # Scenario 1: TTL hit — second call returns cached result without a second fetch
 
+
 @pytest.mark.asyncio
 async def test_ttl_hit_single_fetch() -> None:
     """Two resolve() calls within the TTL window issue exactly one fetch_authorities call."""
@@ -154,6 +156,7 @@ async def test_ttl_hit_single_fetch() -> None:
 # ---------------------------------------------------------------------------
 # Scenario 2: TTL expiry — second call after TTL triggers a re-fetch
 
+
 @pytest.mark.asyncio
 async def test_ttl_expiry_triggers_refetch() -> None:
     """After the TTL window expires, resolve() issues a second fetch_authorities call."""
@@ -175,6 +178,7 @@ async def test_ttl_expiry_triggers_refetch() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 3: Single-flight — concurrent misses issue exactly one fetch
+
 
 @pytest.mark.asyncio
 async def test_single_flight_concurrent_misses() -> None:
@@ -207,6 +211,7 @@ async def test_single_flight_concurrent_misses() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 4: Stale-serve fires when enabled and within ceiling
+
 
 @pytest.mark.asyncio
 async def test_stale_serve_fires_when_enabled() -> None:
@@ -267,6 +272,7 @@ async def test_stale_serve_fires_when_enabled() -> None:
 # ---------------------------------------------------------------------------
 # Scenario 5: Stale-serve disabled — exception propagates, no audit event
 
+
 @pytest.mark.asyncio
 async def test_stale_serve_disabled_propagates_exception() -> None:
     """When auth_serve_stale_on_failure=False, a fetch failure propagates after TTL."""
@@ -313,6 +319,7 @@ async def test_stale_serve_disabled_propagates_exception() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 6: Stale ceiling enforced — no stale-serve beyond ceiling
+
 
 @pytest.mark.asyncio
 async def test_stale_ceiling_enforced() -> None:

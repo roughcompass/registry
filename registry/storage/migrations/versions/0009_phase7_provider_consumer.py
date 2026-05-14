@@ -452,8 +452,7 @@ def downgrade() -> None:
 
     # --- Remove vocabulary seeds ---
     _vocab_delete_sql = sa.text(
-        "DELETE FROM vocabulary_values "
-        "WHERE tenant_id = :tid AND kind = :kind AND value = :value"
+        "DELETE FROM vocabulary_values " "WHERE tenant_id = :tid AND kind = :kind AND value = :value"
     )
     for kind, value in _VOCAB_SEEDS:
         bind.execute(

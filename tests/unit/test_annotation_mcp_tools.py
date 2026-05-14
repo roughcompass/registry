@@ -256,9 +256,7 @@ async def test_submit_annotation_pii_block_message_format() -> None:
             )
 
     msg = str(exc_info.value)
-    assert "Annotation rejected: PII detected in body" in msg, (
-        f"Expected PII message, got: {msg!r}"
-    )
+    assert "Annotation rejected: PII detected in body" in msg, f"Expected PII message, got: {msg!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -412,9 +410,7 @@ async def test_list_my_annotations_passes_cursor_and_propagates_next_cursor() ->
     ).decode()
 
     ann_svc = MagicMock()
-    ann_svc.list_annotations = AsyncMock(
-        return_value=([_make_annotation_ref()], next_cursor)
-    )
+    ann_svc.list_annotations = AsyncMock(return_value=([_make_annotation_ref()], next_cursor))
     mcp = _build_mcp(annotation_service=ann_svc)
     ctx = _make_ctx()
 
@@ -673,9 +669,7 @@ async def test_submit_annotation_warns_field_in_response() -> None:
     """submit_annotation response includes warnings when the service returns them."""
     warnings = [{"field": "body", "categories": ["email"]}]
     ann_svc = MagicMock()
-    ann_svc.create_annotation = AsyncMock(
-        return_value=_make_annotation_ref(warnings=warnings)
-    )
+    ann_svc.create_annotation = AsyncMock(return_value=_make_annotation_ref(warnings=warnings))
     mcp = _build_mcp(annotation_service=ann_svc)
     ctx = _make_ctx()
 

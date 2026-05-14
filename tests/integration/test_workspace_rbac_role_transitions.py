@@ -140,9 +140,7 @@ async def _set_actor_roles(
         async with factory() as session, session.begin():
             # Clear existing actor_roles for this actor in this tenant.
             await session.execute(
-                text(
-                    "DELETE FROM actor_roles WHERE tenant_id = :tid AND actor_id = :aid"
-                ),
+                text("DELETE FROM actor_roles WHERE tenant_id = :tid AND actor_id = :aid"),
                 {"tid": tenant_id, "aid": actor_id},
             )
             for role_name in roles:
@@ -225,7 +223,10 @@ async def test_second_producer_cannot_see_first_actors_workspace(
     try:
         async with factory() as session, session.begin():
             await session.execute(
-                text("INSERT INTO actors (actor_id, tenant_id, display_name, created_at) VALUES (:aid, :tid, 'actor2', :now)"),
+                text(
+                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
+                    "VALUES (:aid, :tid, 'actor2', :now)"
+                ),
                 {"aid": actor2_id, "tid": tenant_id, "now": _NOW},
             )
     finally:
@@ -249,9 +250,9 @@ async def test_second_producer_cannot_see_first_actors_workspace(
             f"/v1/workspaces/{workspace_id}",
             headers={"Authorization": f"Bearer {token2}"},
         )
-        assert get_resp.status_code == 404, (
-            f"Non-owner producer must receive 404; got {get_resp.status_code}: {get_resp.text}"
-        )
+        assert (
+            get_resp.status_code == 404
+        ), f"Non-owner producer must receive 404; got {get_resp.status_code}: {get_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -291,9 +292,9 @@ async def test_consumer_owner_can_still_perceive_own_workspace(
             f"/v1/workspaces/{workspace_id}",
             headers={"Authorization": f"Bearer {consumer_token}"},
         )
-        assert get_resp.status_code == 200, (
-            f"Consumer owner must perceive own workspace (carve-out); got {get_resp.status_code}: {get_resp.text}"
-        )
+        assert (
+            get_resp.status_code == 200
+        ), f"Consumer owner must perceive own workspace (carve-out); got {get_resp.status_code}: {get_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -331,9 +332,9 @@ async def test_consumer_owner_denied_on_entry_write(
             json={"kind": "note", "body_md": "Consumer write attempt."},
             headers={"Authorization": f"Bearer {consumer_token}"},
         )
-        assert write_resp.status_code == 403, (
-            f"Consumer must receive 403 on write attempt; got {write_resp.status_code}: {write_resp.text}"
-        )
+        assert (
+            write_resp.status_code == 403
+        ), f"Consumer must receive 403 on write attempt; got {write_resp.status_code}: {write_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -371,9 +372,9 @@ async def test_pure_admin_cannot_perceive_own_formerly_created_actor_workspace(
             f"/v1/workspaces/{workspace_id}",
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-        assert get_resp.status_code == 404, (
-            f"Pure admin must receive 404 on actor workspace; got {get_resp.status_code}: {get_resp.text}"
-        )
+        assert (
+            get_resp.status_code == 404
+        ), f"Pure admin must receive 404 on actor workspace; got {get_resp.status_code}: {get_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +417,10 @@ async def test_no_role_actor_cannot_perceive_any_workspace(
         # No-role actors are rejected at the router gate (no role in _any_roles) → 403.
         # At the service level (if reached), they'd get 404. Either is acceptable since
         # the invariant is "cannot access". We accept 403 or 404.
-        assert get_resp.status_code in (403, 404), (
-            f"No-role actor must not access workspace; got {get_resp.status_code}: {get_resp.text}"
-        )
+        assert get_resp.status_code in (
+            403,
+            404,
+        ), f"No-role actor must not access workspace; got {get_resp.status_code}: {get_resp.text}"
 
 
 # ---------------------------------------------------------------------------
@@ -558,9 +560,9 @@ async def test_producer_cannot_create_tenant_workspace(
             json={"name": "Denied WS", "owner_kind": "tenant"},
             headers={"Authorization": f"Bearer {producer_token}"},
         )
-        assert resp.status_code == 403, (
-            f"Producer must receive 403 creating tenant workspace; got {resp.status_code}: {resp.text}"
-        )
+        assert (
+            resp.status_code == 403
+        ), f"Producer must receive 403 creating tenant workspace; got {resp.status_code}: {resp.text}"
 
 
 @pytest.mark.asyncio
@@ -580,7 +582,10 @@ async def test_auditor_can_read_tenant_workspace(
     try:
         async with factory() as session, session.begin():
             await session.execute(
-                text("INSERT INTO actors (actor_id, tenant_id, display_name, created_at) VALUES (:aid, :tid, 'auditor', :now)"),
+                text(
+                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
+                    "VALUES (:aid, :tid, 'auditor', :now)"
+                ),
                 {"aid": auditor_id, "tid": tenant_id, "now": _NOW},
             )
     finally:
@@ -602,9 +607,9 @@ async def test_auditor_can_read_tenant_workspace(
             f"/v1/workspaces/{workspace_id}",
             headers={"Authorization": f"Bearer {auditor_token}"},
         )
-        assert get_resp.status_code == 200, (
-            f"Auditor must perceive own-tenant workspace; got {get_resp.status_code}: {get_resp.text}"
-        )
+        assert (
+            get_resp.status_code == 200
+        ), f"Auditor must perceive own-tenant workspace; got {get_resp.status_code}: {get_resp.text}"
 
 
 @pytest.mark.asyncio
@@ -623,7 +628,10 @@ async def test_auditor_denied_write_on_tenant_workspace(
     try:
         async with factory() as session, session.begin():
             await session.execute(
-                text("INSERT INTO actors (actor_id, tenant_id, display_name, created_at) VALUES (:aid, :tid, 'auditor2', :now)"),
+                text(
+                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
+                    "VALUES (:aid, :tid, 'auditor2', :now)"
+                ),
                 {"aid": auditor_id, "tid": tenant_id, "now": _NOW},
             )
     finally:
@@ -654,6 +662,6 @@ async def test_auditor_denied_write_on_tenant_workspace(
             json={"kind": "note", "body_md": "Auditor write attempt."},
             headers={"Authorization": f"Bearer {auditor_token}"},
         )
-        assert write_resp.status_code == 403, (
-            f"Auditor must receive 403 on entry write; got {write_resp.status_code}: {write_resp.text}"
-        )
+        assert (
+            write_resp.status_code == 403
+        ), f"Auditor must receive 403 on entry write; got {write_resp.status_code}: {write_resp.text}"

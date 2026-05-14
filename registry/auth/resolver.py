@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Data types shared across all resolver implementations
 
+
 @dataclass(frozen=True)
 class AuditIdentity:
     """Caller identity recorded in every audit log entry.
@@ -86,6 +87,7 @@ class ResolvedIdentity:
 # ---------------------------------------------------------------------------
 # Abstract base class
 
+
 class ClaimResolverBase(ABC):
     """Abstract base for all claim-source resolver implementations.
 
@@ -132,6 +134,7 @@ class ClaimResolverBase(ABC):
 # return `True` from `is_in_scope` for the same claims — the first match wins.
 # Currently only one resolver is active at a time (mode is service-wide), so
 # order is informational rather than a tie-breaker.
+
 
 def build_resolver(
     settings: Settings,

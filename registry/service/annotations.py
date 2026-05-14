@@ -205,10 +205,7 @@ class AnnotationService:
         if category not in VALID_CATEGORIES:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Invalid category {category!r}. "
-                    f"Must be one of: {sorted(VALID_CATEGORIES)}."
-                ),
+                detail=(f"Invalid category {category!r}. " f"Must be one of: {sorted(VALID_CATEGORIES)}."),
             )
 
         # Step 3 — validate body is non-empty.
@@ -367,10 +364,7 @@ class AnnotationService:
         if new_status not in VALID_STATUSES:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Invalid status {new_status!r}. "
-                    f"Must be one of: {sorted(VALID_STATUSES)}."
-                ),
+                detail=(f"Invalid status {new_status!r}. " f"Must be one of: {sorted(VALID_STATUSES)}."),
             )
 
         # Step 4 — self-transition short-circuit: no DB write, no audit entry.
@@ -469,9 +463,7 @@ class AnnotationService:
             triage_note=triage_note if triage_note is not None else annotation.triage_note,
             category=annotation.category,
             status=new_status,
-            version_target=(
-                version_target if version_target is not None else annotation.version_target
-            ),
+            version_target=(version_target if version_target is not None else annotation.version_target),
             created_at=annotation.created_at,
             updated_at=now,
             warnings=triage_warnings,
@@ -629,10 +621,7 @@ class AnnotationService:
         if status is not None and status not in VALID_STATUSES:
             raise HTTPException(
                 status_code=422,
-                detail=(
-                    f"Invalid status {status!r}. "
-                    f"Must be one of: {sorted(VALID_STATUSES)}."
-                ),
+                detail=(f"Invalid status {status!r}. " f"Must be one of: {sorted(VALID_STATUSES)}."),
             )
 
         # Decode cursor before hitting the DB so a bad cursor fails fast.
@@ -681,9 +670,7 @@ class AnnotationService:
 
             if cursor_t is not None and cursor_id is not None:
                 # Compound keyset predicate — stable total order across ties on t_ingested_at.
-                where_clauses.append(
-                    "(t_ingested_at, annotation_id) > (:cursor_t, :cursor_id)"
-                )
+                where_clauses.append("(t_ingested_at, annotation_id) > (:cursor_t, :cursor_id)")
                 params["cursor_t"] = cursor_t
                 params["cursor_id"] = cursor_id
 

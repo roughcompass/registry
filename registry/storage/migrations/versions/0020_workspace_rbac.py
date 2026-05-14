@@ -44,9 +44,7 @@ _DROP_ACCEPTANCES = "DROP TABLE workspace_share_acceptances"
 _DROP_UQ_SHARE = "DROP INDEX IF EXISTS uq_share"
 
 # Step 3: Drop cross-tenant trigger and its function
-_DROP_TRIGGER_SHARE_CROSS_TENANT = (
-    "DROP TRIGGER IF EXISTS trg_ws_share_cross_tenant ON workspace_shares"
-)
+_DROP_TRIGGER_SHARE_CROSS_TENANT = "DROP TRIGGER IF EXISTS trg_ws_share_cross_tenant ON workspace_shares"
 _DROP_FUNC_SHARE_CROSS_TENANT = "DROP FUNCTION IF EXISTS check_workspace_share_cross_tenant()"
 
 # Step 4: Drop workspace_shares table (idx_share_grantee dropped implicitly)
@@ -55,9 +53,7 @@ _DROP_SHARES = "DROP TABLE workspace_shares"
 # Step 5: Drop owner_kind_change trigger and its function.
 # This trigger references workspace_shares in its body; it fires broken after
 # Step 4 and must be removed before any UPDATE on workspaces can run.
-_DROP_TRIGGER_OWNER_KIND_CHANGE = (
-    "DROP TRIGGER IF EXISTS trg_ws_owner_kind_change ON workspaces"
-)
+_DROP_TRIGGER_OWNER_KIND_CHANGE = "DROP TRIGGER IF EXISTS trg_ws_owner_kind_change ON workspaces"
 _DROP_FUNC_OWNER_KIND_CHANGE = "DROP FUNCTION IF EXISTS check_workspace_owner_kind_change()"
 
 # Step 6: Add owner_kind immutability trigger (no cross-table dependency)
@@ -85,9 +81,7 @@ FOR EACH ROW EXECUTE FUNCTION check_workspace_owner_kind_immutable()
 # ---------------------------------------------------------------------------
 
 # Downgrade Step 1: Drop the new immutability trigger and its function
-_DOWN_DROP_TRIGGER_IMMUTABLE = (
-    "DROP TRIGGER IF EXISTS trg_ws_owner_kind_immutable ON workspaces"
-)
+_DOWN_DROP_TRIGGER_IMMUTABLE = "DROP TRIGGER IF EXISTS trg_ws_owner_kind_immutable ON workspaces"
 _DOWN_DROP_FUNC_IMMUTABLE = "DROP FUNCTION IF EXISTS check_workspace_owner_kind_immutable()"
 
 # Downgrade Step 2: Restore owner_kind_change trigger (verbatim from 0019)
@@ -136,13 +130,11 @@ CREATE TABLE workspace_shares (
 """
 
 _DOWN_CREATE_IDX_UQ_SHARE = (
-    "CREATE UNIQUE INDEX uq_share ON workspace_shares (workspace_id, grantee_actor_id) "
-    "WHERE revoked_at IS NULL"
+    "CREATE UNIQUE INDEX uq_share ON workspace_shares (workspace_id, grantee_actor_id) " "WHERE revoked_at IS NULL"
 )
 
 _DOWN_CREATE_IDX_SHARE_GRANTEE = (
-    "CREATE INDEX idx_share_grantee ON workspace_shares (grantee_actor_id) "
-    "WHERE revoked_at IS NULL"
+    "CREATE INDEX idx_share_grantee ON workspace_shares (grantee_actor_id) " "WHERE revoked_at IS NULL"
 )
 
 _DOWN_CREATE_FUNC_SHARE_CROSS_TENANT = """
@@ -180,8 +172,7 @@ CREATE TABLE workspace_share_acceptances (
 """
 
 _DOWN_CREATE_IDX_UQ_ACCEPTANCE = (
-    "CREATE UNIQUE INDEX uq_acceptance ON workspace_share_acceptances "
-    "(share_id, accepting_actor_id)"
+    "CREATE UNIQUE INDEX uq_acceptance ON workspace_share_acceptances " "(share_id, accepting_actor_id)"
 )
 
 

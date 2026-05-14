@@ -80,9 +80,21 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     # instances and they leak into the include chain. Reload all leaf modules
     # first, then admin last so its re-exports point at the fresh routers.
     _to_reload = [
-        _cap, _con, _ops, _art, _graph,
-        _adm_life, _adm_pii, _adm_sync, _adm_tok, _adm_vocab,
-        _adoptions, _ann, _ext_ids, _subs, _ws,
+        _cap,
+        _con,
+        _ops,
+        _art,
+        _graph,
+        _adm_life,
+        _adm_pii,
+        _adm_sync,
+        _adm_tok,
+        _adm_vocab,
+        _adoptions,
+        _ann,
+        _ext_ids,
+        _subs,
+        _ws,
         _admin,
     ]
 

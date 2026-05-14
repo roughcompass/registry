@@ -116,10 +116,7 @@ async def _fetch_tenant_by_seal(pg_url: str, seal_id: str) -> uuid.UUID | None:
     try:
         async with factory() as session:
             result = await session.execute(
-                text(
-                    "SELECT tenant_id FROM tenants "
-                    "WHERE external_tenant_id = :seal AND provider = 'jit'"
-                ),
+                text("SELECT tenant_id FROM tenants " "WHERE external_tenant_id = :seal AND provider = 'jit'"),
                 {"seal": seal_id},
             )
             row = result.fetchone()
@@ -177,10 +174,7 @@ def _make_rsam_get_tenant_context(
         factory = request.app.state.session_factory
         async with factory() as session:
             result = await session.execute(
-                _text(
-                    "SELECT actor_id FROM actors "
-                    "WHERE tenant_id = :tid AND oidc_subject = :sub LIMIT 1"
-                ),
+                _text("SELECT actor_id FROM actors " "WHERE tenant_id = :tid AND oidc_subject = :sub LIMIT 1"),
                 {"tid": ctx.tenant_id, "sub": subject},
             )
             row = result.fetchone()
@@ -236,6 +230,7 @@ async def test_rsam_full_write_path(pg_container: str) -> None:
         # Strategy: make a preflight resolve call to materialise the tenant first.
         async with session_factory() as session, session.begin():
             from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+
             tenant_id = await upsert_rsam_tenant(session, seal_id)
 
         await _seed_vocabulary(pg_container, tenant_id=tenant_id)
@@ -249,8 +244,7 @@ async def test_rsam_full_write_path(pg_container: str) -> None:
             )
 
         assert resp.status_code == 201, (
-            f"expected 201 from RSAM-authed capability create; "
-            f"got {resp.status_code}: {resp.text}"
+            f"expected 201 from RSAM-authed capability create; " f"got {resp.status_code}: {resp.text}"
         )
 
         # fetch_authorities must have been called with the correct subject.
@@ -289,6 +283,7 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
 
     # Pre-materialise both tenants so we can seed vocabulary.
     from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+
     async with session_factory() as session, session.begin():
         tenant_a = await upsert_rsam_tenant(session, seal_a)
     async with session_factory() as session, session.begin():
@@ -318,8 +313,7 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
             )
 
         assert create_resp.status_code == 201, (
-            f"expected 201 for tenant A entity create; "
-            f"got {create_resp.status_code}: {create_resp.text}"
+            f"expected 201 for tenant A entity create; " f"got {create_resp.status_code}: {create_resp.text}"
         )
         entity_id = create_resp.json()["entity_id"]
     finally:
@@ -347,8 +341,7 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
         # visibility chokepoint surfaces this as either 403 (forbidden) or
         # 404 (not found); both correctly hide private cross-tenant rows.
         assert get_resp.status_code in (403, 404), (
-            f"entity from tenant A must not be visible to tenant B; "
-            f"got {get_resp.status_code}: {get_resp.text}"
+            f"entity from tenant A must not be visible to tenant B; " f"got {get_resp.status_code}: {get_resp.text}"
         )
     finally:
         app_b.dependency_overrides.clear()
@@ -381,6 +374,7 @@ async def test_multi_grant_header_selection(pg_container: str) -> None:
 
     # Pre-materialise both JIT tenants.
     from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+
     async with session_factory() as session, session.begin():
         tenant_a = await upsert_rsam_tenant(session, seal_a)
     async with session_factory() as session, session.begin():
@@ -412,9 +406,9 @@ async def test_multi_grant_header_selection(pg_container: str) -> None:
             f"expected 400 (tenant_context_required) without header; "
             f"got {resp_no_header.status_code}: {resp_no_header.text}"
         )
-        assert "tenant_context_required" in str(resp_no_header.json()), (
-            f"expected tenant_context_required in error body: {resp_no_header.json()}"
-        )
+        assert "tenant_context_required" in str(
+            resp_no_header.json()
+        ), f"expected tenant_context_required in error body: {resp_no_header.json()}"
     finally:
         app_1.dependency_overrides.clear()
 

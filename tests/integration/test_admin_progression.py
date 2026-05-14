@@ -272,10 +272,7 @@ async def test_post_progression_definition_invalid_schema(progression_clients) -
     # must contain evidence of the schema violation.
     body_text = resp.text
     assert (
-        "meta-schema" in body_text
-        or "forward" in body_text
-        or "explicit-graph" in body_text
-        or "enum" in body_text
+        "meta-schema" in body_text or "forward" in body_text or "explicit-graph" in body_text or "enum" in body_text
     ), f"expected validation error details in body: {body_text}"
 
 
@@ -350,9 +347,7 @@ async def test_get_progression_definition_by_id(progression_clients) -> None:
     assert post_resp.status_code == 201, post_resp.text
     progression_id = post_resp.json()["progression_id"]
 
-    get_resp = await admin_client.get(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}"
-    )
+    get_resp = await admin_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
     assert get_resp.status_code == 200, get_resp.text
     body = get_resp.json()
     assert body["progression_id"] == progression_id
@@ -365,9 +360,7 @@ async def test_get_progression_definition_not_found(progression_clients) -> None
     """GET one returns 404 for a non-existent progression_id."""
     admin_client, _, tenant_id, _ = progression_clients
     unknown_id = str(uuid.uuid4())
-    resp = await admin_client.get(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{unknown_id}"
-    )
+    resp = await admin_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{unknown_id}")
     assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
 
 
@@ -451,9 +444,7 @@ async def test_delete_soft_deletes_row(progression_clients, pg_container: str) -
     assert post_resp.status_code == 201, post_resp.text
     progression_id = post_resp.json()["progression_id"]
 
-    del_resp = await admin_client.delete(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}"
-    )
+    del_resp = await admin_client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
     assert del_resp.status_code == 204, f"expected 204, got {del_resp.status_code}: {del_resp.text}"
 
     # Verify t_valid_to is set, t_invalidated_at remains NULL.
@@ -505,9 +496,7 @@ async def test_delete_soft_delete_audit_emitted(progression_clients, pg_containe
     assert post_resp.status_code == 201, post_resp.text
     progression_id = post_resp.json()["progression_id"]
 
-    del_resp = await admin_client.delete(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}"
-    )
+    del_resp = await admin_client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
     assert del_resp.status_code == 204, del_resp.text
 
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
@@ -674,10 +663,7 @@ async def _fetch_admin_actor_id(pg_url: str, tenant_id: uuid.UUID) -> uuid.UUID:
     try:
         async with factory() as session:
             result = await session.execute(
-                text(
-                    "SELECT actor_id FROM api_tokens "
-                    "WHERE tenant_id = :tid AND :role = ANY(roles) LIMIT 1"
-                ),
+                text("SELECT actor_id FROM api_tokens " "WHERE tenant_id = :tid AND :role = ANY(roles) LIMIT 1"),
                 {"tid": tenant_id, "role": "admin"},
             )
             row = result.fetchone()
@@ -713,8 +699,7 @@ async def _seed_override_row(
                     "VALUES (:aid, :tid, :actor, 'progression.override.created', "
                     "        'progression_override', :eid, NULL, '{}'::jsonb, :ts, NULL, NULL)"
                 ),
-                {"aid": audit_id, "tid": tenant_id, "actor": actor_id,
-                 "eid": entity_id, "ts": now},
+                {"aid": audit_id, "tid": tenant_id, "actor": actor_id, "eid": entity_id, "ts": now},
             )
             await session.execute(
                 text(
@@ -725,9 +710,17 @@ async def _seed_override_row(
                     "VALUES (:oid, :tid, :eid, '3', '5', :gate, FALSE, 'test', "
                     "        :actor, :now, :tvto, :cat, :aid)"
                 ),
-                {"oid": override_id, "tid": tenant_id, "eid": entity_id,
-                 "gate": gate_id, "actor": actor_id, "now": now,
-                 "tvto": t_valid_to, "cat": consumed_at, "aid": audit_id},
+                {
+                    "oid": override_id,
+                    "tid": tenant_id,
+                    "eid": entity_id,
+                    "gate": gate_id,
+                    "actor": actor_id,
+                    "now": now,
+                    "tvto": t_valid_to,
+                    "cat": consumed_at,
+                    "aid": audit_id,
+                },
             )
     finally:
         await engine.dispose()
@@ -758,16 +751,26 @@ async def test_override_list_filter_active(progression_clients) -> None:
 
     # Expired override — insert directly with t_valid_to in the past.
     expired_id = await _seed_override_row(
-        pg_url, tenant_id=tenant_id, entity_id=entity_id, actor_id=actor_id,
-        gate_id="expired-gate", t_valid_to=now - datetime.timedelta(hours=2),
-        consumed_at=None, now=now,
+        pg_url,
+        tenant_id=tenant_id,
+        entity_id=entity_id,
+        actor_id=actor_id,
+        gate_id="expired-gate",
+        t_valid_to=now - datetime.timedelta(hours=2),
+        consumed_at=None,
+        now=now,
     )
 
     # Consumed override — insert directly with consumed_at set.
     consumed_id = await _seed_override_row(
-        pg_url, tenant_id=tenant_id, entity_id=entity_id, actor_id=actor_id,
-        gate_id="consumed-gate", t_valid_to=now + datetime.timedelta(hours=2),
-        consumed_at=now, now=now,
+        pg_url,
+        tenant_id=tenant_id,
+        entity_id=entity_id,
+        actor_id=actor_id,
+        gate_id="consumed-gate",
+        t_valid_to=now + datetime.timedelta(hours=2),
+        consumed_at=now,
+        now=now,
     )
 
     list_resp = await admin_client.get(
@@ -805,9 +808,14 @@ async def test_override_list_filter_expired(progression_clients) -> None:
 
     # Expired override — insert directly with t_valid_to in the past.
     expired_id = await _seed_override_row(
-        pg_url, tenant_id=tenant_id, entity_id=entity_id, actor_id=actor_id,
-        gate_id="expired-only", t_valid_to=now - datetime.timedelta(hours=2),
-        consumed_at=None, now=now,
+        pg_url,
+        tenant_id=tenant_id,
+        entity_id=entity_id,
+        actor_id=actor_id,
+        gate_id="expired-only",
+        t_valid_to=now - datetime.timedelta(hours=2),
+        consumed_at=None,
+        now=now,
     )
 
     list_resp = await admin_client.get(
@@ -819,8 +827,9 @@ async def test_override_list_filter_expired(progression_clients) -> None:
     ids = [i["override_id"] for i in items]
     assert str(expired_id) in ids, f"expired override must appear: {ids}"
     # Active override must not appear.
-    assert all(i["override_id"] != active_resp.json()["override_id"] for i in items), \
-        "active (unexpired) override must not appear in expired=true results"
+    assert all(
+        i["override_id"] != active_resp.json()["override_id"] for i in items
+    ), "active (unexpired) override must not appear in expired=true results"
 
 
 # ---------------------------------------------------------------------------
@@ -940,8 +949,7 @@ async def _seed_entity_with_stage(
                     "(entity_id, tenant_id, entity_type, name, is_active, created_at) "
                     "VALUES (:eid, :tid, :etype, :name, TRUE, :now)"
                 ),
-                {"eid": entity_id, "tid": tenant_id, "etype": entity_type,
-                 "name": f"ent-{entity_id}", "now": now},
+                {"eid": entity_id, "tid": tenant_id, "etype": entity_type, "name": f"ent-{entity_id}", "now": now},
             )
             if stage_progression is not None:
                 attr_id = uuid.uuid4()
@@ -953,8 +961,7 @@ async def _seed_entity_with_stage(
                         "VALUES (:aid, :tid, :eid, 'stage_progression', "
                         "        CAST(:val AS jsonb), :now, NULL, :now, NULL)"
                     ),
-                    {"aid": attr_id, "tid": tenant_id, "eid": entity_id,
-                     "val": f'"{stage_progression}"', "now": now},
+                    {"aid": attr_id, "tid": tenant_id, "eid": entity_id, "val": f'"{stage_progression}"', "now": now},
                 )
     finally:
         await engine.dispose()
@@ -1074,9 +1081,7 @@ async def test_preflight_timeout_returns_partial(
 
     # Seed five entities so the scan has entities to process.
     for _ in range(5):
-        await _seed_entity_with_stage(
-            pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft"
-        )
+        await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft")
 
     # Patch asyncio.wait_for to always raise TimeoutError, simulating a slow scan.
     async def _slow_wait_for(coro, timeout):  # type: ignore[no-untyped-def]
@@ -1134,9 +1139,7 @@ async def test_preflight_force_with_migration_plan_bypasses_scan(
     progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
 
     # Seed an entity that would be an offender under the enforcing definition.
-    await _seed_entity_with_stage(
-        pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review"
-    )
+    await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review")
 
     migration_plan_text = "Approved exception 2026-05-12 by CTO"
     resp = await admin_client.put(
@@ -1175,9 +1178,9 @@ async def test_preflight_force_with_migration_plan_bypasses_scan(
     assert new_row.is_advisory is False
     assert audit_row is not None, "audit row must exist"
     audit_payload = audit_row[0]
-    assert audit_payload.get("migration_plan") == migration_plan_text, (
-        f"migration_plan must be in audit payload: {audit_payload}"
-    )
+    assert (
+        audit_payload.get("migration_plan") == migration_plan_text
+    ), f"migration_plan must be in audit payload: {audit_payload}"
 
 
 # ---------------------------------------------------------------------------
@@ -1226,12 +1229,8 @@ async def test_preflight_clean_graduation_writes_definition(
     progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
 
     # Only seed entities with states present in the enforcing definition.
-    await _seed_entity_with_stage(
-        pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft"
-    )
-    await _seed_entity_with_stage(
-        pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="published"
-    )
+    await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft")
+    await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="published")
 
     resp = await admin_client.put(
         f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
@@ -1295,6 +1294,7 @@ async def test_preflight_offenders_present_force_false_rejected(
     error_item = body.get("errors", [{}])[0]
     assert error_item.get("code") == "preflight_offenders_present", f"unexpected body: {body}"
     import json as _json  # noqa: PLC0415
+
     message_payload = _json.loads(error_item.get("message", "{}"))
     offenders = message_payload.get("offenders", [])
     assert len(offenders) == 2, f"expected 2 offenders, got {offenders}"

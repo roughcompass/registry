@@ -74,6 +74,7 @@ async def test_request_log_carries_trace_id(capsys: pytest.CaptureFixture[str]) 
     # invokes at request time.
     for route in app.routes:
         if isinstance(route, APIRoute) and route.path == "/healthz":
+
             async def _healthz_with_probe() -> dict[str, str]:
                 _log_probe.info("healthz_probe_in_span")
                 return {"status": "ok"}
@@ -117,15 +118,11 @@ async def test_request_log_carries_trace_id(capsys: pytest.CaptureFixture[str]) 
 
     # Assertion 2: trace_id is a 32-character lowercase hex string.
     trace_id = line["trace_id"]
-    assert _TRACE_ID_RE.match(trace_id), (
-        f"trace_id {trace_id!r} is not a 32-character lowercase hex string"
-    )
+    assert _TRACE_ID_RE.match(trace_id), f"trace_id {trace_id!r} is not a 32-character lowercase hex string"
 
     # Assertion 3: span_id is a 16-character lowercase hex string.
     span_id = line["span_id"]
-    assert _SPAN_ID_RE.match(span_id), (
-        f"span_id {span_id!r} is not a 16-character lowercase hex string"
-    )
+    assert _SPAN_ID_RE.match(span_id), f"span_id {span_id!r} is not a 16-character lowercase hex string"
 
     # Assertion 4: neither value is the OTel invalid-context sentinel (all zeros).
     # A zero trace_id means get_current_span() returned INVALID_SPAN_CONTEXT,

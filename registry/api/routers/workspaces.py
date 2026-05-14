@@ -123,8 +123,7 @@ class EntryCreateRequest(BaseModel):
     kind: str = Field(
         ...,
         description=(
-            "Entry kind. Must be one of: note, decision, open_question, "
-            "saved_query, saved_view, private_annotation."
+            "Entry kind. Must be one of: note, decision, open_question, " "saved_query, saved_view, private_annotation."
         ),
     )
     body_md: str = Field(..., min_length=1, description="Entry body in Markdown (min 1 character).")
@@ -261,10 +260,7 @@ def _entry_ref_to_response(ref: WorkspaceEntryRef) -> EntryResponse:
     """
     warnings: list[WarningEntry] | None = None
     if ref.warnings:
-        warnings = [
-            WarningEntry(field=w["field"], categories=w["categories"])
-            for w in ref.warnings
-        ]
+        warnings = [WarningEntry(field=w["field"], categories=w["categories"]) for w in ref.warnings]
     return EntryResponse(
         entry_id=ref.entry_id,
         workspace_id=ref.workspace_id,

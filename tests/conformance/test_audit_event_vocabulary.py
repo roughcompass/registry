@@ -75,7 +75,8 @@ async def _seed_tenant_admin(
                     "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
                 ),
                 {
-                    "tid": tenant_id, "aid": actor_id,
+                    "tid": tenant_id,
+                    "aid": actor_id,
                     "th": hash_token(raw_token),
                     "roles": ["admin", "producer"],
                     "now": _NOW,
@@ -104,8 +105,7 @@ async def _seed_entity(
                     "(entity_id, tenant_id, entity_type, name, is_active, created_at) "
                     "VALUES (:eid, :tid, :etype, :name, TRUE, :now)"
                 ),
-                {"eid": entity_id, "tid": tenant_id, "etype": entity_type,
-                 "name": f"ent-{entity_id}", "now": _NOW},
+                {"eid": entity_id, "tid": tenant_id, "etype": entity_type, "name": f"ent-{entity_id}", "now": _NOW},
             )
             if stage_progression is not None:
                 await session.execute(
@@ -116,8 +116,7 @@ async def _seed_entity(
                         "VALUES (gen_random_uuid(), :tid, :eid, 'stage_progression', "
                         "        CAST(:val AS jsonb), :now, NULL, :now, NULL)"
                     ),
-                    {"tid": tenant_id, "eid": entity_id,
-                     "val": f'"{stage_progression}"', "now": _NOW},
+                    {"tid": tenant_id, "eid": entity_id, "val": f'"{stage_progression}"', "now": _NOW},
                 )
     finally:
         await engine.dispose()
@@ -146,8 +145,7 @@ async def _seed_attribute(
                     "VALUES (gen_random_uuid(), :tid, :eid, :key, "
                     "        CAST(:val AS jsonb), :now, NULL, :now, NULL)"
                 ),
-                {"tid": tenant_id, "eid": entity_id,
-                 "key": key, "val": _json.dumps(value), "now": _NOW},
+                {"tid": tenant_id, "eid": entity_id, "key": key, "val": _json.dumps(value), "now": _NOW},
             )
     finally:
         await engine.dispose()
@@ -177,9 +175,7 @@ async def _fetch_audit_payload(
         params["eid"] = str(entity_id)
     if progression_id is not None:
         # The transition events use definition_id; definition events use progression_id.
-        clauses.append(
-            "(after_jsonb->>'definition_id' = :pid OR after_jsonb->>'progression_id' = :pid)"
-        )
+        clauses.append("(after_jsonb->>'definition_id' = :pid OR after_jsonb->>'progression_id' = :pid)")
         params["pid"] = progression_id
     if override_id is not None:
         clauses.append("after_jsonb->>'override_id' = :oid")
@@ -235,7 +231,9 @@ async def test_audit_vocab_transition_accepted(pg_container: str, app_settings: 
         definition_id = def_resp.json()["progression_id"]
 
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
             stage_progression="1",
         )
 
@@ -246,8 +244,10 @@ async def test_audit_vocab_transition_accepted(pg_container: str, app_settings: 
         assert patch_resp.status_code == 200, patch_resp.text
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.accepted", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.accepted",
+        entity_id=entity_id,
     )
     assert payload is not None, "progression.transition.accepted audit row must exist"
     for key in ("entity_id", "from_state", "to_state", "definition_id"):
@@ -290,7 +290,9 @@ async def test_audit_vocab_transition_rejected(pg_container: str, app_settings: 
         assert def_resp.status_code == 201, def_resp.text
 
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
             stage_progression="1",
         )
 
@@ -302,8 +304,10 @@ async def test_audit_vocab_transition_rejected(pg_container: str, app_settings: 
         assert patch_resp.status_code == 422, patch_resp.text
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.rejected", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.rejected",
+        entity_id=entity_id,
     )
     assert payload is not None, "progression.transition.rejected audit row must exist"
     for key in ("entity_id", "from_state", "to_state", "definition_id", "reason"):
@@ -345,7 +349,9 @@ async def test_audit_vocab_transition_warned(pg_container: str, app_settings: Se
         assert def_resp.status_code == 201, def_resp.text
 
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
             stage_progression="1",
         )
 
@@ -357,8 +363,10 @@ async def test_audit_vocab_transition_warned(pg_container: str, app_settings: Se
         assert patch_resp.status_code == 200, patch_resp.text
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.warned", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.warned",
+        entity_id=entity_id,
     )
     assert payload is not None, "progression.transition.warned audit row must exist"
     for key in ("entity_id", "from_state", "to_state", "definition_id", "reason"):
@@ -404,7 +412,9 @@ async def test_audit_vocab_transition_overridden(pg_container: str, app_settings
         assert def_resp.status_code == 201, def_resp.text
 
         entity_id = await _seed_entity(
-            pg_container, tenant_id=tenant_id, entity_type=entity_type,
+            pg_container,
+            tenant_id=tenant_id,
+            entity_type=entity_type,
             stage_progression="1",
         )
 
@@ -431,8 +441,10 @@ async def test_audit_vocab_transition_overridden(pg_container: str, app_settings
         assert patch_resp.status_code == 200, patch_resp.text
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
-        action="progression.transition.overridden", entity_id=entity_id,
+        pg_container,
+        tenant_id=tenant_id,
+        action="progression.transition.overridden",
+        entity_id=entity_id,
         override_id=override_id,
     )
     assert payload is not None, "progression.transition.overridden audit row must exist"
@@ -473,7 +485,8 @@ async def test_audit_vocab_definition_published(pg_container: str, app_settings:
         definition_id = def_resp.json()["progression_id"]
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
+        pg_container,
+        tenant_id=tenant_id,
         action="progression.definition.published",
         progression_id=definition_id,
     )
@@ -516,13 +529,12 @@ async def test_audit_vocab_definition_soft_deleted(pg_container: str, app_settin
         assert def_resp.status_code == 201, def_resp.text
         definition_id = def_resp.json()["progression_id"]
 
-        del_resp = await client.delete(
-            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{definition_id}"
-        )
+        del_resp = await client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{definition_id}")
         assert del_resp.status_code == 204, del_resp.text
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
+        pg_container,
+        tenant_id=tenant_id,
         action="progression.definition.soft_deleted",
         progression_id=definition_id,
     )
@@ -561,8 +573,7 @@ async def test_audit_vocab_override_created(pg_container: str, app_settings: Set
                         "(entity_id, tenant_id, entity_type, name, is_active, created_at) "
                         "VALUES (:eid, :tid, 'capability', :name, TRUE, :now)"
                     ),
-                    {"eid": entity_id_raw, "tid": tenant_id,
-                     "name": f"ent-ovcr-{entity_id_raw}", "now": _NOW},
+                    {"eid": entity_id_raw, "tid": tenant_id, "name": f"ent-ovcr-{entity_id_raw}", "now": _NOW},
                 )
         finally:
             await engine.dispose()
@@ -582,7 +593,8 @@ async def test_audit_vocab_override_created(pg_container: str, app_settings: Set
         override_id = ovr_resp.json()["override_id"]
 
     payload = await _fetch_audit_payload(
-        pg_container, tenant_id=tenant_id,
+        pg_container,
+        tenant_id=tenant_id,
         action="progression.override.created",
         override_id=override_id,
     )

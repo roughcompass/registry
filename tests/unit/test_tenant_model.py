@@ -24,12 +24,7 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _MIG_PATH = (
-    _REPO_ROOT
-    / "registry"
-    / "storage"
-    / "migrations"
-    / "versions"
-    / "0015_add_tenant_external_id_and_provider.py"
+    _REPO_ROOT / "registry" / "storage" / "migrations" / "versions" / "0015_add_tenant_external_id_and_provider.py"
 )
 
 _MIG_SPEC = importlib.util.spec_from_file_location("migration_0015", _MIG_PATH)

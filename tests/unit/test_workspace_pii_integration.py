@@ -37,9 +37,7 @@ _ENTRY_ID = uuid.uuid4()
 def _pii_advisory() -> MagicMock:
     """Scanner that always returns a no-match advisory result."""
     scanner = MagicMock()
-    scanner.scan = MagicMock(
-        return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory")
-    )
+    scanner.scan = MagicMock(return_value=PiiScanResponse(matched_patterns=[], action_taken="advisory"))
     return scanner
 
 
@@ -48,9 +46,7 @@ def _pii_warn(field: str = "email", category: str = "CONTACT") -> MagicMock:
     scanner = MagicMock()
     scanner.scan = MagicMock(
         return_value=PiiScanResponse(
-            matched_patterns=[
-                PiiMatchResult(name=field, offset=0, length=10, category=category)
-            ],
+            matched_patterns=[PiiMatchResult(name=field, offset=0, length=10, category=category)],
             action_taken="warn",
         )
     )
@@ -62,9 +58,7 @@ def _pii_block(field: str = "email", category: str = "CONTACT") -> MagicMock:
     scanner = MagicMock()
     scanner.scan = MagicMock(
         return_value=PiiScanResponse(
-            matched_patterns=[
-                PiiMatchResult(name=field, offset=0, length=10, category=category)
-            ],
+            matched_patterns=[PiiMatchResult(name=field, offset=0, length=10, category=category)],
             action_taken="block",
         )
     )
@@ -437,9 +431,7 @@ async def test_create_refs_scan_skipped_when_none() -> None:
     )
 
     # Only the body scan should have fired; references scan must not.
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     assert not any("workspace_entry.references" in ft for ft in scan_field_types)
     # Body scan still fires exactly once.
     body_calls = [ft for ft in scan_field_types if "workspace_entry.body" in ft]
@@ -540,9 +532,7 @@ async def test_update_body_none_scanner_not_called_for_body() -> None:
 
     assert isinstance(ref, WorkspaceEntryRef)
 
-    scan_field_types = [
-        c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list
-    ]
+    scan_field_types = [c.kwargs.get("field_type", "") for c in scanner.scan.call_args_list]
     body_calls = [ft for ft in scan_field_types if "workspace_entry.body" in ft]
     assert body_calls == [], "Scanner must not be called for body when body_md is None"
 
@@ -559,9 +549,7 @@ async def test_create_both_fields_warn_two_warning_entries() -> None:
     # Return warn for every scan call regardless of field.
     scanner.scan = MagicMock(
         return_value=PiiScanResponse(
-            matched_patterns=[
-                PiiMatchResult(name="email", offset=0, length=10, category="CONTACT")
-            ],
+            matched_patterns=[PiiMatchResult(name="email", offset=0, length=10, category="CONTACT")],
             action_taken="warn",
         )
     )

@@ -183,9 +183,7 @@ def pg_container() -> Iterator[str]:
     # them, so the connection pool drifts upward over a long suite run. Bump
     # Postgres max_connections well above the default 100 so the suite does
     # not cascade into "sorry, too many clients already" errors mid-run.
-    container = container.with_command(
-        "postgres -c max_connections=500 -c shared_buffers=128MB"
-    )
+    container = container.with_command("postgres -c max_connections=500 -c shared_buffers=128MB")
     container.start()
     try:
         url = _to_async_url(container.get_connection_url())

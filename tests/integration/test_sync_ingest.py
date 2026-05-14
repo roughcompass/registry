@@ -514,9 +514,7 @@ async def test_authoritative_wins_conflict(pg_container: str) -> None:
             source_type="openapi",
         )
         sync_run_id = uuid.uuid4()
-        await _seed_sync_run(
-            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=sync_run_id
-        )
+        await _seed_sync_run(pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=sync_run_id)
         pf = ParsedFact(
             entity_id=entity_id,
             category="overview",
@@ -611,17 +609,13 @@ async def test_partial_sync_idempotency(pg_container: str) -> None:
         )
 
         run_id_1 = uuid.uuid4()
-        await _seed_sync_run(
-            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_1
-        )
+        await _seed_sync_run(pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_1)
         result1 = await catalog.upsert_synced_facts(ctx, [pf], run_id_1, source_row)
         assert result1.created == 1
 
         # Second run: same fact body.
         run_id_2 = uuid.uuid4()
-        await _seed_sync_run(
-            pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_2
-        )
+        await _seed_sync_run(pg_container, tenant_id=tenant_id, source_id=source_id, sync_run_id=run_id_2)
         pf2 = ParsedFact(
             entity_id=entity_id,
             category="api_doc",

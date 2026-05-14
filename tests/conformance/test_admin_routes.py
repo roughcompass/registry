@@ -85,8 +85,11 @@ async def _seed_tenant_with_tokens(
                     "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
                 ),
                 {
-                    "tid": tenant_id, "aid": admin_actor_id,
-                    "th": hash_token(admin_raw), "roles": ["admin"], "now": _NOW,
+                    "tid": tenant_id,
+                    "aid": admin_actor_id,
+                    "th": hash_token(admin_raw),
+                    "roles": ["admin"],
+                    "now": _NOW,
                 },
             )
             await session.execute(
@@ -96,8 +99,11 @@ async def _seed_tenant_with_tokens(
                     "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
                 ),
                 {
-                    "tid": tenant_id, "aid": norole_actor_id,
-                    "th": hash_token(norole_raw), "roles": [], "now": _NOW,
+                    "tid": tenant_id,
+                    "aid": norole_actor_id,
+                    "th": hash_token(norole_raw),
+                    "roles": [],
+                    "now": _NOW,
                 },
             )
     finally:
@@ -133,9 +139,7 @@ async def _seed_entity(pg_url: str, *, tenant_id: uuid.UUID) -> uuid.UUID:
 async def admin_rbac_harness(pg_container: str, app_settings: Settings):
     """Yield (tenant_id, entity_id, progression_id, norole_client, admin_client)."""
     slug = f"rbac-prog-{secrets.token_hex(4)}"
-    tenant_id, admin_token, norole_token = await _seed_tenant_with_tokens(
-        pg_container, slug=slug
-    )
+    tenant_id, admin_token, norole_token = await _seed_tenant_with_tokens(pg_container, slug=slug)
     entity_id = await _seed_entity(pg_container, tenant_id=tenant_id)
 
     app = create_app(app_settings)
@@ -182,9 +186,7 @@ async def test_post_progression_definition_requires_admin(admin_rbac_harness) ->
 async def test_list_progression_definitions_requires_admin(admin_rbac_harness) -> None:
     """GET progression-definitions list returns 403 for caller with roles=[]."""
     tenant_id, _, _pid, norole_client, _ = admin_rbac_harness
-    resp = await norole_client.get(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions"
-    )
+    resp = await norole_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions")
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"
 
 
@@ -192,9 +194,7 @@ async def test_list_progression_definitions_requires_admin(admin_rbac_harness) -
 async def test_get_progression_definition_by_id_requires_admin(admin_rbac_harness) -> None:
     """GET progression-definitions/{id} returns 403 for caller with roles=[]."""
     tenant_id, _, progression_id, norole_client, _ = admin_rbac_harness
-    resp = await norole_client.get(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}"
-    )
+    resp = await norole_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"
 
 
@@ -213,9 +213,7 @@ async def test_put_progression_definition_requires_admin(admin_rbac_harness) -> 
 async def test_delete_progression_definition_requires_admin(admin_rbac_harness) -> None:
     """DELETE progression-definitions/{id} returns 403 for caller with roles=[]."""
     tenant_id, _, progression_id, norole_client, _ = admin_rbac_harness
-    resp = await norole_client.delete(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}"
-    )
+    resp = await norole_client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"
 
 
@@ -241,7 +239,5 @@ async def test_post_progression_override_requires_admin(admin_rbac_harness) -> N
 async def test_list_progression_overrides_requires_admin(admin_rbac_harness) -> None:
     """GET progression-overrides returns 403 for caller with roles=[]."""
     tenant_id, entity_id, _pid, norole_client, _ = admin_rbac_harness
-    resp = await norole_client.get(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides"
-    )
+    resp = await norole_client.get(f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides")
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"

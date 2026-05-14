@@ -367,7 +367,7 @@ async def test_claim_batch_uses_explicit_transaction() -> None:
 
     await worker._claim_batch()
 
-    assert call_order[0] == "session.begin().__aenter__", (
-        f"session.begin() must be entered before any execute; saw {call_order}"
-    )
+    assert (
+        call_order[0] == "session.begin().__aenter__"
+    ), f"session.begin() must be entered before any execute; saw {call_order}"
     assert "session.execute" in call_order

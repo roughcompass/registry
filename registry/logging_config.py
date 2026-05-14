@@ -62,9 +62,9 @@ def configure_logging(settings: Settings) -> None:
     test that calls ``configure_logging`` directly.
     """
     shared_processors = [
-        structlog.stdlib.add_log_level,          # adds "level" key
-        structlog.stdlib.add_logger_name,         # adds "logger" key
-        _add_otel_context,                        # adds "trace_id"/"span_id" when span active
+        structlog.stdlib.add_log_level,  # adds "level" key
+        structlog.stdlib.add_logger_name,  # adds "logger" key
+        _add_otel_context,  # adds "trace_id"/"span_id" when span active
         structlog.processors.TimeStamper(fmt="iso", utc=True),  # ISO8601+UTC "timestamp"
         structlog.processors.StackInfoRenderer(),
     ]
@@ -114,7 +114,8 @@ def configure_logging(settings: Settings) -> None:
     # added in future work). This also sets up the stdlib wrapper so
     # structlog.get_logger() calls funnel through the same chain.
     structlog.configure(
-        processors=shared_processors + [
+        processors=shared_processors
+        + [
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

@@ -26,6 +26,7 @@ from registry.auth.rsam.grammar import (
 # ---------------------------------------------------------------------------
 # parse_authority — success cases
 
+
 def test_parse_canonical_owner() -> None:
     """Canonical happy-path authority with a 6-digit SEAL ID."""
     result = parse_authority("112025_DP_CHANNEL_Owner")
@@ -46,6 +47,7 @@ def test_parse_four_digit_seal_lower_bound() -> None:
 
 # ---------------------------------------------------------------------------
 # parse_authority — failure cases (all 11 documented edge cases)
+
 
 def test_parse_seven_digit_seal_exceeds_upper_bound() -> None:
     """7-digit SEAL ID exceeds the 4–6 digit upper bound; must return None."""
@@ -90,6 +92,7 @@ def test_parse_missing_seal_id_rejected() -> None:
 # ---------------------------------------------------------------------------
 # parse_authority — remaining verb coverage
 
+
 def test_parse_verb_manager() -> None:
     result = parse_authority("112025_DP_MODULE_Manager")
     assert result is not None
@@ -111,20 +114,25 @@ def test_parse_verb_r() -> None:
 # ---------------------------------------------------------------------------
 # verb_to_role — all 6 verb-to-role table entries
 
-@pytest.mark.parametrize("verb,expected_role", [
-    ("Owner",   "admin"),
-    ("Manager", "producer"),
-    ("Operate", "auditor"),
-    ("CRUD",    "admin"),
-    ("RU",      "producer"),
-    ("R",       "viewer"),
-])
+
+@pytest.mark.parametrize(
+    "verb,expected_role",
+    [
+        ("Owner", "admin"),
+        ("Manager", "producer"),
+        ("Operate", "auditor"),
+        ("CRUD", "admin"),
+        ("RU", "producer"),
+        ("R", "viewer"),
+    ],
+)
 def test_verb_to_role_table(verb: str, expected_role: str) -> None:
     assert verb_to_role(verb) == expected_role
 
 
 # ---------------------------------------------------------------------------
 # highest_role — precedence resolution
+
 
 def test_highest_role_producer_beats_auditor() -> None:
     assert highest_role(["producer", "auditor"]) == "producer"
@@ -150,6 +158,7 @@ def test_highest_role_empty_returns_viewer() -> None:
 # ---------------------------------------------------------------------------
 # Structural invariants
 
+
 def test_verb_to_role_covers_all_verbs() -> None:
     """Every verb accepted by the regex has a corresponding role mapping."""
     accepted_verbs = {"Owner", "Manager", "Operate", "CRUD", "RU", "R"}
@@ -164,6 +173,7 @@ def test_role_precedence_is_ordered_highest_first() -> None:
 
 # ---------------------------------------------------------------------------
 # Metric emission — counters fire on non-match paths
+
 
 def test_metric_parse_skipped_emits_on_non_digit_prefix() -> None:
     """parse_authority on a non-digit-prefix string increments parse_skipped."""
@@ -192,9 +202,9 @@ def test_metric_parse_failed_emits_on_digit_prefix_invalid_shape() -> None:
     assert result is None
     skipped_after = _PARSE_SKIPPED.labels(source="rsam", shape=shape)._value.get()  # type: ignore[attr-defined]
     failed_after = _PARSE_FAILED.labels(source="rsam", shape=shape)._value.get()  # type: ignore[attr-defined]
-    assert failed_after == failed_before + 1, (
-        "parse_failed must increment for digit-prefix authority that fails grammar"
-    )
+    assert (
+        failed_after == failed_before + 1
+    ), "parse_failed must increment for digit-prefix authority that fails grammar"
     assert skipped_after == skipped_before, "parse_skipped must not increment for digit-prefix authority"
 
 

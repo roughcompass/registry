@@ -137,8 +137,7 @@ def validate_progression_definition(definition: dict) -> None:
         messages.append(f"{path}: {err.message}")
 
     raise ValidationError(
-        "progression definition failed meta-schema validation:\n"
-        + "\n".join(f"  - {m}" for m in messages)
+        "progression definition failed meta-schema validation:\n" + "\n".join(f"  - {m}" for m in messages)
     )
 
 
@@ -258,9 +257,7 @@ class ProgressionService:
         now = self._clock.now()
 
         async with self._session_factory() as session, session.begin():
-            defn_row = await self._load_active_definition_cached(
-                session, ctx.tenant_id, entity.entity_type, now
-            )
+            defn_row = await self._load_active_definition_cached(session, ctx.tenant_id, entity.entity_type, now)
 
             if defn_row is None:
                 # Entity types without a definition are not enforced.
@@ -314,8 +311,7 @@ class ProgressionService:
                 if not reentry_cfg.get("allowed", False):
                     reason = "reentry_not_allowed"
                     return await self._reject_or_warn(
-                        session, ctx, entity, from_state, to_state, progression_id,
-                        reason, is_advisory, now
+                        session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                     )
                 # If re-entry requires certain attributes, check them.
                 requires = reentry_cfg.get("requires", [])
@@ -323,12 +319,12 @@ class ProgressionService:
                     if not entity_attrs.get(req_attr):
                         reason = f"reentry_requires_{req_attr}"
                         return await self._reject_or_warn(
-                            session, ctx, entity, from_state, to_state, progression_id,
-                            reason, is_advisory, now
+                            session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                         )
                 # Re-entry accepted.
                 await self._emit_audit(
-                    session, ctx,
+                    session,
+                    ctx,
                     action=actions.PROGRESSION_TRANSITION_ACCEPTED,
                     payload={
                         "entity_id": str(entity.entity_id),
@@ -348,8 +344,7 @@ class ProgressionService:
                 if to_pos is None:
                     reason = f"unknown_to_state:{to_state}"
                     return await self._reject_or_warn(
-                        session, ctx, entity, from_state, to_state, progression_id,
-                        reason, is_advisory, now
+                        session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                     )
 
                 if from_state is None:
@@ -357,15 +352,13 @@ class ProgressionService:
                     if to_pos != 0:
                         reason = "must_start_from_first_state"
                         return await self._reject_or_warn(
-                            session, ctx, entity, from_state, to_state, progression_id,
-                            reason, is_advisory, now
+                            session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                         )
                 else:
                     if from_pos is None:
                         reason = f"unknown_from_state:{from_state}"
                         return await self._reject_or_warn(
-                            session, ctx, entity, from_state, to_state, progression_id,
-                            reason, is_advisory, now
+                            session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                         )
 
                     expected_next = from_pos + 1
@@ -382,23 +375,20 @@ class ProgressionService:
                             if non_skippable:
                                 reason = f"skip_not_allowed_for_states:{','.join(non_skippable)}"
                                 return await self._reject_or_warn(
-                                    session, ctx, entity, from_state, to_state, progression_id,
-                                    reason, is_advisory, now
+                                    session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                                 )
                             # All intermediates are skippable for this tier — fall through.
                         else:
                             reason = f"forward_sequential_skip:from={from_state},to={to_state}"
                             return await self._reject_or_warn(
-                                session, ctx, entity, from_state, to_state, progression_id,
-                                reason, is_advisory, now
+                                session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                             )
 
                     elif to_pos < expected_next:
                         # Backward transition.
                         reason = f"backward_transition:from={from_state},to={to_state}"
                         return await self._reject_or_warn(
-                            session, ctx, entity, from_state, to_state, progression_id,
-                            reason, is_advisory, now
+                            session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                         )
 
             elif forward_rule == "any":
@@ -407,8 +397,7 @@ class ProgressionService:
                 if to_state not in state_index:
                     reason = f"unknown_to_state:{to_state}"
                     return await self._reject_or_warn(
-                        session, ctx, entity, from_state, to_state, progression_id,
-                        reason, is_advisory, now
+                        session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                     )
 
             # ---- Gate check ----------------------------------------------------
@@ -422,15 +411,14 @@ class ProgressionService:
                     session, ctx.tenant_id, entity.entity_id, from_state, to_state, now
                 )
 
-                if override is not None and (
-                    override.gate_id == "*" or override.gate_id in failing_gates
-                ):
+                if override is not None and (override.gate_id == "*" or override.gate_id in failing_gates):
                     # Consume the override — single-use invariant.
                     override.consumed_at = now
                     await session.flush()
 
                     await self._emit_audit(
-                        session, ctx,
+                        session,
+                        ctx,
                         action=actions.PROGRESSION_TRANSITION_OVERRIDDEN,
                         payload={
                             "entity_id": str(entity.entity_id),
@@ -450,13 +438,13 @@ class ProgressionService:
                 # No matching override — apply advisory/enforcing policy.
                 reason = f"gates_not_satisfied:{','.join(failing_gates)}"
                 return await self._reject_or_warn(
-                    session, ctx, entity, from_state, to_state, progression_id,
-                    reason, is_advisory, now
+                    session, ctx, entity, from_state, to_state, progression_id, reason, is_advisory, now
                 )
 
             # ---- All checks passed: accepted -----------------------------------
             await self._emit_audit(
-                session, ctx,
+                session,
+                ctx,
                 action=actions.PROGRESSION_TRANSITION_ACCEPTED,
                 payload={
                     "entity_id": str(entity.entity_id),
@@ -513,9 +501,7 @@ class ProgressionService:
         coroutine may have refreshed the entry in that window.
         """
         if self._cache_ttl_seconds == 0:
-            return await self._load_active_definition_uncached(
-                session, tenant_id, entity_type, now
-            )
+            return await self._load_active_definition_uncached(session, tenant_id, entity_type, now)
 
         key = (str(tenant_id), entity_type)
         wall = monotonic()
@@ -545,9 +531,7 @@ class ProgressionService:
             if entry.expires_at > wall:
                 # Winner already refreshed while we were queued.
                 return entry.definition
-            definition = await self._load_active_definition_uncached(
-                session, tenant_id, entity_type, now
-            )
+            definition = await self._load_active_definition_uncached(session, tenant_id, entity_type, now)
             entry.definition = definition
             entry.expires_at = monotonic() + self._cache_ttl_seconds
             return definition
@@ -567,16 +551,18 @@ class ProgressionService:
         Returns None when no definition exists — callers treat this as pass-through.
         """
         result = await session.execute(
-            select(ProgressionDefinition).where(
+            select(ProgressionDefinition)
+            .where(
                 ProgressionDefinition.tenant_id == tenant_id,
                 ProgressionDefinition.entity_type == entity_type,
                 ProgressionDefinition.t_valid_from <= now,
                 ProgressionDefinition.t_invalidated_at.is_(None),
-            ).where(
+            )
+            .where(
                 # t_valid_to IS NULL OR t_valid_to > now
-                (ProgressionDefinition.t_valid_to.is_(None))
-                | (ProgressionDefinition.t_valid_to > now)
-            ).limit(1)
+                (ProgressionDefinition.t_valid_to.is_(None)) | (ProgressionDefinition.t_valid_to > now)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -591,7 +577,8 @@ class ProgressionService:
     ) -> ProgressionOverride | None:
         """Return the first matching unconsumed, currently-valid override or None."""
         result = await session.execute(
-            select(ProgressionOverride).where(
+            select(ProgressionOverride)
+            .where(
                 ProgressionOverride.tenant_id == tenant_id,
                 ProgressionOverride.entity_id == entity_id,
                 ProgressionOverride.from_state == (from_state or ""),
@@ -599,7 +586,8 @@ class ProgressionService:
                 ProgressionOverride.consumed_at.is_(None),
                 ProgressionOverride.t_valid_from <= now,
                 ProgressionOverride.t_valid_to > now,
-            ).limit(1)
+            )
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -665,7 +653,8 @@ class ProgressionService:
 
         if is_advisory:
             await self._emit_audit(
-                session, ctx,
+                session,
+                ctx,
                 action=actions.PROGRESSION_TRANSITION_WARNED,
                 payload=payload,
                 now=now,
@@ -673,7 +662,8 @@ class ProgressionService:
             return ValidationResult(valid=True, warnings=[reason])
         else:
             await self._emit_audit(
-                session, ctx,
+                session,
+                ctx,
                 action=actions.PROGRESSION_TRANSITION_REJECTED,
                 payload=payload,
                 now=now,

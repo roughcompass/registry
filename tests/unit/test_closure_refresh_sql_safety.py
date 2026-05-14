@@ -76,33 +76,22 @@ async def test_replace_and_delete_uses_bound_parameter_for_edge_rels() -> None:
 
     await worker._replace_and_delete(_TENANT, closure_rows, recomputed_keys, outbox_id)
 
-    insert_call = next(
-        c for c in mock_execute.call_args_list
-        if "INSERT INTO closure_cache" in str(c.args[0])
-    )
+    insert_call = next(c for c in mock_execute.call_args_list if "INSERT INTO closure_cache" in str(c.args[0]))
     insert_sql = str(insert_call.args[0])
-    bind_params: dict[str, Any] = insert_call.args[1] if len(insert_call.args) > 1 else (
-        insert_call.kwargs.get("parameters") or {}
+    bind_params: dict[str, Any] = (
+        insert_call.args[1] if len(insert_call.args) > 1 else (insert_call.kwargs.get("parameters") or {})
     )
 
     # Pin parameterization at the SQL level: the placeholder is present and
     # no quoted rel literal leaks into the SQL text.
-    assert ":edge_rels_0" in insert_sql, (
-        f"expected :edge_rels_0 placeholder in INSERT SQL; got:\n{insert_sql}"
-    )
-    assert "'evil's-rel'" not in insert_sql, (
-        "a single-quoted rel value leaked into the SQL text — parameterization missing"
-    )
-    assert "'legit'" not in insert_sql, (
-        "rel values must be bound out-of-band, not embedded as SQL literals"
-    )
+    assert ":edge_rels_0" in insert_sql, f"expected :edge_rels_0 placeholder in INSERT SQL; got:\n{insert_sql}"
+    assert (
+        "'evil's-rel'" not in insert_sql
+    ), "a single-quoted rel value leaked into the SQL text — parameterization missing"
+    assert "'legit'" not in insert_sql, "rel values must be bound out-of-band, not embedded as SQL literals"
 
     # And at the bind layer: the DB driver receives the rels as a Python list.
     assert "edge_rels_0" in bind_params, f"bind dict missing edge_rels_0: {bind_params}"
     rels_bound = bind_params["edge_rels_0"]
-    assert isinstance(rels_bound, list), (
-        f"edge_rels must be a list bound out-of-band; got {type(rels_bound).__name__}"
-    )
-    assert rels_bound == ["legit", "evil's-rel"], (
-        f"edge_rels list shape changed unexpectedly: {rels_bound}"
-    )
+    assert isinstance(rels_bound, list), f"edge_rels must be a list bound out-of-band; got {type(rels_bound).__name__}"
+    assert rels_bound == ["legit", "evil's-rel"], f"edge_rels list shape changed unexpectedly: {rels_bound}"

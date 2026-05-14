@@ -230,8 +230,7 @@ async def _count_entries(
         async with factory() as session:
             result = await session.execute(
                 text(
-                    "SELECT COUNT(*) FROM workspace_entries "
-                    "WHERE workspace_id = :wid AND t_invalidated_at IS NULL"
+                    "SELECT COUNT(*) FROM workspace_entries " "WHERE workspace_id = :wid AND t_invalidated_at IS NULL"
                 ),
                 {"wid": workspace_id},
             )
@@ -294,12 +293,8 @@ async def test_pii_chokepoint_blocks_create_entry(
     fail with 5xx, and zero entry rows must be written to the DB after the failure.
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"ws-pii-create-{suffix}"
-    )
-    workspace_id = await _seed_workspace(
-        pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor"
-    )
+    tenant_id, actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"ws-pii-create-{suffix}")
+    workspace_id = await _seed_workspace(pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor")
 
     before_count = await _count_entries(pg_container, workspace_id=workspace_id)
 
@@ -320,14 +315,11 @@ async def test_pii_chokepoint_blocks_create_entry(
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert resp.status_code >= 500, (
-        f"Expected 5xx when PII scanner raises; got {resp.status_code}: {resp.text}"
-    )
+    assert resp.status_code >= 500, f"Expected 5xx when PII scanner raises; got {resp.status_code}: {resp.text}"
 
     after_count = await _count_entries(pg_container, workspace_id=workspace_id)
     assert after_count == before_count, (
-        f"No entry rows must be written when PII scanner raises; "
-        f"before={before_count} after={after_count}"
+        f"No entry rows must be written when PII scanner raises; " f"before={before_count} after={after_count}"
     )
 
 
@@ -349,15 +341,9 @@ async def test_pii_chokepoint_blocks_update_entry(
     unchanged in the DB.
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"ws-pii-update-{suffix}"
-    )
-    workspace_id = await _seed_workspace(
-        pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor"
-    )
-    entry_id = await _seed_entry(
-        pg_container, workspace_id=workspace_id, tenant_id=tenant_id, actor_id=actor_id
-    )
+    tenant_id, actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"ws-pii-update-{suffix}")
+    workspace_id = await _seed_workspace(pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor")
+    entry_id = await _seed_entry(pg_container, workspace_id=workspace_id, tenant_id=tenant_id, actor_id=actor_id)
 
     body_before = await _fetch_entry_body(pg_container, entry_id=entry_id)
     assert body_before is not None
@@ -374,14 +360,13 @@ async def test_pii_chokepoint_blocks_update_entry(
             headers={"Authorization": f"Bearer {token}"},
         )
 
-    assert resp.status_code >= 500, (
-        f"Expected 5xx when PII scanner raises on update; got {resp.status_code}: {resp.text}"
-    )
+    assert (
+        resp.status_code >= 500
+    ), f"Expected 5xx when PII scanner raises on update; got {resp.status_code}: {resp.text}"
 
     body_after = await _fetch_entry_body(pg_container, entry_id=entry_id)
     assert body_after == body_before, (
-        f"Entry body must be unchanged when PII scanner raises; "
-        f"before={body_before!r} after={body_after!r}"
+        f"Entry body must be unchanged when PII scanner raises; " f"before={body_before!r} after={body_after!r}"
     )
 
 
@@ -402,8 +387,7 @@ def test_role_auditor_in_workspace_router_gate() -> None:
     from registry.api.routers.workspaces import _any_roles
 
     assert "auditor" in _any_roles, (
-        f"'auditor' must be in _any_roles so auditors reach workspace read endpoints; "
-        f"got {_any_roles!r}"
+        f"'auditor' must be in _any_roles so auditors reach workspace read endpoints; " f"got {_any_roles!r}"
     )
 
 
@@ -418,15 +402,12 @@ def test_openapi_share_endpoints_absent() -> None:
     paths = spec.get("paths", {})
     bad_paths = [p for p in paths if "/shares" in p]
     assert not bad_paths, (
-        f"Share endpoint paths must be absent from openapi.json after WRB migration; "
-        f"found: {bad_paths}"
+        f"Share endpoint paths must be absent from openapi.json after WRB migration; " f"found: {bad_paths}"
     )
 
     schemas = spec.get("components", {}).get("schemas", {})
     bad_schemas = [s for s in schemas if "Share" in s]
-    assert not bad_schemas, (
-        f"Share schemas must be absent from openapi.json; found: {bad_schemas}"
-    )
+    assert not bad_schemas, f"Share schemas must be absent from openapi.json; found: {bad_schemas}"
 
 
 def test_mcp_share_tool_absent() -> None:
@@ -446,8 +427,7 @@ def test_mcp_share_tool_absent() -> None:
     tools = asyncio.run(server.list_tools())
     names = {t.name for t in tools}
     assert "list_workspace_shares" not in names, (
-        f"list_workspace_shares must not be registered in the MCP tool catalog; "
-        f"found tool names: {sorted(names)}"
+        f"list_workspace_shares must not be registered in the MCP tool catalog; " f"found tool names: {sorted(names)}"
     )
 
 
@@ -473,9 +453,7 @@ async def test_auditor_write_on_perceived_workspace_returns_403(
         pg_container, slug=f"ws-aud-write-{suffix}", roles=["admin"]
     )
     # Auditor in the same tenant.
-    _, _, auditor_token = await _seed_tenant_with_token(
-        pg_container, slug=f"ws-aud-actor-{suffix}", roles=["auditor"]
-    )
+    _, _, auditor_token = await _seed_tenant_with_token(pg_container, slug=f"ws-aud-actor-{suffix}", roles=["auditor"])
     # The auditor must share the same tenant_id as the admin to perceive the workspace.
     # _seed_tenant_with_token creates a new tenant each call, so we create the auditor
     # actor directly in admin_tid and seed the auditor's actor_roles in that tenant.
@@ -539,9 +517,9 @@ async def test_auditor_write_on_perceived_workspace_returns_403(
             json={"name": "Auditor-visibility workspace", "owner_kind": "tenant"},
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-        assert create_resp.status_code == 201, (
-            f"Admin must be able to create tenant workspace; got {create_resp.status_code}: {create_resp.text}"
-        )
+        assert (
+            create_resp.status_code == 201
+        ), f"Admin must be able to create tenant workspace; got {create_resp.status_code}: {create_resp.text}"
         workspace_id = create_resp.json()["workspace_id"]
 
         # Auditor reads the workspace — must succeed (auditor can perceive tenant workspaces).
@@ -630,12 +608,8 @@ async def test_get_workspace_called_once_per_list_entries(
     that skips it.
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"ws-vis-list-{suffix}"
-    )
-    workspace_id = await _seed_workspace(
-        pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor"
-    )
+    tenant_id, actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"ws-vis-list-{suffix}")
+    workspace_id = await _seed_workspace(pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor")
 
     app = create_app(app_settings)
     workspace_svc = app.state.workspace_service
@@ -643,9 +617,7 @@ async def test_get_workspace_called_once_per_list_entries(
     call_count = 0
     _original_get_workspace = workspace_svc.get_workspace
 
-    async def _counting_get_workspace(
-        ctx: Any, workspace_id_arg: Any
-    ) -> Any:
+    async def _counting_get_workspace(ctx: Any, workspace_id_arg: Any) -> Any:
         nonlocal call_count
         call_count += 1
         return await _original_get_workspace(ctx, workspace_id_arg)
@@ -662,8 +634,7 @@ async def test_get_workspace_called_once_per_list_entries(
         )
 
     assert resp.status_code == 200, (
-        f"list_entries must return 200 for an authorized caller; "
-        f"got {resp.status_code}: {resp.text}"
+        f"list_entries must return 200 for an authorized caller; " f"got {resp.status_code}: {resp.text}"
     )
     assert call_count == 1, (
         f"get_workspace must be called exactly once per list_entries call; "
@@ -684,12 +655,8 @@ async def test_get_workspace_called_once_per_second_list_entries(
     singleton).
     """
     suffix = uuid.uuid4().hex[:6]
-    tenant_id, actor_id, token = await _seed_tenant_with_token(
-        pg_container, slug=f"ws-vis-2x-{suffix}"
-    )
-    workspace_id = await _seed_workspace(
-        pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor"
-    )
+    tenant_id, actor_id, token = await _seed_tenant_with_token(pg_container, slug=f"ws-vis-2x-{suffix}")
+    workspace_id = await _seed_workspace(pg_container, tenant_id=tenant_id, actor_id=actor_id, owner_kind="actor")
 
     app = create_app(app_settings)
     workspace_svc = app.state.workspace_service
@@ -710,21 +677,16 @@ async def test_get_workspace_called_once_per_second_list_entries(
             f"/v1/workspaces/{workspace_id}/entries",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp1.status_code == 200, (
-            f"First list_entries must return 200; got {resp1.status_code}: {resp1.text}"
-        )
+        assert resp1.status_code == 200, f"First list_entries must return 200; got {resp1.status_code}: {resp1.text}"
         assert call_count == 1, (
-            f"get_workspace must be called exactly once after first list_entries; "
-            f"got call_count={call_count}"
+            f"get_workspace must be called exactly once after first list_entries; " f"got call_count={call_count}"
         )
 
         resp2 = await client.get(
             f"/v1/workspaces/{workspace_id}/entries",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp2.status_code == 200, (
-            f"Second list_entries must return 200; got {resp2.status_code}: {resp2.text}"
-        )
+        assert resp2.status_code == 200, f"Second list_entries must return 200; got {resp2.status_code}: {resp2.text}"
         assert call_count == 2, (
             f"get_workspace must be called exactly once per list_entries call; "
             f"got call_count={call_count} after second request"

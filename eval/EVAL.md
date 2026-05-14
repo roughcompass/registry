@@ -1160,3 +1160,68 @@ Gate command: `make test-hygiene`
 - Conformance: `test_openapi_drift.py` passes.
 - Phase-boundary audit: sweep was rename-only; no service logic, no API contracts, no
   migrations changed. No drift detected.
+
+## Workspace RBAC (workspace-rbac, closed 2026-05-14)
+
+**Closed:** 2026-05-14
+**Tasks:** 25 / 25 done
+**Audit query:** see `docs/operator/workspaces.md`
+
+Per-workspace shares (`workspace_shares`, `workspace_share_acceptances`)
+removed; access governed exclusively by tenant-wide `actor_roles`
+assignments (consumer, producer, admin, auditor). A new
+`trg_ws_owner_kind_immutable` trigger enforces that `owner_kind` cannot
+change after creation. RTBF purge rewritten to delete actor-owned
+workspaces outright (and cascade their entries) rather than attempt to
+convert them to tenant-owned artifacts. MCP server identity set to
+`digital-enablement-registry` with explicit `instructions=` text so LLM
+clients receive a stable disambiguation signal.
+
+### Task completion
+
+| Task | Title | Status | Commits |
+|------|-------|--------|---------|
+| WRB-T01 | WorkspaceAuthError exception hierarchy | done | d97aa2e |
+| WRB-T02 | Migration 0020 — drop share tables, install owner_kind immutability trigger | done | f83d332 |
+| WRB-T03 | `_load_effective_roles` + `_can_perceive_workspace` helpers | done | c6ee3a1 |
+| WRB-T03a | Migrate `test_workspace_service.py` fixtures to actor_roles seeding | done | d204ae4 |
+| WRB-T04 | `get_workspace` rewire to role-based perceivability | done | 896917a |
+| WRB-T05 | `list_workspaces` + `search_workspaces` rewire | done | bf92611 |
+| WRB-T06 | Write-gate helpers — private predicates + public aliases | done | 33a8500 |
+| WRB-T07 | `create_workspace` role gate | done | 30a9c63 |
+| WRB-T08 | Entry CRUD + workspace metadata rewire | done | 7314fcb |
+| WRB-T09 | Delete share service methods; drop `revoked_shares` from PurgeResult | done | dbbaf26 |
+| WRB-T10 | Router share surface removed; exception mapping + auditor role | done | 7cf227f |
+| WRB-T11 | `list_workspace_shares` MCP tool deleted; docstrings sanitized | done | 75c3e53 |
+| WRB-T11b | MCP server identity + factory rename | done | ab64a0a |
+| WRB-T12 | `openapi.json` regenerated | done | e3d3582 |
+| WRB-T13 | Conformance invariants — five workspace guards | done | 2c8bb0c |
+| WRB-T14 | Unit tests — `_can_perceive_workspace` + write-gate helpers | done | 7c25a2a |
+| WRB-T15 | Service unit tests — role-visibility matrix | done | 55a1693 |
+| WRB-T16 | Router unit tests — auditor gate + exception mapping | done | 46df378 |
+| WRB-T17 | MCP tool tests — docstring cleanup | done | 0d81fc8 |
+| WRB-T18 | Delete `test_workspace_share_rules.py` | done | 019edb7 |
+| WRB-T19 | Integration test — role transition sequence (12 scenarios) | done | 6c4debc |
+| WRB-T20 | RTBF purge rewired; cross-tenant-shares test deleted | done | 08aac22 |
+| WRB-T21 | Perf fixture seeds actor_roles | done | 929014d |
+| WRB-T22 | `make test-conformance` gate (verify-only) | done | (status-only) |
+| WRB-T23 | Exit gate: operator runbook + EVAL.md row | done | (this commit) |
+
+### Gate state at close
+
+- `make lint`, `make typecheck`, `make doc-refs`, `make test-hygiene`,
+  `make test-unit`, `make test-conformance`: all exit 0.
+- Unit tests: **2096 passing** (up from 2015 baseline; +81 net for new
+  predicate, write-gate, role-visibility, and exception-mapping coverage).
+- Conformance: 52 passed in 138.37s, including 9 new workspace-rbac
+  invariants (PII chokepoint, `ROLE_AUDITOR` constant, `_any_roles`
+  wiring, openapi share-surface absence, MCP share-tool absence,
+  auditor-write-403, cross-tenant role-based isolation, single-call
+  `get_workspace` chokepoint).
+- Integration RTBF suite: 3 passed in 3.20s under role-based purge
+  semantics (single-writer invariant; cascade-delete of residual entries
+  in actor-owned workspaces).
+- Perf gate: list_entries p95 < 200 ms at 1,000 entries, 1 passed in
+  3.42s under the role-based SQL predicate.
+- Role-transition integration suite: 12-scenario producer→consumer,
+  producer→admin, off-boarding, and re-promotion traces all green.

@@ -447,13 +447,15 @@ async def supersede_progression_definition(
                     for ent in entities:
                         # Load its current stage_progression attribute value.
                         attr_result = await scan_session.execute(
-                            select(Attribute).where(
+                            select(Attribute)
+                            .where(
                                 Attribute.tenant_id == ctx.tenant_id,
                                 Attribute.entity_id == ent.entity_id,
                                 Attribute.key == "stage_progression",
                                 Attribute.t_invalidated_at.is_(None),
                                 Attribute.t_valid_to.is_(None),
-                            ).limit(1)
+                            )
+                            .limit(1)
                         )
                         stage_attr = attr_result.scalar_one_or_none()
                         current_state = stage_attr.value if stage_attr is not None else None
@@ -468,11 +470,13 @@ async def supersede_progression_definition(
                         states = body.definition.get("states", [])
                         valid_state_ids = {s["id"] for s in states}
                         if current_state not in valid_state_ids:
-                            offenders.append({
-                                "entity_id": str(ent.entity_id),
-                                "current_state": current_state,
-                                "validation_error": f"state '{current_state}' is not defined in the new definition",
-                            })
+                            offenders.append(
+                                {
+                                    "entity_id": str(ent.entity_id),
+                                    "current_state": current_state,
+                                    "validation_error": f"state '{current_state}' is not defined in the new definition",
+                                }
+                            )
                         else:
                             # Check gate satisfaction for the current state under the new definition.
                             state_def = next((s for s in states if s["id"] == current_state), {})
@@ -489,19 +493,20 @@ async def supersede_progression_definition(
                             attr_dict = {row.key: row.value for row in all_attrs_result.scalars()}
 
                             from registry.service.progression import is_gate_satisfied  # noqa: PLC0415
+
                             failing_gates = [g for g in gate_ids if not is_gate_satisfied(g, attr_dict)]
                             if failing_gates:
-                                offenders.append({
-                                    "entity_id": str(ent.entity_id),
-                                    "current_state": current_state,
-                                    "validation_error": f"gates not satisfied: {', '.join(failing_gates)}",
-                                })
+                                offenders.append(
+                                    {
+                                        "entity_id": str(ent.entity_id),
+                                        "current_state": current_state,
+                                        "validation_error": f"gates not satisfied: {', '.join(failing_gates)}",
+                                    }
+                                )
                 return offenders
 
             try:
-                offenders = await asyncio.wait_for(
-                    _scan(), timeout=body.force_timeout_seconds
-                )
+                offenders = await asyncio.wait_for(_scan(), timeout=body.force_timeout_seconds)
             except TimeoutError:
                 # Path C — partial results.
                 raise build_error(
@@ -525,10 +530,12 @@ async def supersede_progression_definition(
                 raise build_error(
                     status.HTTP_409_CONFLICT,
                     code="preflight_offenders_present",
-                    message=json.dumps({
-                        "offenders": offenders,
-                        "hint": "Pass force=true with migration_plan to proceed.",
-                    }),
+                    message=json.dumps(
+                        {
+                            "offenders": offenders,
+                            "hint": "Pass force=true with migration_plan to proceed.",
+                        }
+                    ),
                 )
             # Path E — zero offenders; fall through to write.
 

@@ -61,8 +61,7 @@ CREATE TABLE progression_definitions (
 """
 
 _CREATE_INDEX = (
-    "CREATE INDEX ix_progression_definitions_active "
-    "ON progression_definitions (tenant_id, entity_type, t_valid_to)"
+    "CREATE INDEX ix_progression_definitions_active " "ON progression_definitions (tenant_id, entity_type, t_valid_to)"
 )
 
 _DROP_INDEX = "DROP INDEX IF EXISTS ix_progression_definitions_active"

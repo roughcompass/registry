@@ -179,9 +179,7 @@ def _session_with_definition(
 
     session = AsyncMock()
     # Order: definition select, then possibly override select, then audit inserts.
-    session.execute = AsyncMock(
-        side_effect=[defn_result, override_result, audit_result, audit_result, audit_result]
-    )
+    session.execute = AsyncMock(side_effect=[defn_result, override_result, audit_result, audit_result, audit_result])
     session.flush = AsyncMock()
     # begin() must return a context manager, not a coroutine.
     session.begin = MagicMock(return_value=_async_noop_ctx())

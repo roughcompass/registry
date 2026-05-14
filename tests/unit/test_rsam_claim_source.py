@@ -19,6 +19,7 @@ from registry.config import Settings
 # ---------------------------------------------------------------------------
 # Helpers
 
+
 def _settings(auth_mode: str = "rsam") -> Settings:
     """Minimal Settings with required fields satisfied."""
     return Settings(
@@ -77,6 +78,7 @@ def _claims(subject: str = "F731821") -> dict:
 # ---------------------------------------------------------------------------
 # Scenario 1: Zero authorities → empty tenant_grants
 
+
 @pytest.mark.asyncio
 async def test_zero_authorities_returns_empty_grants() -> None:
     """Zero RSAM authorities → ResolvedIdentity with no tenant grants."""
@@ -99,6 +101,7 @@ async def test_zero_authorities_returns_empty_grants() -> None:
 # ---------------------------------------------------------------------------
 # Scenario 2: Single SEAL, one authority → one grant with admin role
 
+
 @pytest.mark.asyncio
 async def test_single_seal_owner_produces_admin_grant() -> None:
     """Single Owner authority → one TenantGrant with catalog_role='admin'."""
@@ -112,12 +115,15 @@ async def test_single_seal_owner_produces_admin_grant() -> None:
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims())
 
@@ -130,6 +136,7 @@ async def test_single_seal_owner_produces_admin_grant() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 3: Multi-SEAL, multiple authorities per SEAL → highest role wins
+
 
 @pytest.mark.asyncio
 async def test_multi_seal_highest_role_per_seal() -> None:
@@ -146,19 +153,24 @@ async def test_multi_seal_highest_role_per_seal() -> None:
     source = RsamClaimSource(
         settings,
         factory,
-        fetch_authorities=AsyncMock(return_value=[
-            "112025_DP_CHANNEL_Manager",
-            "112025_DP_MODULE_Operate",
-            "34612_DP_MODULE_RU",
-        ]),
+        fetch_authorities=AsyncMock(
+            return_value=[
+                "112025_DP_CHANNEL_Manager",
+                "112025_DP_MODULE_Operate",
+                "34612_DP_MODULE_RU",
+            ]
+        ),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(side_effect=_side_effect),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(side_effect=_side_effect),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims())
 
@@ -178,6 +190,7 @@ async def test_multi_seal_highest_role_per_seal() -> None:
 # ---------------------------------------------------------------------------
 # Scenario 4: Mixed valid and invalid authorities → invalid silently dropped
 
+
 @pytest.mark.asyncio
 async def test_invalid_authority_silently_dropped() -> None:
     """Non-matching authority strings are discarded; valid ones are resolved normally."""
@@ -188,18 +201,23 @@ async def test_invalid_authority_silently_dropped() -> None:
     source = RsamClaimSource(
         settings,
         factory,
-        fetch_authorities=AsyncMock(return_value=[
-            "112025_DP_CHANNEL_Owner",
-            "invalid_garbage",
-        ]),
+        fetch_authorities=AsyncMock(
+            return_value=[
+                "112025_DP_CHANNEL_Owner",
+                "invalid_garbage",
+            ]
+        ),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims())
 
@@ -211,6 +229,7 @@ async def test_invalid_authority_silently_dropped() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 5: RSAM 5xx fail-closed → exception propagates
+
 
 @pytest.mark.asyncio
 async def test_rsam_5xx_fail_closed_propagates_exception() -> None:
@@ -229,6 +248,7 @@ async def test_rsam_5xx_fail_closed_propagates_exception() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 6: RSAM 5xx stale-serve opt-in — T06 still propagates without cache
+
 
 @pytest.mark.asyncio
 async def test_rsam_5xx_stale_serve_setting_does_not_suppress_exception() -> None:
@@ -271,6 +291,7 @@ async def test_rsam_5xx_stale_serve_setting_does_not_suppress_exception() -> Non
 # ---------------------------------------------------------------------------
 # Scenario 7: audit_identity.email is None (actors-table lookup is a later task)
 
+
 @pytest.mark.asyncio
 async def test_audit_identity_email_is_none() -> None:
     """audit_identity.email is None — actors-table lookup is handled by a later task."""
@@ -284,12 +305,15 @@ async def test_audit_identity_email_is_none() -> None:
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims(subject="F731821"))
 
@@ -299,6 +323,7 @@ async def test_audit_identity_email_is_none() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 8: audit_identity.preferred_username falls back to subject
+
 
 @pytest.mark.asyncio
 async def test_audit_identity_preferred_username_falls_back_to_subject() -> None:
@@ -314,12 +339,15 @@ async def test_audit_identity_preferred_username_falls_back_to_subject() -> None
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims(subject=subject))
 
@@ -330,6 +358,7 @@ async def test_audit_identity_preferred_username_falls_back_to_subject() -> None
 
 # ---------------------------------------------------------------------------
 # Scenario 9: First-time RSAM user creates both tenants AND actors row
+
 
 @pytest.mark.asyncio
 async def test_first_time_user_creates_tenant_and_actor() -> None:
@@ -344,13 +373,16 @@ async def test_first_time_user_creates_tenant_and_actor() -> None:
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ) as mock_tenant, patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
-    ) as mock_actor:
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ) as mock_tenant,
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ) as mock_actor,
+    ):
         result = await source.resolve(_claims(subject="F731821"))
 
     mock_tenant.assert_awaited_once()
@@ -367,6 +399,7 @@ async def test_first_time_user_creates_tenant_and_actor() -> None:
 # ---------------------------------------------------------------------------
 # Scenario 10: Multi-SEAL user creates N actor rows, one per tenant
 
+
 @pytest.mark.asyncio
 async def test_multi_seal_creates_actor_per_tenant() -> None:
     """Two SEALs → upsert_rsam_actor called twice (once per tenant)."""
@@ -382,19 +415,24 @@ async def test_multi_seal_creates_actor_per_tenant() -> None:
     source = RsamClaimSource(
         settings,
         factory,
-        fetch_authorities=AsyncMock(return_value=[
-            "112025_DP_CHANNEL_Owner",
-            "34612_DP_MODULE_RU",
-        ]),
+        fetch_authorities=AsyncMock(
+            return_value=[
+                "112025_DP_CHANNEL_Owner",
+                "34612_DP_MODULE_RU",
+            ]
+        ),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(side_effect=_tenant_se),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
-    ) as mock_actor:
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(side_effect=_tenant_se),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ) as mock_actor,
+    ):
         result = await source.resolve(_claims())
 
     assert len(result.tenant_grants) == 2
@@ -403,6 +441,7 @@ async def test_multi_seal_creates_actor_per_tenant() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 11: AuditIdentity populated from actors-table row (real values)
+
 
 @pytest.mark.asyncio
 async def test_audit_identity_populated_from_actor_row() -> None:
@@ -420,12 +459,15 @@ async def test_audit_identity_populated_from_actor_row() -> None:
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         result = await source.resolve(_claims(subject="F731821"))
 
@@ -436,6 +478,7 @@ async def test_audit_identity_populated_from_actor_row() -> None:
 
 # ---------------------------------------------------------------------------
 # Scenario 12: Missing actor row after upsert is a programming error
+
 
 @pytest.mark.asyncio
 async def test_missing_actor_row_raises_runtime_error() -> None:
@@ -454,12 +497,15 @@ async def test_missing_actor_row_raises_runtime_error() -> None:
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
     ):
         with pytest.raises(RuntimeError, match="actor row missing"):
             await source.resolve(_claims())
@@ -467,6 +513,7 @@ async def test_missing_actor_row_raises_runtime_error() -> None:
 
 # ---------------------------------------------------------------------------
 # Audit tests (prefix "test_audit_" so pytest -k "audit" selects them)
+
 
 def _extract_audit_call_params(session: AsyncMock, action: str) -> dict | None:
     """Scan all session.execute calls for one whose SQL text contains action.
@@ -512,15 +559,17 @@ async def test_audit_claim_source_invoked_emitted_with_payload() -> None:
         fetch_authorities=AsyncMock(return_value=raw_authorities),
     )
 
-    with patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_tenant",
-        AsyncMock(return_value=tenant_uuid),
-    ), patch(
-        "registry.auth.rsam.claim_source.upsert_rsam_actor",
-        AsyncMock(),
-    ), patch(
-        "registry.auth.rsam.claim_source._log"
-    ) as mock_log:
+    with (
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            AsyncMock(return_value=tenant_uuid),
+        ),
+        patch(
+            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            AsyncMock(),
+        ),
+        patch("registry.auth.rsam.claim_source._log") as mock_log,
+    ):
         await source.resolve(_claims(subject=subject))
 
     # Verify the structured log call contains the expected fields.
@@ -582,14 +631,16 @@ async def test_audit_tenant_jit_created_payload_complete() -> None:
     claim_audit_result.fetchone = MM(return_value=None)
 
     session = AM()
-    session.execute = AM(side_effect=[
-        insert_result,      # upsert_rsam_tenant: INSERT ... RETURNING
-        audit_result,       # upsert_rsam_tenant: INSERT INTO audit_log (tenant.jit_created)
-        actor_no_row,       # upsert_rsam_actor: INSERT ... RETURNING (DO NOTHING)
-        actor_select_result,  # upsert_rsam_actor: SELECT to find existing actor
-        actor_select_result,  # _build_audit_identity SELECT
-        claim_audit_result, # auth.claim_source.invoked audit INSERT
-    ])
+    session.execute = AM(
+        side_effect=[
+            insert_result,  # upsert_rsam_tenant: INSERT ... RETURNING
+            audit_result,  # upsert_rsam_tenant: INSERT INTO audit_log (tenant.jit_created)
+            actor_no_row,  # upsert_rsam_actor: INSERT ... RETURNING (DO NOTHING)
+            actor_select_result,  # upsert_rsam_actor: SELECT to find existing actor
+            actor_select_result,  # _build_audit_identity SELECT
+            claim_audit_result,  # auth.claim_source.invoked audit INSERT
+        ]
+    )
     begin_cm = AM()
     begin_cm.__aenter__ = AM(return_value=None)
     begin_cm.__aexit__ = AM(return_value=False)
@@ -665,14 +716,16 @@ async def test_audit_actor_jit_created_payload_complete() -> None:
     claim_audit_result.fetchone = MM(return_value=None)
 
     session = AM()
-    session.execute = AM(side_effect=[
-        tenant_insert_result,   # upsert_rsam_tenant INSERT RETURNING
-        tenant_audit_result,    # tenant.jit_created audit INSERT
-        actor_insert_result,    # upsert_rsam_actor INSERT RETURNING
-        actor_audit_result,     # actor.jit_created audit INSERT
-        audit_identity_result,  # _build_audit_identity SELECT
-        claim_audit_result,     # auth.claim_source.invoked audit INSERT
-    ])
+    session.execute = AM(
+        side_effect=[
+            tenant_insert_result,  # upsert_rsam_tenant INSERT RETURNING
+            tenant_audit_result,  # tenant.jit_created audit INSERT
+            actor_insert_result,  # upsert_rsam_actor INSERT RETURNING
+            actor_audit_result,  # actor.jit_created audit INSERT
+            audit_identity_result,  # _build_audit_identity SELECT
+            claim_audit_result,  # auth.claim_source.invoked audit INSERT
+        ]
+    )
     begin_cm = AM()
     begin_cm.__aenter__ = AM(return_value=None)
     begin_cm.__aexit__ = AM(return_value=False)

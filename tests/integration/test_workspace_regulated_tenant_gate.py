@@ -191,12 +191,10 @@ async def test_regulated_tenant_cannot_create_workspace(pg_container: str, app_c
         json={"name": "regulated-ws", "owner_kind": "tenant"},
     )
     assert resp.status_code == 422, (
-        f"Regulated tenant must receive 422 on workspace create; "
-        f"got {resp.status_code}. Response: {resp.text}"
+        f"Regulated tenant must receive 422 on workspace create; " f"got {resp.status_code}. Response: {resp.text}"
     )
     assert resp.json()["errors"][0]["message"] == _REGULATED_ERROR, (
-        f"422 error message must match exact service error message. "
-        f"Got: {resp.json()['errors'][0]['message']!r}"
+        f"422 error message must match exact service error message. " f"Got: {resp.json()['errors'][0]['message']!r}"
     )
 
 
@@ -223,8 +221,7 @@ async def test_unregulated_tenant_can_create_workspace(pg_container: str, app_cl
         json={"name": "unregulated-ws", "owner_kind": "tenant"},
     )
     assert resp.status_code == 201, (
-        f"Unregulated tenant must receive 201 on workspace create; "
-        f"got {resp.status_code}. Response: {resp.text}"
+        f"Unregulated tenant must receive 201 on workspace create; " f"got {resp.status_code}. Response: {resp.text}"
     )
     assert "workspace_id" in resp.json()
 
@@ -235,9 +232,7 @@ async def test_unregulated_tenant_can_create_workspace(pg_container: str, app_cl
 
 
 @pytest.mark.asyncio
-async def test_regulated_tenant_entry_create_blocked_independently(
-    pg_container: str, app_client
-) -> None:
+async def test_regulated_tenant_entry_create_blocked_independently(pg_container: str, app_client) -> None:
     """Entry-layer guard fires independently of workspace-create guard.
 
     A regulated tenant with a workspace row injected directly via SQL (bypassing
@@ -287,9 +282,7 @@ async def test_regulated_tenant_entry_create_blocked_independently(
 
 
 @pytest.mark.asyncio
-async def test_regulated_block_does_not_affect_other_tenants(
-    pg_container: str, app_client
-) -> None:
+async def test_regulated_block_does_not_affect_other_tenants(pg_container: str, app_client) -> None:
     """Block is tenant-scoped: an unregulated tenant can create workspaces and entries.
 
     Confirms that the is_regulated check is read from the calling tenant's row,
@@ -319,9 +312,7 @@ async def test_regulated_block_does_not_affect_other_tenants(
         headers={"Authorization": f"Bearer {reg_token}"},
         json={"name": "should-fail", "owner_kind": "tenant"},
     )
-    assert reg_resp.status_code == 422, (
-        f"Regulated tenant must be blocked; got {reg_resp.status_code}"
-    )
+    assert reg_resp.status_code == 422, f"Regulated tenant must be blocked; got {reg_resp.status_code}"
 
     # Unregulated tenant → 201.
     ok_resp = await client.post(
@@ -330,8 +321,7 @@ async def test_regulated_block_does_not_affect_other_tenants(
         json={"name": "should-succeed", "owner_kind": "tenant"},
     )
     assert ok_resp.status_code == 201, (
-        f"Unregulated tenant must succeed; got {ok_resp.status_code}. "
-        f"Response: {ok_resp.text}"
+        f"Unregulated tenant must succeed; got {ok_resp.status_code}. " f"Response: {ok_resp.text}"
     )
     ws_id = ok_resp.json()["workspace_id"]
 

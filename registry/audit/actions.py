@@ -35,42 +35,42 @@ __all__ = [
     "RTBF_PURGE",
 ]
 
-ANNOTATION_CREATED: Final[str]                  = "annotation.created"
-ANNOTATION_TRIAGED: Final[str]                  = "annotation.triaged"
-ANNOTATION_DELETED: Final[str]                  = "annotation.deleted"
-ENTITY_UPDATED: Final[str]                      = "entity.updated"
-ENTITY_DELETED: Final[str]                      = "entity.deleted"
-ADOPTION_REVOKED: Final[str]                    = "adoption.revoked"
-ENTITY_VISIBILITY_SET: Final[str]               = "entity.visibility_set"
-EXTERNAL_ID_DELETED: Final[str]                 = "external_id.deleted"
-PROGRESSION_DEFINITION_PUBLISHED: Final[str]    = "progression.definition.published"
+ANNOTATION_CREATED: Final[str] = "annotation.created"
+ANNOTATION_TRIAGED: Final[str] = "annotation.triaged"
+ANNOTATION_DELETED: Final[str] = "annotation.deleted"
+ENTITY_UPDATED: Final[str] = "entity.updated"
+ENTITY_DELETED: Final[str] = "entity.deleted"
+ADOPTION_REVOKED: Final[str] = "adoption.revoked"
+ENTITY_VISIBILITY_SET: Final[str] = "entity.visibility_set"
+EXTERNAL_ID_DELETED: Final[str] = "external_id.deleted"
+PROGRESSION_DEFINITION_PUBLISHED: Final[str] = "progression.definition.published"
 PROGRESSION_DEFINITION_SOFT_DELETED: Final[str] = "progression.definition.soft_deleted"
-PROGRESSION_OVERRIDE_CREATED: Final[str]        = "progression.override.created"
-PROGRESSION_TRANSITION_ACCEPTED: Final[str]     = "progression.transition.accepted"
-PROGRESSION_TRANSITION_REJECTED: Final[str]     = "progression.transition.rejected"
-PROGRESSION_TRANSITION_WARNED: Final[str]       = "progression.transition.warned"
-PROGRESSION_TRANSITION_OVERRIDDEN: Final[str]   = "progression.transition.overridden"
+PROGRESSION_OVERRIDE_CREATED: Final[str] = "progression.override.created"
+PROGRESSION_TRANSITION_ACCEPTED: Final[str] = "progression.transition.accepted"
+PROGRESSION_TRANSITION_REJECTED: Final[str] = "progression.transition.rejected"
+PROGRESSION_TRANSITION_WARNED: Final[str] = "progression.transition.warned"
+PROGRESSION_TRANSITION_OVERRIDDEN: Final[str] = "progression.transition.overridden"
 
 # Workspace lifecycle actions — used by WorkspaceService.
 # Named noun.verb to match the registry-wide audit action convention.
-WORKSPACE_CREATED: Final[str]                   = "workspace.created"
-WORKSPACE_UPDATED: Final[str]                   = "workspace.updated"
-WORKSPACE_DELETED: Final[str]                   = "workspace.deleted"
+WORKSPACE_CREATED: Final[str] = "workspace.created"
+WORKSPACE_UPDATED: Final[str] = "workspace.updated"
+WORKSPACE_DELETED: Final[str] = "workspace.deleted"
 
 # Workspace entry lifecycle actions — used by WorkspaceService entry CRUD methods.
-WORKSPACE_ENTRY_CREATED: Final[str]             = "workspace.entry.created"
-WORKSPACE_ENTRY_UPDATED: Final[str]             = "workspace.entry.updated"
-WORKSPACE_ENTRY_DELETED: Final[str]             = "workspace.entry.deleted"
+WORKSPACE_ENTRY_CREATED: Final[str] = "workspace.entry.created"
+WORKSPACE_ENTRY_UPDATED: Final[str] = "workspace.entry.updated"
+WORKSPACE_ENTRY_DELETED: Final[str] = "workspace.entry.deleted"
 
 # Workspace share lifecycle actions — used by WorkspaceService share methods.
-WORKSPACE_SHARE_GRANTED: Final[str]             = "workspace.share.granted"
-WORKSPACE_SHARE_REVOKED: Final[str]             = "workspace.share.revoked"
+WORKSPACE_SHARE_GRANTED: Final[str] = "workspace.share.granted"
+WORKSPACE_SHARE_REVOKED: Final[str] = "workspace.share.revoked"
 
 # Workspace expiry worker — emitted per batch of soft-invalidated entries.
 # Tenant context is synthetic (system actor) because the worker spans all tenants.
-WORKSPACE_ENTRY_EXPIRED: Final[str]             = "workspace.entry.expired"
+WORKSPACE_ENTRY_EXPIRED: Final[str] = "workspace.entry.expired"
 
 # Right-to-be-forgotten physical purge. Cross-cutting concern; noun.verb taxonomy
 # uses the operation's domain ("rtbf") rather than the service that executes it,
 # because future phases may consolidate purge operations across content tables.
-RTBF_PURGE: Final[str]                          = "rtbf.purge"
+RTBF_PURGE: Final[str] = "rtbf.purge"

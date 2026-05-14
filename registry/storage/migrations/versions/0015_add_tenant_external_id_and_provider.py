@@ -51,9 +51,7 @@ depends_on: tuple[str, ...] | None = None
 # SQL fragments
 # ---------------------------------------------------------------------------
 
-_ADD_EXTERNAL_TENANT_ID = (
-    "ALTER TABLE tenants ADD COLUMN external_tenant_id TEXT NULL"
-)
+_ADD_EXTERNAL_TENANT_ID = "ALTER TABLE tenants ADD COLUMN external_tenant_id TEXT NULL"
 
 _ADD_PROVIDER = (
     "ALTER TABLE tenants ADD COLUMN provider TEXT NOT NULL DEFAULT 'manual' "
@@ -76,9 +74,7 @@ _DROP_EXTERNAL_TENANT_ID = "ALTER TABLE tenants DROP COLUMN IF EXISTS external_t
 # varchar(32) column. Revision IDs starting from this migration are longer
 # than 32 characters, so we widen the column to TEXT before Alembic writes
 # this revision's ID into it.
-_WIDEN_VERSION_NUM = (
-    "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE TEXT"
-)
+_WIDEN_VERSION_NUM = "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE TEXT"
 
 
 # ---------------------------------------------------------------------------
