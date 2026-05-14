@@ -3485,16 +3485,11 @@
           "purged_workspaces": {
             "title": "Purged Workspaces",
             "type": "integer"
-          },
-          "revoked_shares": {
-            "title": "Revoked Shares",
-            "type": "integer"
           }
         },
         "required": [
           "purged_entries",
-          "purged_workspaces",
-          "revoked_shares"
+          "purged_workspaces"
         ],
         "title": "PurgeResultResponse",
         "type": "object"
@@ -3636,35 +3631,6 @@
           "visibility"
         ],
         "title": "SetVisibilityRequest",
-        "type": "object"
-      },
-      "ShareCreateRequest": {
-        "description": "Request body for POST /v1/workspaces/{workspace_id}/shares.",
-        "properties": {
-          "grantee_actor_id": {
-            "description": "UUID of the actor being granted access.",
-            "format": "uuid",
-            "title": "Grantee Actor Id",
-            "type": "string"
-          },
-          "grantee_tenant_id": {
-            "description": "UUID of the grantee's tenant.",
-            "format": "uuid",
-            "title": "Grantee Tenant Id",
-            "type": "string"
-          },
-          "role": {
-            "description": "Share role. Must be 'reader' or 'contributor'.",
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "grantee_actor_id",
-          "grantee_tenant_id",
-          "role"
-        ],
-        "title": "ShareCreateRequest",
         "type": "object"
       },
       "SubscriptionCreate": {
@@ -10843,7 +10809,7 @@
     },
     "/v1/workspaces/{workspace_id}": {
       "delete": {
-        "description": "Soft-delete a workspace. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: the caller must be the owning actor or an admin in the\nworkspace's owning tenant. The service sets t_invalidated_at and treats\nalready-deleted workspaces as a no-op rather than an error.",
+        "description": "Soft-delete a workspace. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization is role-based: the write-gate checks owner_kind and\neffective_roles. WorkspaceNotFound \u2192 404; WorkspaceOperationDenied \u2192 403.\nAlready-deleted workspaces are a no-op rather than an error.",
         "operationId": "_delete_workspace_handler_v1_workspaces__workspace_id__delete",
         "parameters": [
           {
@@ -10878,7 +10844,7 @@
         ]
       },
       "get": {
-        "description": "Return a single workspace by ID.\n\nThe service enforces visibility: the caller must own the workspace or hold\nan active share. Raises 403 if not authorized, 404 if not found.",
+        "description": "Return a single workspace by ID.\n\nThe service enforces visibility via role-based access control.\nWorkspaceNotFound \u2192 404; WorkspaceOperationDenied \u2192 403.",
         "operationId": "_get_workspace_handler_v1_workspaces__workspace_id__get",
         "parameters": [
           {
@@ -11118,7 +11084,7 @@
     },
     "/v1/workspaces/{workspace_id}/entries/{entry_id}": {
       "delete": {
-        "description": "Soft-delete a workspace entry. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: the caller must own the workspace or hold an active contributor\nshare. The service enforces this via get_workspace before writing.",
+        "description": "Soft-delete a workspace entry. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization is role-based: the write-gate checks owner_kind and\neffective_roles. WorkspaceNotFound \u2192 404; WorkspaceOperationDenied \u2192 403.",
         "operationId": "_delete_entry_handler_v1_workspaces__workspace_id__entries__entry_id__delete",
         "parameters": [
           {
@@ -11222,157 +11188,6 @@
           }
         },
         "summary": "Update a workspace entry",
-        "tags": [
-          "workspaces"
-        ]
-      }
-    },
-    "/v1/workspaces/{workspace_id}/shares": {
-      "get": {
-        "description": "List active (not revoked) shares for a workspace.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant. The service enforces this before returning data.\n\nReturns only shares where revoked_at IS NULL. For full audit history\n(including revocations), query the audit_log.",
-        "operationId": "list_shares_v1_workspaces__workspace_id__shares_get",
-        "parameters": [
-          {
-            "description": "Workspace UUID",
-            "in": "path",
-            "name": "workspace_id",
-            "required": true,
-            "schema": {
-              "description": "Workspace UUID",
-              "format": "uuid",
-              "title": "Workspace Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Shares V1 Workspaces  Workspace Id  Shares Get",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List active shares on a workspace",
-        "tags": [
-          "workspaces"
-        ]
-      },
-      "post": {
-        "description": "Grant an actor access to a workspace.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant.\n\nActor-owned workspaces may only be shared within the same tenant \u2014 a\ncross-tenant share attempt returns 422. Tenant-owned workspaces allow\ncross-tenant shares.\n\nA 409 is returned when an active (non-revoked) share already exists for\nthe grantee. Granting after a prior revocation is allowed: a new row is\ninserted because the unique partial index only covers active rows.",
-        "operationId": "grant_share_v1_workspaces__workspace_id__shares_post",
-        "parameters": [
-          {
-            "description": "Workspace UUID",
-            "in": "path",
-            "name": "workspace_id",
-            "required": true,
-            "schema": {
-              "description": "Workspace UUID",
-              "format": "uuid",
-              "title": "Workspace Id",
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ShareCreateRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Grant Share V1 Workspaces  Workspace Id  Shares Post",
-                  "type": "object"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Grant a share on a workspace",
-        "tags": [
-          "workspaces"
-        ]
-      }
-    },
-    "/v1/workspaces/{workspace_id}/shares/{share_id}": {
-      "delete": {
-        "description": "Revoke a workspace share. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization: caller must be the workspace owner or an admin in the\nworkspace's owning tenant. The service enforces this before revoking.\n\nRaises 404 if share_id does not exist.",
-        "operationId": "_delete_share_handler_v1_workspaces__workspace_id__shares__share_id__delete",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "workspace_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Workspace Id",
-              "type": "string"
-            }
-          },
-          {
-            "in": "path",
-            "name": "share_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Share Id",
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "204": {
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Revoke a workspace share (idempotent)",
         "tags": [
           "workspaces"
         ]

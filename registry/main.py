@@ -956,18 +956,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     from registry.api.routers.workspaces import (
         router as workspace_router,
     )
-    from registry.api.routers.workspaces import (
-        share_mutation_router as workspace_share_mutation_router,
-    )
-    from registry.api.routers.workspaces import (
-        share_router as workspace_share_router,
-    )
 
     app.include_router(workspace_router)
     app.include_router(workspace_mutation_router)
     app.include_router(workspace_entry_mutation_router)
-    app.include_router(workspace_share_router)
-    app.include_router(workspace_share_mutation_router)
 
     # Progression definition admin endpoints (POST/GET/PUT/DELETE).
     from registry.api.routers.admin_progression import router as admin_progression_router  # noqa: PLC0415
