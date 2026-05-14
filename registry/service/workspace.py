@@ -911,25 +911,19 @@ class WorkspaceService:
         at the call site, so callers that want to leave archived_at untouched
         must omit the argument (use the existing WorkspaceRef value themselves).
         """
-        # Step 1 — visibility + 403/404 gate.
+        # Step 1 — visibility check (raises WorkspaceNotFound on 404/access denial).
         existing = await self.get_workspace(ctx, workspace_id)
 
-        # Step 2 — write-auth: owning actor or admin in the workspace's tenant.
-        is_owner = (
-            existing.owner_actor_id is not None
-            and ctx.actor_id == existing.owner_actor_id
-        )
-        is_tenant_admin = (
-            ctx.tenant_id == existing.tenant_id and "admin" in ctx.roles
-        )
-        if not (is_owner or is_tenant_admin):
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    f"Actor {ctx.actor_id} is not authorized to update workspace {workspace_id}. "
-                    "Must be the owning actor or an admin in the workspace's tenant."
-                ),
+        # Step 2 — write-auth gate: load roles and call the write helper.
+        # _assert_can_archive_workspace is used (rather than _assert_can_update_workspace)
+        # because update_workspace handles both metadata changes and archiving/unarchiving.
+        # An already-archived workspace must still be un-archivable by the right role
+        # holder, so the gate must be archive-state-independent.
+        async with self._session_factory() as session, session.begin():
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
             )
+        _assert_can_archive_workspace(effective_roles, ctx.actor_id, existing)
 
         now = self._clock.now()
         effective_name = name if name is not None else existing.name
@@ -1012,14 +1006,16 @@ class WorkspaceService:
         now = self._clock.now()
 
         # Fetch the row directly (including already-soft-deleted rows) so we can
-        # distinguish "doesn't exist" (→ 404) from "already deleted" (→ no-op).
+        # distinguish "doesn't exist" (→ WorkspaceNotFound) from "already deleted"
+        # (→ no-op idempotency). The role-based visibility gate in get_workspace
+        # filters soft-deleted rows, so we bypass it here with a direct query.
         async with self._session_factory() as session, session.begin():
             ws_result = await session.execute(
                 text(
                     """
                     SELECT
                         workspace_id, tenant_id, owner_kind, owner_actor_id,
-                        t_invalidated_at
+                        archived_at, t_invalidated_at
                     FROM workspaces
                     WHERE workspace_id = :workspace_id
                     """
@@ -1029,10 +1025,7 @@ class WorkspaceService:
             ws_row = ws_result.first()
 
             if ws_row is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Workspace {workspace_id} not found.",
-                )
+                raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
             # Idempotency: already soft-deleted — no-op, no audit.
             if ws_row.t_invalidated_at is not None:
@@ -1043,22 +1036,27 @@ class WorkspaceService:
                 )
                 return
 
-            # Write-auth: owning actor or admin in the workspace's owning tenant.
-            is_owner = (
-                ws_row.owner_actor_id is not None
-                and ctx.actor_id == ws_row.owner_actor_id
+            # Write-auth gate: load roles and call the write helper.
+            # Build a minimal WorkspaceRef so the helper can evaluate owner_kind
+            # and owner_actor_id. archived_at is included because the helper
+            # signature accepts the full ref shape.
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
             )
-            is_tenant_admin = (
-                ctx.tenant_id == ws_row.tenant_id and "admin" in ctx.roles
+            _ws_ref = WorkspaceRef(
+                workspace_id=ws_row.workspace_id,
+                tenant_id=ws_row.tenant_id,
+                name="",
+                description=None,
+                owner_kind=ws_row.owner_kind,
+                owner_actor_id=ws_row.owner_actor_id,
+                archived_at=ws_row.archived_at,
+                created_at=now,
+                updated_at=now,
+                created_by=None,
+                t_invalidated_at=ws_row.t_invalidated_at,
             )
-            if not (is_owner or is_tenant_admin):
-                raise HTTPException(
-                    status_code=403,
-                    detail=(
-                        f"Actor {ctx.actor_id} is not authorized to delete workspace {workspace_id}. "
-                        "Must be the owning actor or an admin in the workspace's tenant."
-                    ),
-                )
+            assert_can_soft_delete_workspace(ctx, _ws_ref, effective_roles)
 
             await session.execute(
                 text(
@@ -1148,8 +1146,15 @@ class WorkspaceService:
                     ),
                 )
 
-        # Step 1 — get_workspace access check (raises 403/404).
-        await self.get_workspace(ctx, workspace_id)
+        # Step 1 — visibility check and write-auth gate.
+        # get_workspace confirms perceivability; then load roles and enforce
+        # the write gate before any mutation proceeds.
+        ws = await self.get_workspace(ctx, workspace_id)
+        async with self._session_factory() as session, session.begin():
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
+            )
+        assert_can_create_entry(ctx, ws, effective_roles)
 
         # Step 2 — validate kind.
         if kind not in VALID_ENTRY_KINDS:
@@ -1331,8 +1336,13 @@ class WorkspaceService:
                 detail=f"Workspace entry {entry_id} not found.",
             )
 
-        # Access check via the entry's workspace (raises 403/404 for workspace access).
-        await self.get_workspace(ctx, entry_row.workspace_id)
+        # Access check via the entry's workspace: perceivability first, then write gate.
+        ws = await self.get_workspace(ctx, entry_row.workspace_id)
+        async with self._session_factory() as session, session.begin():
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
+            )
+        assert_can_update_entry(ctx, ws, effective_roles)
 
         # PII scan on body_md (when provided). Three-outcome dispatch:
         #   block    → raise 422; do NOT update row.
@@ -1495,8 +1505,13 @@ class WorkspaceService:
                 )
                 return
 
-        # Access check via the entry's workspace.
-        await self.get_workspace(ctx, entry_row.workspace_id)
+        # Access check via the entry's workspace: perceivability first, then write gate.
+        ws = await self.get_workspace(ctx, entry_row.workspace_id)
+        async with self._session_factory() as session, session.begin():
+            effective_roles = await _load_effective_roles(
+                session, ctx.actor_id, ctx.tenant_id
+            )
+        _assert_can_write_entries(effective_roles, ctx.actor_id, ws)
 
         async with self._session_factory() as session, session.begin():
             await session.execute(

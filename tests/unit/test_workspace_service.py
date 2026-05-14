@@ -552,17 +552,15 @@ async def test_update_workspace_name_succeeds_and_audits() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_workspace_by_consumer_raises_403() -> None:
-    """update_workspace raises 403 when the caller is a consumer (read-only role)."""
-    # Consumer can perceive actor-owned workspace they own, but cannot write metadata
+async def test_update_workspace_by_consumer_raises_denied() -> None:
+    """update_workspace raises WorkspaceOperationDenied when the caller is a consumer."""
+    # Consumer can perceive actor-owned workspace they own, but cannot write metadata.
     ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_A, roles=["consumer"])
     ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
     svc = _make_service(workspace_row=ws_row, actor_roles=["consumer"])
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceOperationDenied):
         await svc.update_workspace(ctx, _WORKSPACE_ID, name="Hacked")
-
-    assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -627,21 +625,20 @@ async def test_delete_workspace_by_owner_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_by_non_owner_raises_403() -> None:
-    """delete_workspace raises 403 when the caller is not the owner or a tenant admin."""
-    # ACTOR_B in TENANT_B — not owner, not admin in TENANT_A
-    ctx = _ctx(tenant=_TENANT_B, actor=_ACTOR_B, roles=["producer"])
+async def test_delete_workspace_by_non_owner_raises_denied() -> None:
+    """delete_workspace raises WorkspaceOperationDenied when the caller is not the owner."""
+    # ACTOR_B — not the owner of the actor-owned workspace (owner is ACTOR_A).
+    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_B, roles=["producer"])
     ws_row = _make_workspace_row(
         tenant_id=_TENANT_A,
+        owner_kind="actor",
         owner_actor_id=_ACTOR_A,
         t_invalidated_at=None,
     )
-    svc = _make_service(workspace_row=ws_row)
+    svc = _make_service(workspace_row=ws_row, actor_roles=["producer"])
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceOperationDenied):
         await svc.delete_workspace(ctx, _WORKSPACE_ID)
-
-    assert exc_info.value.status_code == 403
 
 
 # ---------------------------------------------------------------------------
@@ -671,16 +668,14 @@ async def test_delete_workspace_second_call_is_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_workspace_raises_404_for_nonexistent() -> None:
-    """delete_workspace raises 404 when no workspace row exists."""
+async def test_delete_workspace_raises_not_found_for_nonexistent() -> None:
+    """delete_workspace raises WorkspaceNotFound when no workspace row exists."""
     ctx = _ctx()
-    # workspace_row=None → the raw SELECT returns nothing
+    # workspace_row=None → the raw SELECT returns nothing.
     svc = _make_service(workspace_row=None)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceNotFound):
         await svc.delete_workspace(ctx, _WORKSPACE_ID)
-
-    assert exc_info.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -811,16 +806,14 @@ async def test_audit_emitted_once_per_delete() -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_workspace_raises_404_for_soft_deleted() -> None:
-    """update_workspace raises 404 when the workspace is soft-deleted (get_workspace returns 404)."""
+async def test_update_workspace_raises_not_found_for_missing() -> None:
+    """update_workspace raises WorkspaceNotFound when the workspace does not exist."""
     ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_A)
-    # workspace_row=None simulates a soft-deleted row excluded by the WHERE clause
+    # workspace_row=None simulates a workspace row that does not exist.
     svc = _make_service(workspace_row=None)
 
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(WorkspaceNotFound):
         await svc.update_workspace(ctx, _WORKSPACE_ID, name="Should fail")
-
-    assert exc_info.value.status_code == 404
 
 
 # ---------------------------------------------------------------------------
@@ -1088,10 +1081,10 @@ async def test_update_workspace_tenant_admin_can_update() -> None:
     """An admin actor in the workspace's tenant can update it even if not the owner."""
     admin_actor = uuid.uuid4()
     ctx = _ctx(tenant=_TENANT_A, actor=admin_actor, roles=["admin"])
-    # Workspace is owned by ACTOR_A (different actor but same tenant)
-    ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_actor_id=_ACTOR_A)
+    # Workspace is tenant-owned; any admin in the tenant may update.
+    ws_row = _make_workspace_row(tenant_id=_TENANT_A, owner_kind="tenant", owner_actor_id=None)
     writer = _audit_writer()
-    svc = _make_service(workspace_row=ws_row, audit_writer=writer)
+    svc = _make_service(workspace_row=ws_row, actor_roles=["admin"], audit_writer=writer)
 
     ref = await svc.update_workspace(ctx, _WORKSPACE_ID, name="Admin Renamed")
 
@@ -1106,16 +1099,17 @@ async def test_update_workspace_tenant_admin_can_update() -> None:
 
 @pytest.mark.asyncio
 async def test_delete_workspace_tenant_admin_can_delete() -> None:
-    """An admin actor in the workspace's tenant can delete it even if not the owner."""
+    """An admin actor in the workspace's tenant can delete a tenant-owned workspace."""
     admin_actor = uuid.uuid4()
     ctx = _ctx(tenant=_TENANT_A, actor=admin_actor, roles=["admin"])
     ws_row = _make_workspace_row(
         tenant_id=_TENANT_A,
-        owner_actor_id=_ACTOR_A,
+        owner_kind="tenant",
+        owner_actor_id=None,
         t_invalidated_at=None,
     )
     writer = _audit_writer()
-    svc = _make_service(workspace_row=ws_row, audit_writer=writer)
+    svc = _make_service(workspace_row=ws_row, actor_roles=["admin"], audit_writer=writer)
 
     await svc.delete_workspace(ctx, _WORKSPACE_ID)
 
