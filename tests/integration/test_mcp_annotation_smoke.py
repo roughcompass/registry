@@ -15,17 +15,10 @@ without a live socket.
 Instead, tool calls are made in-process via ``mcp_server.call_tool()`` and
 ``mcp_server.list_tools()`` — the same interface the SSE handler uses
 internally. Before each call, the Bearer token ContextVar (``_request_token``)
-is set explicitly, which is exactly what ``handle_sse`` does before delegating
-to the MCP server. This exercises every layer that matters:
-
-- Tool registration: all three annotation tools must appear in list_tools().
-- Auth shim: _resolve_tenant reads _request_token and hits the real Postgres
-  api_tokens table; an invalid token raises ToolError.
-- AnnotationService: the real service instance (no mocks) runs against
-  testcontainers Postgres, including visibility checks, PII scanning, and
-  SQL writes.
-- ToolError propagation: HTTPException-to-ToolError translation path is
-  exercised end-to-end.
+and the app-reference ContextVar (``_request_app``) are set explicitly, which
+is exactly what ``handle_sse`` does. The OIDC validator is patched via the same
+``patch_validator_for_actor`` helper used by the REST integration tests, so no
+real JWT signing is needed.
 
 This is a fundamentally different test from the unit suite: all three services
 (visibility, PII scanner, annotation persistence) are live.
@@ -35,7 +28,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import secrets
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
@@ -46,9 +38,13 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
 from registry.api.routers.annotations import _AuditWriterAdapter
-from registry.api.routers.mcp import _request_token, create_registry_mcp_server
+from registry.api.routers.mcp import (
+    _request_app,
+    _request_token,
+    _request_x_tenant_id,
+    create_registry_mcp_server,
+)
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.security.pii_scanner import build_builtin_scanner
@@ -59,62 +55,19 @@ from registry.service.schema import SchemaService
 from registry.service.visibility import VISIBILITY_PUBLIC, VisibilityService
 from registry.service.vocabulary import VocabularyService
 from registry.types import FakeClock
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
-# Seed helpers (reuse the SQL-direct pattern from existing integration tests)
+# Seed helpers
 # ---------------------------------------------------------------------------
-
-
-async def _seed_tenant_with_token(
-    pg_url: str,
-    *,
-    slug: str,
-    roles: list[str] | None = None,
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert (tenant, actor, api_token). Returns (tenant_id, actor_id, raw_token)."""
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    role_list = roles or ["producer", "consumer", "admin"]
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": role_list,
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
 
 
 async def _seed_capability(
@@ -150,28 +103,56 @@ async def _seed_capability(
     return cap_id
 
 
-# ---------------------------------------------------------------------------
-# Helper: set _request_token ContextVar and call tool (mirrors handle_sse)
-# ---------------------------------------------------------------------------
-
-
-async def _call_as(mcp: Any, *, token: str, tool: str, args: dict[str, Any]) -> list[Any]:
-    """Set the Bearer token ContextVar and call the tool in-process.
-
-    This mirrors what the SSE handler (handle_sse) does before delegating
-    to the MCP server: it writes the raw Bearer token into _request_token
-    so _resolve_tenant can validate it against the DB.
-
-    Returns the content list from the call result. call_tool() returns a
-    (content_list, structured_result) tuple; callers receive the content list
-    so assertions work uniformly across all tools.
-    """
-    cv_token = _request_token.set(token)
+async def _get_tenant_id(pg_url: str, slug: str) -> uuid.UUID:
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        content, _structured = await mcp.call_tool(tool, args)
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+                )
+            ).first()
+            assert row is not None, f"tenant {slug} not materialised"
+            return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Helper: set ContextVars and call tool (mirrors handle_sse)
+# ---------------------------------------------------------------------------
+
+
+async def _call_as(
+    mcp: Any,
+    *,
+    persona: TenantPersona,
+    harness_app: Any,
+    tool: str,
+    args: dict[str, Any],
+) -> list[Any]:
+    """Set auth ContextVars and call the MCP tool in-process.
+
+    This mirrors what handle_sse does before delegating to the MCP server:
+    it writes the raw Bearer token into ``_request_token`` and the FastAPI
+    app into ``_request_app``. The OIDC validator is patched for the
+    duration of the call via ``patch_validator_for_actor`` so no real JWT
+    is needed.
+
+    Returns the content list from the call result.
+    """
+    cv_token = _request_token.set("harness.dummy.jwt")
+    cv_app = _request_app.set(harness_app)
+    cv_xtid = _request_x_tenant_id.set(persona.slug)
+    try:
+        with patch_validator_for_actor(persona):
+            content, _structured = await mcp.call_tool(tool, args)
         return content  # type: ignore[return-value]
     finally:
         _request_token.reset(cv_token)
+        _request_app.reset(cv_app)
+        _request_x_tenant_id.reset(cv_xtid)
 
 
 # ---------------------------------------------------------------------------
@@ -180,74 +161,101 @@ async def _call_as(mcp: Any, *, token: str, tool: str, args: dict[str, Any]) -> 
 
 
 @pytest_asyncio.fixture
-async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> AsyncIterator[dict[str, Any]]:
+async def mcp_annotation_harness(
+    pg_container: str, app_settings: Settings
+) -> AsyncIterator[dict[str, Any]]:
     """Build a fully-wired FastMCP server against a live Postgres instance.
 
     Returns a dict with:
       - mcp: FastMCP server instance (the object under test)
       - mcp_block: FastMCP server instance with block-policy PII scanner
+      - harness: EntitlementAuthHarness (auth mock + app + personas)
       - pg_url: the Postgres URL (for seeding)
     """
-    engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
-    session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    clock = FakeClock(_NOW)
+    async with EntitlementAuthHarness(pg_container) as h:
+        engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+        clock = FakeClock(_NOW)
 
-    vocabulary = VocabularyService(session_factory)
-    schema = SchemaService(session_factory, clock)
-    catalog = CatalogService(session_factory, clock, vocabulary, schema)
-    embedder = StubEmbedder()
-    retrieval = RetrievalService(session_factory, clock, embedder, app_settings)
-    visibility = VisibilityService(session_factory, clock)
+        vocabulary = VocabularyService(session_factory)
+        schema = SchemaService(session_factory, clock)
+        catalog = CatalogService(session_factory, clock, vocabulary, schema)
+        embedder = StubEmbedder()
+        retrieval = RetrievalService(session_factory, clock, embedder, app_settings)
+        visibility = VisibilityService(session_factory, clock)
 
-    # Advisory-policy scanner (default): PII is logged but writes proceed.
-    advisory_scanner = build_builtin_scanner(tenant_policy="advisory")
-    audit_writer = _AuditWriterAdapter(session_factory=session_factory, clock=clock)  # type: ignore[arg-type]
+        advisory_scanner = build_builtin_scanner(tenant_policy="advisory")
+        audit_writer = _AuditWriterAdapter(session_factory=session_factory, clock=clock)  # type: ignore[arg-type]
 
-    annotation_svc = AnnotationService(
-        session_factory=session_factory,
-        visibility_svc=visibility,
-        pii_scanner=advisory_scanner,
-        audit_writer=audit_writer,
-        clock=clock,
-    )
+        annotation_svc = AnnotationService(
+            session_factory=session_factory,
+            visibility_svc=visibility,
+            pii_scanner=advisory_scanner,
+            audit_writer=audit_writer,
+            clock=clock,
+        )
 
-    mcp_server = create_registry_mcp_server(
-        retrieval=retrieval,
-        catalog=catalog,
-        session_factory=session_factory,
-        clock=clock,
-        annotation_service=annotation_svc,
-        workspace_service=MagicMock(),
-    )
+        mcp_server = create_registry_mcp_server(
+            retrieval=retrieval,
+            catalog=catalog,
+            session_factory=session_factory,
+            clock=clock,
+            annotation_service=annotation_svc,
+            workspace_service=MagicMock(),
+        )
 
-    # Block-policy scanner: any PII match raises a 422 which the MCP layer
-    # translates to ToolError. Used by test_submit_annotation_pii_block_returns_tool_error.
-    block_scanner = build_builtin_scanner(tenant_policy="block")
-    annotation_svc_block = AnnotationService(
-        session_factory=session_factory,
-        visibility_svc=visibility,
-        pii_scanner=block_scanner,
-        audit_writer=audit_writer,
-        clock=clock,
-    )
+        block_scanner = build_builtin_scanner(tenant_policy="block")
+        annotation_svc_block = AnnotationService(
+            session_factory=session_factory,
+            visibility_svc=visibility,
+            pii_scanner=block_scanner,
+            audit_writer=audit_writer,
+            clock=clock,
+        )
 
-    mcp_server_block = create_registry_mcp_server(
-        retrieval=retrieval,
-        catalog=catalog,
-        session_factory=session_factory,
-        clock=clock,
-        annotation_service=annotation_svc_block,
-        workspace_service=MagicMock(),
-    )
+        mcp_server_block = create_registry_mcp_server(
+            retrieval=retrieval,
+            catalog=catalog,
+            session_factory=session_factory,
+            clock=clock,
+            annotation_service=annotation_svc_block,
+            workspace_service=MagicMock(),
+        )
 
-    try:
-        yield {
-            "mcp": mcp_server,
-            "mcp_block": mcp_server_block,
-            "pg_url": pg_container,
-        }
-    finally:
-        await engine.dispose()
+        try:
+            yield {
+                "mcp": mcp_server,
+                "mcp_block": mcp_server_block,
+                "harness": h,
+                "pg_url": pg_container,
+            }
+        finally:
+            await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# Helper: materialise a persona for MCP tests
+# ---------------------------------------------------------------------------
+
+
+async def _make_mcp_persona(
+    harness: EntitlementAuthHarness,
+    pg_url: str,
+    *,
+    slug: str,
+    roles: list[str],
+) -> TenantPersona:
+    """Register + materialise a persona via /v1/whoami on the harness app."""
+    from httpx import ASGITransport, AsyncClient  # noqa: PLC0415
+
+    persona = harness.add_persona(slug, roles=roles)
+    harness.configure_fetcher_for(persona)
+    transport = ASGITransport(app=harness.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return persona
 
 
 # ---------------------------------------------------------------------------
@@ -257,12 +265,7 @@ async def mcp_annotation_harness(pg_container: str, app_settings: Settings) -> A
 
 @pytest.mark.asyncio
 async def test_annotation_tools_in_tool_list(mcp_annotation_harness: dict[str, Any]) -> None:
-    """The MCP server advertises all three annotation tools.
-
-    Calls list_tools() on the live FastMCP instance built from the production
-    create_registry_mcp_server factory. All three annotation tools must be
-    present — missing registration is a startup wiring bug.
-    """
+    """The MCP server advertises all three annotation tools."""
     mcp = mcp_annotation_harness["mcp"]
     tools = await mcp.list_tools()
     names = {t.name for t in tools}
@@ -271,7 +274,6 @@ async def test_annotation_tools_in_tool_list(mcp_annotation_harness: dict[str, A
     assert "list_my_annotations" in names, f"list_my_annotations not found in registered tools: {names}"
     assert "triage_annotation" in names, f"triage_annotation not found in registered tools: {names}"
 
-    # Each annotation tool must carry a non-empty inputSchema.
     for tool in tools:
         if tool.name in {"submit_annotation", "list_my_annotations", "triage_annotation"}:
             assert isinstance(tool.inputSchema, dict), f"{tool.name}: inputSchema is not a dict"
@@ -280,22 +282,19 @@ async def test_annotation_tools_in_tool_list(mcp_annotation_harness: dict[str, A
 
 @pytest.mark.asyncio
 async def test_submit_annotation_returns_result(mcp_annotation_harness: dict[str, Any]) -> None:
-    """submit_annotation writes a new annotation and returns the created record.
-
-    Seeds a public capability owned by a provider tenant, then calls
-    submit_annotation as a consumer tenant. The response must contain
-    annotation_id and must not carry isError.
-    """
+    """submit_annotation writes a new annotation and returns the created record."""
     mcp = mcp_annotation_harness["mcp"]
+    harness: EntitlementAuthHarness = mcp_annotation_harness["harness"]
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, _provider_actor, _provider_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-smk-prov-{suffix}"
+    provider_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-smk-prov-{suffix}", roles=["producer", "consumer"]
     )
-    _consumer_tid, _consumer_actor, consumer_token = await _seed_tenant_with_token(
-        pg_url, slug=f"mcp-smk-cons-{suffix}"
+    consumer_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-smk-cons-{suffix}", roles=["producer", "consumer"]
     )
+    provider_tid = await _get_tenant_id(pg_url, provider_persona.slug)
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -303,9 +302,11 @@ async def test_submit_annotation_returns_result(mcp_annotation_harness: dict[str
         visibility=VISIBILITY_PUBLIC,
     )
 
+    harness.configure_fetcher_for(consumer_persona)
     result = await _call_as(
         mcp,
-        token=consumer_token,
+        persona=consumer_persona,
+        harness_app=harness.app,
         tool="submit_annotation",
         args={
             "capability_id": str(cap_id),
@@ -314,7 +315,6 @@ async def test_submit_annotation_returns_result(mcp_annotation_harness: dict[str
         },
     )
 
-    # MCP tool results are a sequence of content blocks; no isError means success.
     assert result, "submit_annotation must return a non-empty result sequence"
     first = result[0]
     assert first.type == "text", f"expected type='text', got {first.type!r}"
@@ -330,18 +330,19 @@ async def test_submit_annotation_returns_result(mcp_annotation_harness: dict[str
 
 @pytest.mark.asyncio
 async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[str, Any]) -> None:
-    """list_my_annotations returns a paginated list without ToolError.
-
-    Seeds a capability and an annotation via submit_annotation, then calls
-    list_my_annotations with the capability_id filter. The response must
-    be a dict with items and next_cursor keys.
-    """
+    """list_my_annotations returns a paginated list without ToolError."""
     mcp = mcp_annotation_harness["mcp"]
+    harness: EntitlementAuthHarness = mcp_annotation_harness["harness"]
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, _pact, _ptok = await _seed_tenant_with_token(pg_url, slug=f"mcp-list-prov-{suffix}")
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-list-cons-{suffix}")
+    provider_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-list-prov-{suffix}", roles=["producer", "consumer"]
+    )
+    consumer_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-list-cons-{suffix}", roles=["producer", "consumer"]
+    )
+    provider_tid = await _get_tenant_id(pg_url, provider_persona.slug)
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -349,10 +350,11 @@ async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[s
         visibility=VISIBILITY_PUBLIC,
     )
 
-    # First submit an annotation so the list is non-empty.
+    harness.configure_fetcher_for(consumer_persona)
     await _call_as(
         mcp,
-        token=consumer_token,
+        persona=consumer_persona,
+        harness_app=harness.app,
         tool="submit_annotation",
         args={
             "capability_id": str(cap_id),
@@ -363,7 +365,8 @@ async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[s
 
     result = await _call_as(
         mcp,
-        token=consumer_token,
+        persona=consumer_persona,
+        harness_app=harness.app,
         tool="list_my_annotations",
         args={"capability_id": str(cap_id)},
     )
@@ -376,26 +379,25 @@ async def test_list_my_annotations_returns_result(mcp_annotation_harness: dict[s
     assert isinstance(parsed, dict), "list_my_annotations must return a JSON object"
     assert "items" in parsed, f"Response must contain 'items'; got keys: {list(parsed.keys())}"
     assert "next_cursor" in parsed
-    # The annotation we just submitted must appear in the list.
     assert isinstance(parsed["items"], list)
     assert len(parsed["items"]) >= 1, "items list must contain at least the annotation we submitted"
 
 
 @pytest.mark.asyncio
 async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str, Any]) -> None:
-    """triage_annotation updates annotation status and returns the updated record.
-
-    Seeds an annotation via the REST path (direct SQL insert so we control
-    tenant_id = provider), then calls triage_annotation as the provider tenant.
-    The provider owns the capability so they are authorized to triage.
-    Result must contain status='triaged'.
-    """
+    """triage_annotation updates annotation status and returns the updated record."""
     mcp = mcp_annotation_harness["mcp"]
+    harness: EntitlementAuthHarness = mcp_annotation_harness["harness"]
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, provider_actor, provider_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-tri-prov-{suffix}")
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-tri-cons-{suffix}")
+    provider_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-tri-prov-{suffix}", roles=["producer", "consumer", "admin"]
+    )
+    consumer_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-tri-cons-{suffix}", roles=["producer", "consumer"]
+    )
+    provider_tid = await _get_tenant_id(pg_url, provider_persona.slug)
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -403,10 +405,11 @@ async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str
         visibility=VISIBILITY_PUBLIC,
     )
 
-    # Consumer submits an annotation.
+    harness.configure_fetcher_for(consumer_persona)
     submit_result = await _call_as(
         mcp,
-        token=consumer_token,
+        persona=consumer_persona,
+        harness_app=harness.app,
         tool="submit_annotation",
         args={
             "capability_id": str(cap_id),
@@ -418,10 +421,11 @@ async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str
     submit_parsed = json.loads(submit_result[0].text)
     annotation_id = submit_parsed["annotation_id"]
 
-    # Provider triages the annotation.
+    harness.configure_fetcher_for(provider_persona)
     triage_result = await _call_as(
         mcp,
-        token=provider_token,
+        persona=provider_persona,
+        harness_app=harness.app,
         tool="triage_annotation",
         args={
             "annotation_id": annotation_id,
@@ -444,22 +448,21 @@ async def test_triage_annotation_returns_result(mcp_annotation_harness: dict[str
 async def test_submit_annotation_pii_block_returns_tool_error(
     mcp_annotation_harness: dict[str, Any],
 ) -> None:
-    """submit_annotation with PII in body raises ToolError when policy=block.
-
-    The mcp_block server is built with tenant_policy='block', so any PII
-    pattern match causes the AnnotationService to raise HTTPException(422)
-    which the MCP layer translates to ToolError. The SSN pattern is a built-in
-    detector; the body below contains a valid-format SSN that passes the SSA
-    validity heuristics.
-    """
-    from mcp.server.fastmcp.exceptions import ToolError
+    """submit_annotation with PII in body raises ToolError when policy=block."""
+    from mcp.server.fastmcp.exceptions import ToolError  # noqa: PLC0415
 
     mcp_block = mcp_annotation_harness["mcp_block"]
+    harness: EntitlementAuthHarness = mcp_annotation_harness["harness"]
     pg_url = mcp_annotation_harness["pg_url"]
     suffix = uuid.uuid4().hex[:8]
 
-    provider_tid, _pact, _ptok = await _seed_tenant_with_token(pg_url, slug=f"mcp-pii-prov-{suffix}")
-    _ctid, _cact, consumer_token = await _seed_tenant_with_token(pg_url, slug=f"mcp-pii-cons-{suffix}")
+    provider_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-pii-prov-{suffix}", roles=["producer", "consumer"]
+    )
+    consumer_persona = await _make_mcp_persona(
+        harness, pg_url, slug=f"mcp-pii-cons-{suffix}", roles=["producer", "consumer"]
+    )
+    provider_tid = await _get_tenant_id(pg_url, provider_persona.slug)
     cap_id = await _seed_capability(
         pg_url,
         tenant_id=provider_tid,
@@ -467,15 +470,15 @@ async def test_submit_annotation_pii_block_returns_tool_error(
         visibility=VISIBILITY_PUBLIC,
     )
 
-    # The body contains a structurally valid SSN (area=123, group=45, serial=6789).
-    # The SSN pattern: NNN-NN-NNNN with dashes. Area 123 is valid, group 45 != 00,
-    # serial 6789 != 0000, and 123456789 is not all-identical-digit.
+    # Body contains a structurally valid SSN (area=123, group=45, serial=6789).
     pii_body = "My SSN is 123-45-6789 and I need help with the API."
 
+    harness.configure_fetcher_for(consumer_persona)
     with pytest.raises(ToolError) as exc_info:
         await _call_as(
             mcp_block,
-            token=consumer_token,
+            persona=consumer_persona,
+            harness_app=harness.app,
             tool="submit_annotation",
             args={
                 "capability_id": str(cap_id),
@@ -485,4 +488,6 @@ async def test_submit_annotation_pii_block_returns_tool_error(
         )
 
     error_message = str(exc_info.value)
-    assert "PII detected" in error_message, f"ToolError message must mention 'PII detected'; got: {error_message!r}"
+    assert "PII detected" in error_message, (
+        f"ToolError message must mention 'PII detected'; got: {error_message!r}"
+    )
