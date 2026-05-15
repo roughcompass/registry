@@ -15,24 +15,27 @@ Scenario: artifact body write with a credit card number in two configurations.
 3. No PII in body → HTTP 201; no detection log rows.
 
 Uses a real Postgres container via the session-scoped ``pg_container`` fixture.
-Each test creates its own tenant + token to avoid state leakage between tests.
+Each test creates its own tenant to avoid state leakage between tests.
 """
 
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
-from fastapi.testclient import TestClient
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
-from registry.storage.models import Actor, ApiToken, Tenant
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -45,7 +48,6 @@ _VISA_TEST_CC = "4111111111111111"
 _BODY_WITH_CC = f"Contact billing@example.com. Card on file: {_VISA_TEST_CC}."
 _CLEAN_BODY = "This is a clean description with no sensitive data."
 
-# Seeded for each test class so isolation is guaranteed.
 _FACT_CATEGORY = "overview"
 
 
@@ -54,55 +56,20 @@ _FACT_CATEGORY = "overview"
 # ---------------------------------------------------------------------------
 
 
-async def _seed(
-    pg_url: str,
-    *,
-    slug: str,
-    roles: list[str],
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert tenant + actor + API token. Returns (tenant_id, actor_id, raw_token)."""
+async def _seed_vocabulary(pg_url: str, tenant_slug: str) -> None:
+    """Seed minimum vocabulary for a JIT-materialised tenant."""
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw = secrets.token_urlsafe(24)
     try:
         async with factory() as session, session.begin():
-            session.add(
-                Tenant(
-                    tenant_id=tenant_id,
-                    slug=slug,
-                    display_name=slug,
-                    created_at=_NOW,
-                    is_active=True,
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"),
+                    {"slug": tenant_slug},
                 )
-            )
-            await session.flush()
-            session.add(
-                Actor(
-                    actor_id=actor_id,
-                    tenant_id=tenant_id,
-                    display_name=f"actor-{slug}",
-                    email=None,
-                    oidc_subject=None,
-                    created_at=_NOW,
-                )
-            )
-            await session.flush()
-            session.add(
-                ApiToken(
-                    token_id=uuid.uuid4(),
-                    tenant_id=tenant_id,
-                    actor_id=actor_id,
-                    token_hash=hash_token(raw),
-                    roles=roles,
-                    description=None,
-                    expires_at=None,
-                    created_at=_NOW,
-                    revoked_at=None,
-                )
-            )
-            # Seed required vocabulary values for the test tenant.
+            ).first()
+            assert row is not None, f"tenant {tenant_slug} not materialised yet"
+            tenant_id = row[0]
             for kind, value in [
                 ("entity_type", "capability"),
                 ("fact_category", "overview"),
@@ -117,18 +84,64 @@ async def _seed(
                 )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw
+
+
+async def _make_persona(
+    h: EntitlementAuthHarness, pg_url: str, *, slug: str, roles: list[str]
+) -> TenantPersona:
+    """Materialise tenant + actor, seed vocab."""
+    persona = h.add_persona(slug, roles=roles)
+    h.configure_fetcher_for(persona)
+    transport = ASGITransport(app=h.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    await _seed_vocabulary(pg_url, slug)
+    return persona
+
+
+async def _get_tenant_id(pg_url: str, slug: str) -> uuid.UUID:
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+                )
+            ).first()
+            assert row is not None
+            return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
+
+
+async def _get_actor_id(pg_url: str, tenant_id: uuid.UUID) -> uuid.UUID:
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT actor_id FROM actors WHERE tenant_id = :tid LIMIT 1"),
+                    {"tid": tenant_id},
+                )
+            ).first()
+            assert row is not None, f"no actor found for tenant {tenant_id}"
+            return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
 
 
 async def _seed_credit_card_block_policy(
-    pg_url: str,
-    *,
-    tenant_id: uuid.UUID,
-    actor_id: uuid.UUID,
+    pg_url: str, *, tenant_id: uuid.UUID, actor_id: uuid.UUID
 ) -> uuid.UUID:
     """Insert a pii_patterns row for credit_card with policy_override='block'.
 
-    Returns the pattern_id of the inserted row.
+    The credit_card detector is built-in so the sentinel regex is overridden
+    by the real pattern from the scanner; the row here just sets the
+    per-tenant policy to 'block' for that named pattern.
     """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -143,31 +156,24 @@ async def _seed_credit_card_block_policy(
                     "VALUES (:pid, :tid, 'credit_card', 'FINANCIAL', '__sentinel__', "
                     "        FALSE, 'block', TRUE, :now, :aid)"
                 ),
-                {
-                    "pid": pattern_id,
-                    "tid": tenant_id,
-                    "now": _NOW,
-                    "aid": actor_id,
-                },
+                {"pid": pattern_id, "tid": tenant_id, "aid": actor_id, "now": _NOW},
             )
     finally:
         await engine.dispose()
     return pattern_id
 
 
-async def _count_detection_log(
-    pg_url: str,
-    *,
-    tenant_id: uuid.UUID,
-    pattern_name: str,
-) -> int:
+async def _count_detection_log(pg_url: str, *, tenant_id: uuid.UUID, pattern_name: str) -> int:
     """Return number of pii_detection_log rows for this tenant + pattern_name."""
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             result = await session.execute(
-                text("SELECT COUNT(*) FROM pii_detection_log " "WHERE tenant_id = :tid AND pattern_name = :pname"),
+                text(
+                    "SELECT COUNT(*) FROM pii_detection_log "
+                    "WHERE tenant_id = :tid AND pattern_name = :pname"
+                ),
                 {"tid": tenant_id, "pname": pattern_name},
             )
             row = result.one()
@@ -176,15 +182,15 @@ async def _count_detection_log(
         await engine.dispose()
 
 
-def _build_app(pg_url: str) -> TestClient:
-    settings = Settings(
-        database_url=pg_url,
-        pgbouncer_url=pg_url,
-        scheduler_jobstore_url=pg_url,
-        embedding_model="stub",
-        scheduler_use_memory_jobstore=True,
-    )
-    return create_app(settings)
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def harness(pg_container: str) -> AsyncIterator[EntitlementAuthHarness]:
+    async with EntitlementAuthHarness(pg_container) as h:
+        yield h
 
 
 # ---------------------------------------------------------------------------
@@ -194,70 +200,81 @@ def _build_app(pg_url: str) -> TestClient:
 
 class TestPiiBlockPolicy:
     @pytest.mark.asyncio
-    async def test_credit_card_body_returns_422_when_block_policy(self, pg_container: str) -> None:
+    async def test_credit_card_body_returns_422_when_block_policy(
+        self, harness: EntitlementAuthHarness, pg_container: str
+    ) -> None:
         """Artifact body containing a credit card + block policy → HTTP 422."""
-        tenant_id, actor_id, raw = await _seed(
-            pg_container,
-            slug=f"pii-block-{uuid.uuid4().hex[:6]}",
-            roles=["producer", "admin"],
-        )
+        slug = f"pii-block-{uuid.uuid4().hex[:6]}"
+        persona = await _make_persona(harness, pg_container, slug=slug, roles=["producer", "admin"])
+        tenant_id = await _get_tenant_id(pg_container, slug)
+        actor_id = await _get_actor_id(pg_container, tenant_id)
         await _seed_credit_card_block_policy(pg_container, tenant_id=tenant_id, actor_id=actor_id)
 
-        app = _build_app(pg_container)
-        with TestClient(app) as client:
-            auth = {"Authorization": f"Bearer {raw}"}
-            # Create parent capability.
-            cap_r = client.post("/v1/capabilities", json={"name": "pii-cap"}, headers=auth)
-            assert cap_r.status_code == 201, cap_r.text
-            entity_id = cap_r.json()["entity_id"]
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            harness.configure_fetcher_for(persona)
+            with patch_validator_for_actor(persona):
+                cap_r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "pii-cap"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert cap_r.status_code == 201, cap_r.text
+                entity_id = cap_r.json()["entity_id"]
 
-            # POST artifact with CC in body → must be rejected.
-            art_r = client.post(
-                f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
-                headers=auth,
-            )
-            assert (
-                art_r.status_code == 422
-            ), f"Expected 422 from PII block policy, got {art_r.status_code}: {art_r.text}"
-            body = art_r.json()
-            # The global StarletteHTTPException handler coerces dict details
-            # into the canonical envelope `{"errors": [{path, code, message}]}`.
-            # The raised HTTPException carries a dict {error, message,
-            # matched_patterns}; after coercion the message stringifies the
-            # original dict, so the credit_card / pii_blocked markers should
-            # appear inside the message body.
-            errors = body.get("errors", [])
-            assert errors, f"Expected `errors` in envelope; got {body}"
-            message = str(errors[0].get("message", ""))
-            assert "pii_blocked" in message, f"Expected 'pii_blocked' marker in message; got {message}"
-            assert "credit_card" in message, f"Expected 'credit_card' marker in message; got {message}"
+                art_r = await client.post(
+                    f"/v1/capabilities/{entity_id}/artifacts",
+                    json={
+                        "category": _FACT_CATEGORY,
+                        "title": "PII test artifact",
+                        "body": _BODY_WITH_CC,
+                    },
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+
+        assert art_r.status_code == 422, (
+            f"Expected 422 from PII block policy, got {art_r.status_code}: {art_r.text}"
+        )
+        body = art_r.json()
+        errors = body.get("errors", [])
+        assert errors, f"Expected `errors` in envelope; got {body}"
+        message = str(errors[0].get("message", ""))
+        assert "pii_blocked" in message, f"Expected 'pii_blocked' marker in message; got {message}"
+        assert "credit_card" in message, f"Expected 'credit_card' marker in message; got {message}"
 
     @pytest.mark.asyncio
-    async def test_credit_card_body_writes_detection_log_row(self, pg_container: str) -> None:
+    async def test_credit_card_body_writes_detection_log_row(
+        self, harness: EntitlementAuthHarness, pg_container: str
+    ) -> None:
         """Blocked artifact write must insert a pii_detection_log row."""
-        tenant_id, actor_id, raw = await _seed(
-            pg_container,
-            slug=f"pii-log-{uuid.uuid4().hex[:6]}",
-            roles=["producer", "admin"],
-        )
+        slug = f"pii-log-{uuid.uuid4().hex[:6]}"
+        persona = await _make_persona(harness, pg_container, slug=slug, roles=["producer", "admin"])
+        tenant_id = await _get_tenant_id(pg_container, slug)
+        actor_id = await _get_actor_id(pg_container, tenant_id)
         await _seed_credit_card_block_policy(pg_container, tenant_id=tenant_id, actor_id=actor_id)
 
-        app = _build_app(pg_container)
-        with TestClient(app) as client:
-            auth = {"Authorization": f"Bearer {raw}"}
-            cap_r = client.post("/v1/capabilities", json={"name": "pii-log-cap"}, headers=auth)
-            assert cap_r.status_code == 201, cap_r.text
-            entity_id = cap_r.json()["entity_id"]
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            harness.configure_fetcher_for(persona)
+            with patch_validator_for_actor(persona):
+                cap_r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "pii-log-cap"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert cap_r.status_code == 201, cap_r.text
+                entity_id = cap_r.json()["entity_id"]
 
-            # Trigger the block (422 expected).
-            client.post(
-                f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
-                headers=auth,
-            )
+                await client.post(
+                    f"/v1/capabilities/{entity_id}/artifacts",
+                    json={
+                        "category": _FACT_CATEGORY,
+                        "title": "PII test artifact",
+                        "body": _BODY_WITH_CC,
+                    },
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
 
-        # Detection log row must be present even though the write was blocked.
         count = await _count_detection_log(pg_container, tenant_id=tenant_id, pattern_name="credit_card")
         assert count >= 1, f"Expected at least 1 pii_detection_log row for credit_card, got {count}"
 
@@ -269,52 +286,71 @@ class TestPiiBlockPolicy:
 
 class TestPiiAdvisoryPolicy:
     @pytest.mark.asyncio
-    async def test_credit_card_body_allowed_when_advisory(self, pg_container: str) -> None:
+    async def test_credit_card_body_allowed_when_advisory(
+        self, harness: EntitlementAuthHarness, pg_container: str
+    ) -> None:
         """Artifact body with credit card and advisory policy (default) → HTTP 201."""
-        tenant_id, actor_id, raw = await _seed(
-            pg_container,
-            slug=f"pii-advisory-{uuid.uuid4().hex[:6]}",
-            roles=["producer"],
+        slug = f"pii-advisory-{uuid.uuid4().hex[:6]}"
+        persona = await _make_persona(harness, pg_container, slug=slug, roles=["producer"])
+
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            harness.configure_fetcher_for(persona)
+            with patch_validator_for_actor(persona):
+                cap_r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "pii-advisory-cap"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert cap_r.status_code == 201, cap_r.text
+                entity_id = cap_r.json()["entity_id"]
+
+                art_r = await client.post(
+                    f"/v1/capabilities/{entity_id}/artifacts",
+                    json={
+                        "category": _FACT_CATEGORY,
+                        "title": "PII test artifact",
+                        "body": _BODY_WITH_CC,
+                    },
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+
+        assert art_r.status_code == 201, (
+            f"Advisory policy must allow write, got {art_r.status_code}: {art_r.text}"
         )
-        # No block policy seeded — scanner defaults to advisory.
-
-        app = _build_app(pg_container)
-        with TestClient(app) as client:
-            auth = {"Authorization": f"Bearer {raw}"}
-            cap_r = client.post("/v1/capabilities", json={"name": "pii-advisory-cap"}, headers=auth)
-            assert cap_r.status_code == 201, cap_r.text
-            entity_id = cap_r.json()["entity_id"]
-
-            art_r = client.post(
-                f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
-                headers=auth,
-            )
-            assert art_r.status_code == 201, f"Advisory policy must allow write, got {art_r.status_code}: {art_r.text}"
-            assert art_r.json()["body"] == _BODY_WITH_CC
+        assert art_r.json()["body"] == _BODY_WITH_CC
 
     @pytest.mark.asyncio
-    async def test_advisory_write_still_logs_detection(self, pg_container: str) -> None:
+    async def test_advisory_write_still_logs_detection(
+        self, harness: EntitlementAuthHarness, pg_container: str
+    ) -> None:
         """Advisory write must still produce a detection log row (always-on logging)."""
-        tenant_id, actor_id, raw = await _seed(
-            pg_container,
-            slug=f"pii-adv-log-{uuid.uuid4().hex[:6]}",
-            roles=["producer"],
-        )
+        slug = f"pii-adv-log-{uuid.uuid4().hex[:6]}"
+        persona = await _make_persona(harness, pg_container, slug=slug, roles=["producer"])
+        tenant_id = await _get_tenant_id(pg_container, slug)
 
-        app = _build_app(pg_container)
-        with TestClient(app) as client:
-            auth = {"Authorization": f"Bearer {raw}"}
-            cap_r = client.post("/v1/capabilities", json={"name": "pii-adv-log-cap"}, headers=auth)
-            assert cap_r.status_code == 201, cap_r.text
-            entity_id = cap_r.json()["entity_id"]
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            harness.configure_fetcher_for(persona)
+            with patch_validator_for_actor(persona):
+                cap_r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "pii-adv-log-cap"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert cap_r.status_code == 201, cap_r.text
+                entity_id = cap_r.json()["entity_id"]
 
-            art_r = client.post(
-                f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "title": "PII test artifact", "body": _BODY_WITH_CC},
-                headers=auth,
-            )
-            assert art_r.status_code == 201, art_r.text
+                art_r = await client.post(
+                    f"/v1/capabilities/{entity_id}/artifacts",
+                    json={
+                        "category": _FACT_CATEGORY,
+                        "title": "PII test artifact",
+                        "body": _BODY_WITH_CC,
+                    },
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert art_r.status_code == 201, art_r.text
 
         count = await _count_detection_log(pg_container, tenant_id=tenant_id, pattern_name="credit_card")
         assert count >= 1, f"Advisory write must still log detection; got {count} rows for credit_card"
@@ -327,35 +363,43 @@ class TestPiiAdvisoryPolicy:
 
 class TestPiiCleanBody:
     @pytest.mark.asyncio
-    async def test_clean_body_returns_201_no_detection_log(self, pg_container: str) -> None:
+    async def test_clean_body_returns_201_no_detection_log(
+        self, harness: EntitlementAuthHarness, pg_container: str
+    ) -> None:
         """Artifact body with no PII → 201 and zero detection log rows."""
-        tenant_id, actor_id, raw = await _seed(
-            pg_container,
-            slug=f"pii-clean-{uuid.uuid4().hex[:6]}",
-            roles=["producer"],
-        )
+        slug = f"pii-clean-{uuid.uuid4().hex[:6]}"
+        persona = await _make_persona(harness, pg_container, slug=slug, roles=["producer"])
+        tenant_id = await _get_tenant_id(pg_container, slug)
 
-        app = _build_app(pg_container)
-        with TestClient(app) as client:
-            auth = {"Authorization": f"Bearer {raw}"}
-            cap_r = client.post("/v1/capabilities", json={"name": "pii-clean-cap"}, headers=auth)
-            assert cap_r.status_code == 201, cap_r.text
-            entity_id = cap_r.json()["entity_id"]
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            harness.configure_fetcher_for(persona)
+            with patch_validator_for_actor(persona):
+                cap_r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "pii-clean-cap"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert cap_r.status_code == 201, cap_r.text
+                entity_id = cap_r.json()["entity_id"]
 
-            art_r = client.post(
-                f"/v1/capabilities/{entity_id}/artifacts",
-                json={"category": _FACT_CATEGORY, "title": "PII clean artifact", "body": _CLEAN_BODY},
-                headers=auth,
-            )
-            assert art_r.status_code == 201, art_r.text
+                art_r = await client.post(
+                    f"/v1/capabilities/{entity_id}/artifacts",
+                    json={
+                        "category": _FACT_CATEGORY,
+                        "title": "PII clean artifact",
+                        "body": _CLEAN_BODY,
+                    },
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert art_r.status_code == 201, art_r.text
 
         count = await _count_detection_log(pg_container, tenant_id=tenant_id, pattern_name="credit_card")
         assert count == 0, f"Clean body must produce no detection log rows, got {count}"
 
 
 # ---------------------------------------------------------------------------
-# Tests — PRD eval metric 21: precision ≥ 90%, recall ≥ 80%
-# on 100-string curated fixture (50 PII + 50 negatives)
+# Tests — precision ≥ 90%, recall ≥ 80% on 100-string curated fixture
 # ---------------------------------------------------------------------------
 
 
@@ -497,19 +541,14 @@ class TestPiiPrecisionRecall:
     ]
 
     def test_pii_precision_and_recall(self) -> None:
-        """Built-in scanner achieves ≥ 90% precision and ≥ 80% recall on 100-string fixture.
-
-        Precision = TP / (TP + FP)  — of detected positives, how many are true positives.
-        Recall    = TP / (TP + FN)  — of all positives, how many were detected.
-        """
+        """Built-in scanner achieves ≥ 90% precision and ≥ 80% recall on 100-string fixture."""
         from registry.security.pii_scanner import build_builtin_scanner  # noqa: PLC0415
 
         scanner = build_builtin_scanner(tenant_policy="advisory")
 
-        tp = 0  # positive string detected (at least one match)
-        fn = 0  # positive string NOT detected (false negative)
-        fp = 0  # negative string incorrectly detected (false positive)
-        tn = 0  # negative string correctly passed through
+        tp = 0
+        fn = 0
+        fp = 0
 
         for positive in self._POSITIVES:
             resp = scanner.scan(
@@ -532,11 +571,8 @@ class TestPiiPrecisionRecall:
             )
             if resp.matched_patterns:
                 fp += 1
-            else:
-                tn += 1
 
         total_positives = len(self._POSITIVES)
-        len(self._NEGATIVES)
 
         recall = tp / total_positives if total_positives > 0 else 0.0
         precision = tp / (tp + fp) if (tp + fp) > 0 else 1.0
@@ -547,7 +583,9 @@ class TestPiiPrecisionRecall:
             + "\n".join(
                 f"  [{i}] {s!r}"
                 for i, s in enumerate(self._POSITIVES)
-                if not scanner.scan(s, field_type="test.body", pattern_overrides={}, field_policies={}).matched_patterns
+                if not scanner.scan(
+                    s, field_type="test.body", pattern_overrides={}, field_policies={}
+                ).matched_patterns
             )
         )
 
@@ -557,6 +595,8 @@ class TestPiiPrecisionRecall:
             + "\n".join(
                 f"  [{i}] {s!r}"
                 for i, s in enumerate(self._NEGATIVES)
-                if scanner.scan(s, field_type="test.body", pattern_overrides={}, field_policies={}).matched_patterns
+                if scanner.scan(
+                    s, field_type="test.body", pattern_overrides={}, field_policies={}
+                ).matched_patterns
             )
         )
