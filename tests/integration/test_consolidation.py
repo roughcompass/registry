@@ -23,7 +23,6 @@ corresponds to one of the CON-T03..T07 + T11 task contracts.
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 import uuid
@@ -33,14 +32,18 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.config import Settings
-from registry.main import create_app
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    patch_validator_for_actor,
+)
 
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _BOOTSTRAP_SCRIPT = _REPO_ROOT / "scripts" / "bootstrap_dev_tenant.py"
 _SEED_SCRIPT = _REPO_ROOT / "scripts" / "seed.py"
-_TOKEN_LINE_RE = re.compile(r"Token\s*:\s*(\S+)")
 
 
 # ---------------------------------------------------------------------------
@@ -59,44 +62,81 @@ def _run(database_url: str, script: Path, *extra: str) -> subprocess.CompletedPr
     )
 
 
-def _parse_token(stdout: str) -> str:
-    m = _TOKEN_LINE_RE.search(stdout)
-    if m is None:
-        raise AssertionError(f"no Token line in output:\n{stdout}")
-    return m.group(1)
+async def _lookup_actor_id(pg_url: str, slug: str, oidc_subject: str) -> uuid.UUID:
+    engine = create_async_engine(
+        pg_url, connect_args={"prepared_statement_cache_size": 0}
+    )
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT a.actor_id FROM actors a "
+                        "JOIN tenants t ON t.tenant_id = a.tenant_id "
+                        "WHERE t.slug = :slug AND a.oidc_subject = :sub"
+                    ),
+                    {"slug": slug, "sub": oidc_subject},
+                )
+            ).first()
+        assert row is not None
+        return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
 
 
 # ---------------------------------------------------------------------------
-# Shared fixture — one tenant bootstrapped + seeded per test module run
+# Shared fixture — one tenant bootstrapped + seeded per test
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def con_client(pg_container: str) -> AsyncGenerator[tuple[AsyncClient, str, str], None]:
-    """Bootstrap a dedicated tenant + seed Salt, then yield (client, token, slug).
+async def con_client(
+    pg_container: str,
+) -> AsyncGenerator[tuple[AsyncClient, str, str], None]:
+    """Bootstrap + seed a dedicated tenant; yield (client, token, slug).
 
-    Returns the slug so tests can construct slug-form URLs deterministically
-    without querying the API first.
+    The yielded ``token`` is a placeholder string — the OIDC validator
+    is patched for the duration of the fixture so the bytes don't matter.
+    Existing tests that send ``Authorization: Bearer {token}`` keep
+    working without per-call mocking.
     """
     slug = "dx-consolidation"
-    bootstrap = _run(pg_container, _BOOTSTRAP_SCRIPT, "--tenant-slug", slug)
+    bootstrap = _run(
+        pg_container,
+        _BOOTSTRAP_SCRIPT,
+        "--tenant-slug",
+        slug,
+        "--actor-display-name",
+        "dev-admin",
+        "--skip-mock-seed",
+    )
     assert bootstrap.returncode == 0, bootstrap.stderr
-    token = _parse_token(bootstrap.stdout)
 
     seed = _run(pg_container, _SEED_SCRIPT, "--tenant-slug", slug)
     assert seed.returncode == 0, seed.stderr
 
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
+    actor_id = await _lookup_actor_id(pg_container, slug, "dev-admin")
+
+    class _FixedSubjectPersona(TenantPersona):
+        @property
+        def oidc_subject(self) -> str:  # type: ignore[override]
+            return "dev-admin"
+
+    persona = _FixedSubjectPersona(
+        slug=slug, actor_id=actor_id, roles=["admin", "producer", "consumer"]
     )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, token, slug
+
+    async with EntitlementAuthHarness(pg_container) as harness:
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                # Tenant headers default to the fixture's tenant slug so
+                # tests that send only ``Authorization: Bearer …`` keep
+                # working — the ASGI client appends X-Tenant-ID for them.
+                client.headers.setdefault("X-Tenant-ID", persona.slug)
+                yield client, "dummy.jwt", slug
 
 
 # ---------------------------------------------------------------------------
@@ -589,80 +629,19 @@ async def test_patch_subscription_current_if_match_succeeds(
 
 
 # ---------------------------------------------------------------------------
-# 6. Whoami _links resolve to real endpoints (CON-T11)
+# 6. Whoami _links — endpoint-only check
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_whoami_links_resolve(
-    con_client: tuple[AsyncClient, str, str],
-) -> None:
-    """_links.tenant and _links.actor from /v1/whoami both return 200."""
-    client, token, _ = con_client
-    whoami_r = await client.get(
-        "/v1/whoami",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert whoami_r.status_code == 200, whoami_r.text
-    body = whoami_r.json()
-
-    links = body.get("_links", {})
-    tenant_url = links.get("tenant")
-    actor_url = links.get("actor")
-
-    assert tenant_url, "_links.tenant must be present in whoami response"
-    assert actor_url, "_links.actor must be present in whoami response"
-
-    tenant_r = await client.get(
-        tenant_url,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert tenant_r.status_code == 200, f"_links.tenant ({tenant_url}) returned {tenant_r.status_code}: {tenant_r.text}"
-    tenant_body = tenant_r.json()
-    assert "tenant_id" in tenant_body
-    assert "slug" in tenant_body
-
-    actor_r = await client.get(
-        actor_url,
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert actor_r.status_code == 200, f"_links.actor ({actor_url}) returned {actor_r.status_code}: {actor_r.text}"
-    actor_body = actor_r.json()
-    assert "actor_id" in actor_body
-    assert "display_name" in actor_body
-
-
-@pytest.mark.asyncio
-async def test_tenant_endpoint_rejects_cross_tenant(
-    con_client: tuple[AsyncClient, str, str],
-) -> None:
-    """GET /v1/admin/tenants/<wrong-slug> returns 404 (not 403) to prevent existence leak."""
-    client, token, _ = con_client
-    r = await client.get(
-        "/v1/admin/tenants/nonexistent-tenant-slug",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert r.status_code == 404, r.text
-
-
-@pytest.mark.asyncio
-async def test_actor_endpoint_returns_self(
-    con_client: tuple[AsyncClient, str, str],
-) -> None:
-    """GET /v1/admin/actors/<actor_id> returns the calling actor's record."""
-    client, token, _ = con_client
-    whoami_r = await client.get(
-        "/v1/whoami",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    actor_id = whoami_r.json()["actor_id"]
-
-    r = await client.get(
-        f"/v1/admin/actors/{actor_id}",
-        headers={"Authorization": f"Bearer {token}"},
-    )
-    assert r.status_code == 200, r.text
-    body = r.json()
-    assert str(body["actor_id"]) == str(actor_id)
-    assert "_links" in body
-    assert f"/v1/admin/actors/{actor_id}" in body["_links"]["self"]
+#
+# The original suite asserted that ``_links.tenant`` and ``_links.actor``
+# from /v1/whoami both resolved to live endpoints — those endpoints were
+# at ``/v1/admin/tenants/{slug}`` and ``/v1/admin/actors/{actor_id}``,
+# both of which were removed when the registry stopped owning the
+# tenant/actor admin surface. The whoami endpoint still emits its
+# ``_links.self`` pointer; the deleted tests below covered:
+#
+#   - test_whoami_links_resolve            → admin/tenants + admin/actors gone
+#   - test_tenant_endpoint_rejects_cross_tenant → admin/tenants gone
+#   - test_actor_endpoint_returns_self     → admin/actors gone
+#
+# Whoami self-link is still asserted in test_api_ergonomics.py.
+# ---------------------------------------------------------------------------

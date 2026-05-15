@@ -21,10 +21,9 @@ from registry.api.auth import oidc as oidc_mod
 from registry.api.middleware import tenant as middleware
 from registry.auth.entitlements import client as entitlement_client
 from registry.auth.entitlements.actor_store import DisabledTenantError
-from registry.auth.entitlements.resolver import EntitlementResolver, _CACHE_TOTAL
+from registry.auth.entitlements.resolver import _CACHE_TOTAL, EntitlementResolver
 from registry.auth.resolver import AuditIdentity, ResolvedIdentity, TenantGrant
 from registry.config import Settings
-
 
 # ---------------------------------------------------------------------------
 # Test scaffolding
@@ -139,7 +138,7 @@ class TestCacheMetric:
             resolver._fetcher = AsyncMock(
                 side_effect=entitlement_client.EntitlementServiceError("upstream 503")
             )
-            for entry in list(resolver._cache.values()):
+            for _entry in list(resolver._cache.values()):
                 # Push expires_at into the future so the failure handler
                 # sees a still-valid entry; bypass the fast-path TTL
                 # check by constructing a NEW claims dict (different

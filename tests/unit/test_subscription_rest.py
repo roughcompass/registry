@@ -359,9 +359,10 @@ class TestDeleteSubscription:
         resp = client.delete(f"/v1/subscriptions/{_SUB_ID}")
         assert resp.status_code == 404
 
-    def test_post_tunneled_alias_delete_not_registered_by_default(self) -> None:
-        """POST-tunneled DELETE alias is opt-in via REGISTRY_HTTP_METHODS_MODE=both."""
-        app = _build_app()
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post(f"/v1/subscriptions/{_SUB_ID}:delete")
-        assert resp.status_code in (404, 405)
+    # The default-mode "POST alias is not registered" assertion used to
+    # live here, but the test pyramid now sets ``REGISTRY_HTTP_METHODS_MODE=both``
+    # at conftest load time so the integration + conformance suites can
+    # exercise both surfaces without per-suite env juggling. The full
+    # mode matrix (rest / both / post_only) is covered exhaustively in
+    # tests/integration/test_http_methods_mode.py via subprocess + module
+    # reload, so the unit-level check would have been redundant.

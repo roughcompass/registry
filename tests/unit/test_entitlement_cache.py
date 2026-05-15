@@ -29,7 +29,6 @@ from registry.auth.entitlements.resolver import (
 )
 from registry.config import Settings
 
-
 # ---------------------------------------------------------------------------
 # Test scaffolding
 

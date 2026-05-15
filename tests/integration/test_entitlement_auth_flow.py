@@ -247,13 +247,15 @@ async def test_success_multi_tenant_requires_x_tenant_id_header(
         assert resp_no_header.status_code == 400
         # The available-tenants list is surfaced in the error body so
         # the caller can fix the request without inspecting the JWT.
+        # The global error envelope wraps the detail dict in
+        # ``errors: [{...}]`` and preserves non-reserved keys verbatim,
+        # so ``available_tenants`` lives on the first error item.
         body_no = resp_no_header.json()
-        # FastAPI wraps the detail dict — check both shapes.
-        detail = body_no.get("detail", body_no)
-        if isinstance(detail, dict):
-            avail = detail.get("available_tenants", [])
-            assert "t-multi-a" in avail
-            assert "t-multi-b" in avail
+        errors = body_no.get("errors", [])
+        assert errors, body_no
+        avail = errors[0].get("available_tenants", [])
+        assert "t-multi-a" in avail
+        assert "t-multi-b" in avail
 
         # With matching X-Tenant-ID → 200, that tenant selected.
         with _patch_validator_returning(

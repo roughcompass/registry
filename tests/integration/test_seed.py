@@ -20,7 +20,6 @@ the high-value invariants from a single sweep:
 from __future__ import annotations
 
 import os
-import re
 import subprocess
 import sys
 import uuid
@@ -33,9 +32,6 @@ from sqlalchemy.ext.asyncio import create_async_engine
 _REPO_ROOT = Path(__file__).parent.parent.parent
 _BOOTSTRAP_SCRIPT = _REPO_ROOT / "scripts" / "bootstrap_dev_tenant.py"
 _SEED_SCRIPT = _REPO_ROOT / "scripts" / "seed.py"
-
-_TOKEN_LINE_RE = re.compile(r"Token\s*:\s*(\S+)")
-
 
 def _run(database_url: str, script: Path, *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -51,8 +47,18 @@ def _run(database_url: str, script: Path, *extra: str) -> subprocess.CompletedPr
 @pytest.mark.asyncio
 async def test_dev_seed_populates_dev_tenant(pg_container: str) -> None:
     """Full seed: Salt enrichment + multi-tenant org, all from one run."""
-    # Bootstrap the dev tenant.
-    bootstrap = _run(pg_container, _BOOTSTRAP_SCRIPT, "--tenant-slug", "dev")
+    # Bootstrap the dev tenant. Override the actor display name to match
+    # what seed.py looks up ('dev-admin'); skip the mock-IDP seed because
+    # the mock services aren't running inside the test container.
+    bootstrap = _run(
+        pg_container,
+        _BOOTSTRAP_SCRIPT,
+        "--tenant-slug",
+        "dev",
+        "--actor-display-name",
+        "dev-admin",
+        "--skip-mock-seed",
+    )
     assert bootstrap.returncode == 0, bootstrap.stderr
 
     # Single seed run — loads every bundle under seeds/.

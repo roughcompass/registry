@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
 
 import httpx
 import pytest
@@ -29,7 +28,6 @@ from registry.auth.entitlements.client import (
     fetch_entitlements,
 )
 from registry.config import Settings
-
 
 _TEST_BASE_URL = "https://entitlement.test.local"
 

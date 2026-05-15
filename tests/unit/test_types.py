@@ -7,6 +7,7 @@ safe defaults, and ``selected_tenant_id`` aliases ``tenant_id``.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 
 import pytest
@@ -94,7 +95,8 @@ class TestImmutability:
         ctx = TenantContext(
             tenant_id=uuid.uuid4(), actor_id=uuid.uuid4(), roles=[]
         )
-        with pytest.raises(Exception):
+        # ``frozen=True`` raises FrozenInstanceError on attribute set.
+        with pytest.raises(dataclasses.FrozenInstanceError):
             ctx.tenant_id = uuid.uuid4()  # type: ignore[misc]
 
 
@@ -105,7 +107,7 @@ class TestTenantMembershipShape:
             tenant_slug="111",
             roles=frozenset({"admin"}),
         )
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             m.tenant_slug = "222"  # type: ignore[misc]
 
     def test_equality(self):

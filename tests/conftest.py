@@ -16,6 +16,17 @@ import subprocess
 import sys
 from collections.abc import AsyncGenerator, Iterator
 
+# Several integration + conformance tests POST to alias paths like
+# ``/v1/capabilities/{id}:delete`` and expect 204. Those aliases are
+# only registered when ``REGISTRY_HTTP_METHODS_MODE`` is ``both`` or
+# ``post_only``; the default is ``rest``, which leaves them
+# unregistered. Routers register routes at module-import time, so we
+# set the env var here — at the very top of the shared conftest, before
+# any router gets imported — so the registration is correct regardless
+# of which test bucket pytest collects first. Tests that need a specific
+# mode (``test_http_methods_mode.py``) still override + reload locally.
+os.environ.setdefault("REGISTRY_HTTP_METHODS_MODE", "both")
+
 import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import (

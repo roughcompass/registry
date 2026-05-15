@@ -48,7 +48,6 @@ from registry.api.middleware.tenant import (
 from registry.auth.entitlements import client as entitlement_client
 from registry.auth.resolver import AuditIdentity, ResolvedIdentity, TenantGrant
 
-
 # Shared helpers — same shape used in test_entitlement_middleware.py.
 
 

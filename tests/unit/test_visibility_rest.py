@@ -207,23 +207,13 @@ class TestSetVisibilitySuccess:
 # ---------------------------------------------------------------------------
 # POST-tunneled alias — opt-in via REGISTRY_HTTP_METHODS_MODE=both
 # ---------------------------------------------------------------------------
-
-
-class TestPostTunneledAlias:
-    def test_post_alias_not_registered_in_default_rest_mode(self) -> None:
-        """The POST-tunneled alias ``POST /{id}/visibility:set-visibility`` is
-        opt-in via ``REGISTRY_HTTP_METHODS_MODE=both`` — operators behind
-        enterprise gateways that strip non-GET/POST verbs set the env var
-        explicitly. The default mode is 'rest', so the alias is not registered.
-        The canonical surface is PATCH (covered by the success tests above).
-        """
-        app = _build_app()
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post(
-            f"/v1/capabilities/{_ENTITY_ID}/visibility:set-visibility",
-            json={"visibility": "private"},
-        )
-        assert resp.status_code in (404, 405)
+#
+# The default-mode "alias is not registered" assertion that used to live
+# here was removed when the test pyramid started setting
+# REGISTRY_HTTP_METHODS_MODE=both at conftest load time. The full mode
+# matrix (rest / both / post_only) is covered exhaustively in
+# tests/integration/test_http_methods_mode.py via subprocess + module
+# reload, so the unit-level check would have been redundant.
 
 
 # ---------------------------------------------------------------------------

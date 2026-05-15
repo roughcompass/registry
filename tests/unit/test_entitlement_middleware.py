@@ -30,7 +30,6 @@ from registry.auth.entitlements.actor_store import DisabledTenantError
 from registry.auth.resolver import AuditIdentity, ResolvedIdentity, TenantGrant
 from registry.exceptions import CatalogError
 
-
 # ---------------------------------------------------------------------------
 # Test scaffolding
 

@@ -69,9 +69,16 @@ async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID]
             await session.execute(
                 text(
                     "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
+                    "oidc_subject, created_at) "
+                    "VALUES (:aid, :tid, :dn, :sub, :now)"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
+                {
+                    "aid": actor_id,
+                    "tid": tenant_id,
+                    "dn": f"actor-{slug}",
+                    "sub": f"test-sub-{actor_id.hex[:8]}",
+                    "now": _NOW,
+                },
             )
     finally:
         await engine.dispose()

@@ -9,7 +9,6 @@ the database — the function performs no DB access in this iteration.
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -18,10 +17,9 @@ import httpx
 import pytest
 
 from registry.api.auth import oidc as oidc_mod
-from registry.api.auth.oidc import _CACHE_TTL_S, _OidcCache, validate_oidc_token
+from registry.api.auth.oidc import _OidcCache, validate_oidc_token
 from registry.config import Settings
 from registry.exceptions import CatalogError
-
 
 _DISCOVERY = {
     "issuer": "https://idp.example.com",

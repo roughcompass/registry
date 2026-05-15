@@ -4892,6 +4892,59 @@
         ]
       }
     },
+    "/v1/admin/capability-types/{type_name}:update": {
+      "post": {
+        "description": "Update a capability type schema \u2014 currently supports flipping is_advisory.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from schema_id + t_ingested_at before\nthe write so a stale precondition fails fast.\n\nRecommended flow: GET /v1/admin/capability-types/{name} \u2192 ETag header\n\u2192 PATCH with If-Match.",
+        "operationId": "tunnel_patch_update__capability-types_type_name",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "type_name",
+            "required": true,
+            "schema": {
+              "title": "Type Name",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapabilityTypeSchemaPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityTypeSchemaResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Capability Type",
+        "tags": [
+          "admin: schemas"
+        ]
+      }
+    },
     "/v1/admin/edge-property-schemas": {
       "get": {
         "description": "List all active edge property schemas for the tenant.  Edge-property schema management is not yet implemented.",
@@ -4961,6 +5014,52 @@
                 "schema": {
                   "additionalProperties": true,
                   "title": "Response  Update Edge Property Schema V1 Admin Edge Property Schemas  Schema Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Update Edge Property Schema",
+        "tags": [
+          "admin: edge-schemas"
+        ]
+      }
+    },
+    "/v1/admin/edge-property-schemas/{schema_id}:update": {
+      "post": {
+        "description": "Supersede an existing edge property schema (bi-temporal).\n\nFull implementation is pending. Once wired, this endpoint will honour\n``If-Match`` (advisory) using the schema's ``t_ingested_at`` timestamp\nas the ETag source, matching the pattern used by capability-type PATCH.",
+        "operationId": "tunnel_patch_update__edge-property-schemas_schema_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schema_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Schema Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Tunnel Patch Update  Edge-Property-Schemas Schema Id",
                   "type": "object"
                 }
               }
@@ -5104,6 +5203,42 @@
         ]
       }
     },
+    "/v1/admin/external-systems/{slug}:delete": {
+      "post": {
+        "description": "Hard-delete an external system registration.\n\nReturns ``204 No Content`` on success.  Returns ``404`` when the slug\ndoes not exist or belongs to a different tenant (avoids leaking cross-tenant\nregistry contents).\n\nNote: existing entity_external_ids rows that reference this slug are not\nautomatically removed by this call.  Callers should delete mappings first,\nor re-registration of the same slug will be unblocked once orphans are cleared.",
+        "operationId": "tunnel_delete_delete__external-systems_slug",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete External System",
+        "tags": [
+          "admin: external-systems"
+        ]
+      }
+    },
     "/v1/admin/pii-field-policies": {
       "get": {
         "description": "List all per-field PII policy overrides for the tenant.",
@@ -5192,6 +5327,43 @@
       "delete": {
         "description": "Hard-delete a per-field PII policy override.  Returns 204 on success.",
         "operationId": "_delete_pii_field_policy_v1_admin_pii_field_policies__policy_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "policy_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Policy Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete Pii Field Policy",
+        "tags": [
+          "admin: pii"
+        ]
+      }
+    },
+    "/v1/admin/pii-field-policies/{policy_id}:delete": {
+      "post": {
+        "description": "Hard-delete a per-field PII policy override.  Returns 204 on success.",
+        "operationId": "tunnel_delete_delete__pii-field-policies_policy_id",
         "parameters": [
           {
             "in": "path",
@@ -5348,6 +5520,97 @@
       "patch": {
         "description": "Partial-update a tenant PII pattern.\n\n``is_system=True`` rows return ``403 Forbidden``.\n``policy_override`` is validated as ``advisory | warn | block`` when\nprovided; ``422`` on invalid value.\n``regex`` is validated as a syntactically valid Python regex; ``422`` on\ninvalid pattern.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from pattern_id + created_at before\nthe write so a stale precondition fails fast.",
         "operationId": "_patch_pii_pattern_v1_admin_pii_patterns__pattern_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pattern_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pattern Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PiiPatternPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PiiPatternResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Patch Pii Pattern",
+        "tags": [
+          "admin: pii"
+        ]
+      }
+    },
+    "/v1/admin/pii-patterns/{pattern_id}:delete": {
+      "post": {
+        "description": "Hard-delete a tenant PII pattern.\n\n``is_system=True`` rows return ``403 Forbidden``.\nReturns ``204 No Content`` on success or if the row is already absent\n(idempotent).",
+        "operationId": "tunnel_delete_delete__pii-patterns_pattern_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pattern_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Pattern Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete Pii Pattern",
+        "tags": [
+          "admin: pii"
+        ]
+      }
+    },
+    "/v1/admin/pii-patterns/{pattern_id}:update": {
+      "post": {
+        "description": "Partial-update a tenant PII pattern.\n\n``is_system=True`` rows return ``403 Forbidden``.\n``policy_override`` is validated as ``advisory | warn | block`` when\nprovided; ``422`` on invalid value.\n``regex`` is validated as a syntactically valid Python regex; ``422`` on\ninvalid pattern.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from pattern_id + created_at before\nthe write so a stale precondition fails fast.",
+        "operationId": "tunnel_patch_update__pii-patterns_pattern_id",
         "parameters": [
           {
             "in": "path",
@@ -5884,6 +6147,97 @@
           }
         },
         "summary": "Trigger Sync",
+        "tags": [
+          "admin: sync"
+        ]
+      }
+    },
+    "/v1/admin/sync-sources/{source_id}:delete": {
+      "post": {
+        "description": "Soft-delete: sets is_active=FALSE.",
+        "operationId": "tunnel_delete_delete__sync-sources_source_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Sync Source",
+        "tags": [
+          "admin: sync"
+        ]
+      }
+    },
+    "/v1/admin/sync-sources/{source_id}:update": {
+      "post": {
+        "description": "Partial-update a sync source configuration.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed before the write so a stale\nprecondition fails fast.\n\nRecommended flow: GET /v1/admin/sync-sources/{id} \u2192 ETag header \u2192 PATCH\nwith If-Match.",
+        "operationId": "tunnel_patch_update__sync-sources_source_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Source Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SyncSourcePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncSourceResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Sync Source",
         "tags": [
           "admin: sync"
         ]
@@ -6553,6 +6907,113 @@
         ]
       }
     },
+    "/v1/admin/vocabularies/{kind}/{value}:delete": {
+      "post": {
+        "description": "Soft-delete: sets deprecated_at = now().",
+        "operationId": "tunnel_delete_delete__vocabularies_kind_value",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "value",
+            "required": true,
+            "schema": {
+              "title": "Value",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Vocabulary Value",
+        "tags": [
+          "admin: vocabulary"
+        ]
+      }
+    },
+    "/v1/admin/vocabularies/{kind}/{value}:update": {
+      "post": {
+        "description": "Update a vocabulary value, e.g. set deprecated_at.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the vocab_id + created_at before\nthe write so a stale precondition fails fast.\n\nThere is no detail-GET for individual vocabulary values; the client can\nderive the ETag from the list response or a prior PATCH response using\nthe same inputs (vocab_id + created_at).",
+        "operationId": "tunnel_patch_update__vocabularies_kind_value",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "value",
+            "required": true,
+            "schema": {
+              "title": "Value",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VocabularyValuePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VocabularyValueResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Vocabulary Value",
+        "tags": [
+          "admin: vocabulary"
+        ]
+      }
+    },
     "/v1/annotations/{annotation_id}": {
       "delete": {
         "description": "Soft-delete an annotation. Idempotent \u2014 second call returns 204 unchanged.\n\nAuthorization: the annotation's author OR a producer/admin in the capability's\nowner tenant can delete. The service enforces this check and treats an already-\ndeleted annotation as a no-op rather than a 404.",
@@ -6621,6 +7082,99 @@
                 "schema": {
                   "additionalProperties": true,
                   "title": "Response  Triage Annotation Handler V1 Annotations  Annotation Id  Patch",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Triage an annotation (update status / triage note)",
+        "tags": [
+          "annotations"
+        ]
+      }
+    },
+    "/v1/annotations/{annotation_id}:delete": {
+      "post": {
+        "description": "Soft-delete an annotation. Idempotent \u2014 second call returns 204 unchanged.\n\nAuthorization: the annotation's author OR a producer/admin in the capability's\nowner tenant can delete. The service enforces this check and treats an already-\ndeleted annotation as a no-op rather than a 404.",
+        "operationId": "tunnel_delete_delete__annotation_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Annotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete an annotation (idempotent)",
+        "tags": [
+          "annotations"
+        ]
+      }
+    },
+    "/v1/annotations/{annotation_id}:update": {
+      "post": {
+        "description": "Triage an annotation \u2014 update its status and optionally set a triage note.\n\nAuthorization: the caller's tenant must own the capability the annotation\nbelongs to. The service enforces this check before applying any update.\n\nReturns 200 with the updated AnnotationResponse. A warn-level PII hit on\ntriage_note populates the top-level ``warnings`` list in the response.\n\nAn invalid status value is rejected with 422 (service-layer vocabulary check).",
+        "operationId": "tunnel_patch_update__annotation_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "annotation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Annotation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationTriageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Tunnel Patch Update  Annotation Id",
                   "type": "object"
                 }
               }
@@ -7818,6 +8372,52 @@
         ]
       }
     },
+    "/v1/capabilities/{entity_id}/artifacts/{fact_id}:delete": {
+      "post": {
+        "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.\n\nPath segment accepts UUID or slug-form name.",
+        "operationId": "tunnel_delete_delete__fact_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "fact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Fact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/capabilities/{entity_id}/blast-radius": {
       "get": {
         "description": "Full transitive closure from a capability, served from ``closure_cache``.\n\nThe path segment accepts a UUID or slug-form name.\n\nFalls back to the recursive CTE when:\n- ``as_of`` is before the 90-day cache horizon, OR\n- the cache has no rows for this root + direction (cold start).\n\n``cache_hit=True`` indicates the result was served from the materialized\ncache; ``False`` indicates the live CTE was executed.\n\nA POST-tunneled alias ``POST /v1/capabilities/{entity_id}:blast-radius``\naccepts the same parameters via query string and returns an identical body.\n\nPass ``?view=audit`` to include bitemporal columns on edge items.",
@@ -8210,10 +8810,118 @@
         ]
       }
     },
+    "/v1/capabilities/{entity_id}/lifecycle:update": {
+      "post": {
+        "description": "Apply a lifecycle state transition to a capability.\n\nThe path segment accepts a UUID or slug-form name.\n\nRequires ``admin`` or ``producer`` role.  When ``successor`` is a UUID the\nservice creates a ``replaced_by`` edge via ``CatalogService.create_edge``\nafter committing the attribute row.  When ``successor`` is ``\"none\"`` the\nentity is deprecated without a replacement.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the entity's current state before\nthe transition so a stale precondition fails fast.\n\nReturns 422 on policy violation (invalid transition, invalid successor value),\n404 if the entity does not exist.",
+        "operationId": "tunnel_patch_update__entity_id_lifecycle",
+        "parameters": [
+          {
+            "description": "Capability UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Capability UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LifecycleTransitionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifecycleTransitionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Capability Lifecycle",
+        "tags": [
+          "lifecycle"
+        ]
+      }
+    },
     "/v1/capabilities/{entity_id}/visibility": {
       "patch": {
         "description": "PATCH /v1/capabilities/{entity_id} \u2014 update visibility and shared_with_tenants.\n\nPath segment accepts UUID or slug-form name.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a warning\nand accepts the write.\n\nRequires producer or admin role. Ownership is enforced by VisibilityService\n(only the owning tenant may change visibility).\n\nErrors:\n- 403 if caller lacks producer/admin role.\n- 403 if caller is not the owning tenant (PermissionError from service).\n- 404 if entity not found for the calling tenant.\n- 412 if `If-Match` was supplied and does not match the current ETag.\n- 422 if visibility value is invalid or tenant-shared without shared_with_tenants.",
         "operationId": "set_visibility_handler_v1_capabilities__entity_id__visibility_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetVisibilityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Visibility Handler",
+        "tags": [
+          "capabilities"
+        ]
+      }
+    },
+    "/v1/capabilities/{entity_id}/visibility:set-visibility": {
+      "post": {
+        "description": "PATCH /v1/capabilities/{entity_id} \u2014 update visibility and shared_with_tenants.\n\nPath segment accepts UUID or slug-form name.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a warning\nand accepts the write.\n\nRequires producer or admin role. Ownership is enforced by VisibilityService\n(only the owning tenant may change visibility).\n\nErrors:\n- 403 if caller lacks producer/admin role.\n- 403 if caller is not the owning tenant (PermissionError from service).\n- 404 if entity not found for the calling tenant.\n- 412 if `If-Match` was supplied and does not match the current ETag.\n- 422 if visibility value is invalid or tenant-shared without shared_with_tenants.",
+        "operationId": "tunnel_patch_set-visibility__entity_id_visibility",
         "parameters": [
           {
             "in": "path",
@@ -8397,6 +9105,95 @@
         "summary": "Blast-radius \u2014 POST-tunneled alias (same handler as GET)",
         "tags": [
           "graph"
+        ]
+      }
+    },
+    "/v1/capabilities/{entity_id}:delete": {
+      "post": {
+        "description": "Soft-delete idempotency:\n- Row exists (active or already-invalidated) \u2192 204 No Content.\n- Row never existed \u2192 404 Not Found (service raises NotFoundError).",
+        "operationId": "tunnel_delete_delete__entity_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Capability",
+        "tags": [
+          "capabilities"
+        ]
+      }
+    },
+    "/v1/capabilities/{entity_id}:update": {
+      "post": {
+        "description": "Update mutable attributes on a capability.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a warning and accepts the\nwrite.  ETag is computed from the entity row before the write so a stale\nprecondition fails fast without executing the mutation.\n\nWhen there is no detail GET that a client can use to acquire the ETag,\nthe client may compute it from the list response or from a prior PATCH\nresponse body \u2014 but that is uncommon.  The recommended flow is:\nGET /v1/capabilities/{id} \u2192 ETag header \u2192 PATCH with If-Match.",
+        "operationId": "tunnel_patch_update__entity_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Capability",
+        "tags": [
+          "capabilities"
         ]
       }
     },
@@ -8586,6 +9383,54 @@
         ]
       }
     },
+    "/v1/capabilities/{provider_cap_id}/adoptions/{adoption_id}:unadopt": {
+      "post": {
+        "description": "Soft-delete by setting t_invalidated_at. The provides_to edge is\nretained so historical bi-temporal traversal still surfaces the\nrelationship.\n\nIdempotent: calling on an already-invalidated adoption is a no-op\n(returns 204).",
+        "operationId": "tunnel_delete_unadopt__provider_cap_id_adoptions_adoption_id",
+        "parameters": [
+          {
+            "description": "Provider capability UUID or slug",
+            "in": "path",
+            "name": "provider_cap_id",
+            "required": true,
+            "schema": {
+              "description": "Provider capability UUID or slug",
+              "title": "Provider Cap Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "adoption_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Adoption Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete (unadopt) an adoption",
+        "tags": [
+          "adoptions"
+        ]
+      }
+    },
     "/v1/concepts": {
       "post": {
         "operationId": "_create_v1_concepts_post",
@@ -8728,6 +9573,99 @@
       "patch": {
         "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
         "operationId": "_patch_v1_concepts__entity_id__patch",
+        "parameters": [
+          {
+            "description": "Concept UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Concept UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Patch",
+        "tags": [
+          "concepts"
+        ]
+      }
+    },
+    "/v1/concepts/{entity_id}:delete": {
+      "post": {
+        "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
+        "operationId": "tunnel_delete_delete__entity_id",
+        "parameters": [
+          {
+            "description": "Concept UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Concept UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete",
+        "tags": [
+          "concepts"
+        ]
+      }
+    },
+    "/v1/concepts/{entity_id}:update": {
+      "post": {
+        "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
+        "operationId": "tunnel_patch_update__entity_id",
         "parameters": [
           {
             "description": "Concept UUID or slug",
@@ -8999,6 +9937,119 @@
       "patch": {
         "description": "Update the ``url`` or ``metadata_jsonb`` of an existing external-ID mapping.\n\nThe path segment accepts a UUID or slug-form name for the entity.\n\nReturns ``404`` when the mapping does not exist or belongs to a different\nentity/tenant.  Only fields present in the request body are updated.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the mapping's primary key +\n``updated_at`` before the write so a stale precondition fails fast.\n\nThere is no detail-GET for an individual external-ID mapping; the client\ncan acquire the ETag from the list endpoint body (list does not emit an\nETag header) or from a prior PATCH response \u2014 the ETag for the updated\nrecord is computed from the returned ``external_id_pk + updated_at`` values.",
         "operationId": "_patch_external_id_v1_entities__entity_id__external_ids__external_id_pk__patch",
+        "parameters": [
+          {
+            "description": "Entity UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Entity UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "external_id_pk",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "External Id Pk",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExternalIdPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExternalIdResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Patch External Id",
+        "tags": [
+          "external-ids"
+        ]
+      }
+    },
+    "/v1/entities/{entity_id}/external-ids/{external_id_pk}:delete": {
+      "post": {
+        "description": "Hard-delete an external-ID mapping by its primary key.\n\nThe path segment accepts a UUID or slug-form name for the entity.\n\nThere is no soft-history: the row is removed permanently.\nDeletion is audit-logged to ``audit_log`` unconditionally.\n\nReturns ``204 No Content`` on success.  Returns ``404`` when the mapping\ndoes not exist or belongs to a different tenant (avoids leaking existence).",
+        "operationId": "tunnel_delete_delete__v1_entities_entity_id_external-ids_external_id_pk",
+        "parameters": [
+          {
+            "description": "Entity UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Entity UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "external_id_pk",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "External Id Pk",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete External Id",
+        "tags": [
+          "external-ids"
+        ]
+      }
+    },
+    "/v1/entities/{entity_id}/external-ids/{external_id_pk}:update": {
+      "post": {
+        "description": "Update the ``url`` or ``metadata_jsonb`` of an existing external-ID mapping.\n\nThe path segment accepts a UUID or slug-form name for the entity.\n\nReturns ``404`` when the mapping does not exist or belongs to a different\nentity/tenant.  Only fields present in the request body are updated.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the mapping's primary key +\n``updated_at`` before the write so a stale precondition fails fast.\n\nThere is no detail-GET for an individual external-ID mapping; the client\ncan acquire the ETag from the list endpoint body (list does not emit an\nETag header) or from a prior PATCH response \u2014 the ETag for the updated\nrecord is computed from the returned ``external_id_pk + updated_at`` values.",
+        "operationId": "tunnel_patch_update__v1_entities_entity_id_external-ids_external_id_pk",
         "parameters": [
           {
             "description": "Entity UUID or slug",
@@ -9624,6 +10675,99 @@
         ]
       }
     },
+    "/v1/operations/{entity_id}:delete": {
+      "post": {
+        "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
+        "operationId": "tunnel_delete_delete__entity_id",
+        "parameters": [
+          {
+            "description": "Operation UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Operation UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Delete",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
+    "/v1/operations/{entity_id}:update": {
+      "post": {
+        "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
+        "operationId": "tunnel_patch_update__entity_id",
+        "parameters": [
+          {
+            "description": "Operation UUID or slug",
+            "in": "path",
+            "name": "entity_id",
+            "required": true,
+            "schema": {
+              "description": "Operation UUID or slug",
+              "title": "Entity Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateEntityRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": " Patch",
+        "tags": [
+          "operations"
+        ]
+      }
+    },
     "/v1/search": {
       "get": {
         "description": "Hybrid search across capabilities, concepts, operations, and artifact bodies.",
@@ -9771,6 +10915,109 @@
       "patch": {
         "description": "Update mutable fields on an active subscription.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the subscription identifier +\nits ``t_ingested_at`` timestamp before the write so a stale precondition\nfails fast.\n\nThere is no detail-GET endpoint for subscriptions \u2014 clients that need an\nETag should parse it from the subscription create response or from the list\nendpoint item (list items do not currently emit ETags, so the safest source\nis a prior PATCH response).\n\nPass ``?view=audit`` to include bitemporal columns in the response.",
         "operationId": "_update_subscription_handler_v1_subscriptions__subscription_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Response shape. ``default`` is the standard UI-flavoured shape. ``audit`` adds bitemporal columns (valid_from / valid_to / ingested_at / invalidated_at) for audit / compliance consumers.",
+            "in": "query",
+            "name": "view",
+            "required": false,
+            "schema": {
+              "default": "default",
+              "description": "Response shape. ``default`` is the standard UI-flavoured shape. ``audit`` adds bitemporal columns (valid_from / valid_to / ingested_at / invalidated_at) for audit / compliance consumers.",
+              "title": "View",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubscriptionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a subscription",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/v1/subscriptions/{subscription_id}:delete": {
+      "post": {
+        "description": "Soft-delete (sets t_invalidated_at). Idempotent.",
+        "operationId": "tunnel_delete_delete__subscription_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "subscription_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Subscription Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete a subscription",
+        "tags": [
+          "subscriptions"
+        ]
+      }
+    },
+    "/v1/subscriptions/{subscription_id}:update": {
+      "post": {
+        "description": "Update mutable fields on an active subscription.\n\nHonours the ``If-Match`` request header (advisory): if present and stale,\nreturns 412 Precondition Failed; if absent, logs a debug warning and\naccepts the write.  ETag is computed from the subscription identifier +\nits ``t_ingested_at`` timestamp before the write so a stale precondition\nfails fast.\n\nThere is no detail-GET endpoint for subscriptions \u2014 clients that need an\nETag should parse it from the subscription create response or from the list\nendpoint item (list items do not currently emit ETags, so the safest source\nis a prior PATCH response).\n\nPass ``?view=audit`` to include bitemporal columns in the response.",
+        "operationId": "tunnel_patch_update__subscription_id",
         "parameters": [
           {
             "in": "path",
@@ -10471,6 +11718,212 @@
           }
         },
         "summary": "Update a workspace entry",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/entries/{entry_id}:delete": {
+      "post": {
+        "description": "Soft-delete a workspace entry. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization is role-based: the write-gate checks owner_kind and\neffective_roles. WorkspaceNotFound \u2192 404; WorkspaceOperationDenied \u2192 403.",
+        "operationId": "tunnel_delete_delete__workspace_id_entries_entry_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete a workspace entry (idempotent)",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/entries/{entry_id}:update": {
+      "post": {
+        "description": "Update a workspace entry's body, reference_ids, or references_jsonb.\n\nAuthorization: the caller must own the workspace or hold an active\ncontributor share. The service enforces this via workspace visibility before\nwriting.\n\nPII scanner runs on any provided body_md or references_jsonb. A block hit\nreturns 422 and the entry is NOT updated. A warn hit updates the entry and\nreturns a ``warnings`` list in the response.\n\nOnly supplied fields are updated; omitted fields retain their current values.",
+        "operationId": "tunnel_patch_update__workspace_id_entries_entry_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "entry_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Entry Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EntryUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Tunnel Patch Update  Workspace Id Entries Entry Id",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a workspace entry",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}:delete": {
+      "post": {
+        "description": "Soft-delete a workspace. Idempotent \u2014 a second call returns 204 unchanged.\n\nAuthorization is role-based: the write-gate checks owner_kind and\neffective_roles. WorkspaceNotFound \u2192 404; WorkspaceOperationDenied \u2192 403.\nAlready-deleted workspaces are a no-op rather than an error.",
+        "operationId": "tunnel_delete_delete__workspace_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Soft-delete a workspace (idempotent)",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}:update": {
+      "post": {
+        "description": "Update a workspace's name, description, or archived_at.\n\nAuthorization: the caller must be the owning actor or an admin in the\nworkspace's owning tenant. Share holders cannot update. The service enforces\nthis check before applying any change.\n\nPass archived_at=null to un-archive a workspace. Omit a field to leave it\nunchanged (name and description are partial-update safe).",
+        "operationId": "tunnel_patch_update__workspace_id",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Tunnel Patch Update  Workspace Id",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update a workspace (name, description, archived_at)",
         "tags": [
           "workspaces"
         ]
