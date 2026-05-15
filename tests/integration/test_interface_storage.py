@@ -19,8 +19,8 @@ covered by the unit test for the service.
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -28,52 +28,29 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import VISIBILITY_PUBLIC
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
 
-async def _seed_tenant_and_cap(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID, str, uuid.UUID]:
+# ---------------------------------------------------------------------------
+# Seed helpers
+# ---------------------------------------------------------------------------
+
+
+async def _seed_capability(pg_url: str, *, tenant_id: uuid.UUID, name: str) -> uuid.UUID:
+    """Insert a capability entity for a pre-materialised tenant."""
+    cap_id = uuid.uuid4()
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    cap_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
     try:
         async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": ["producer", "admin"],
-                    "now": _NOW,
-                },
-            )
             await session.execute(
                 text(
                     "INSERT INTO entities "
@@ -84,101 +61,155 @@ async def _seed_tenant_and_cap(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.
                 {
                     "eid": cap_id,
                     "tid": tenant_id,
-                    "name": f"{slug}-cap",
+                    "name": name,
                     "now": _NOW,
                     "vis": VISIBILITY_PUBLIC,
                 },
             )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token, cap_id
+    return cap_id
+
+
+async def _get_tenant_id(pg_url: str, slug: str) -> uuid.UUID:
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+                )
+            ).first()
+            assert row is not None, f"tenant {slug} not materialised"
+            return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
+
+
+async def _make_persona(
+    h: EntitlementAuthHarness, pg_url: str, *, slug: str, roles: list[str]
+) -> TenantPersona:
+    """Materialise tenant + actor via /v1/whoami."""
+    persona = h.add_persona(slug, roles=roles)
+    h.configure_fetcher_for(persona)
+    transport = ASGITransport(app=h.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return persona
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+async def app_client(pg_container: str) -> AsyncIterator[tuple[AsyncClient, EntitlementAuthHarness]]:
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, harness
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_put_then_get_typescript_interface(pg_container: str, app_client) -> None:
-    client = app_client
-    _, _, token, cap_id = await _seed_tenant_and_cap(pg_container, "iface-ts")
-    headers = {"Authorization": f"Bearer {token}"}
+async def test_put_then_get_typescript_interface(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+    slug = f"iface-ts-{uuid.uuid4().hex[:6]}"
+    persona = await _make_persona(harness, pg_container, slug=slug, roles=["admin", "producer"])
+    tid = await _get_tenant_id(pg_container, slug)
+    cap_id = await _seed_capability(pg_container, tenant_id=tid, name=f"{slug}-cap")
 
-    put = await client.put(
-        f"/v1/capabilities/{cap_id}/interface",
-        headers=headers,
-        json={
-            "interface_source": "type Order = { id: string; total: number; }",
-            "interface_format": "typescript",
-        },
-    )
-    assert put.status_code == 200, put.text
-    canonical = put.json()
-    field_names = {f["name"] for f in canonical["fields"]}
-    assert field_names == {"id", "total"}
+    harness.configure_fetcher_for(persona)
+    with patch_validator_for_actor(persona):
+        put = await client.put(
+            f"/v1/capabilities/{cap_id}/interface",
+            headers=bearer_headers(tenant_slug=persona.slug),
+            json={
+                "interface_source": "type Order = { id: string; total: number; }",
+                "interface_format": "typescript",
+            },
+        )
+        assert put.status_code == 200, put.text
+        canonical = put.json()
+        field_names = {f["name"] for f in canonical["fields"]}
+        assert field_names == {"id", "total"}
 
-    get = await client.get(f"/v1/capabilities/{cap_id}/interface", headers=headers)
+        get = await client.get(
+            f"/v1/capabilities/{cap_id}/interface",
+            headers=bearer_headers(tenant_slug=persona.slug),
+        )
     assert get.status_code == 200
     body = get.json()
     assert body["interface_format"] == "typescript"
-    assert {f["name"] for f in body["interface_canonical"]["fields"]} == {
-        "id",
-        "total",
-    }
+    assert {f["name"] for f in body["interface_canonical"]["fields"]} == {"id", "total"}
     assert body["interface_source"]["format"] == "typescript"
 
 
 @pytest.mark.asyncio
-async def test_second_put_supersedes_first(pg_container: str, app_client) -> None:
-    client = app_client
-    _, _, token, cap_id = await _seed_tenant_and_cap(pg_container, "iface-supersede")
-    headers = {"Authorization": f"Bearer {token}"}
+async def test_second_put_supersedes_first(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+    slug = f"iface-supersede-{uuid.uuid4().hex[:6]}"
+    persona = await _make_persona(harness, pg_container, slug=slug, roles=["admin", "producer"])
+    tid = await _get_tenant_id(pg_container, slug)
+    cap_id = await _seed_capability(pg_container, tenant_id=tid, name=f"{slug}-cap")
 
-    # First PUT — TypeScript.
-    r1 = await client.put(
-        f"/v1/capabilities/{cap_id}/interface",
-        headers=headers,
-        json={
-            "interface_source": "type X = { id: string; }",
-            "interface_format": "typescript",
-        },
-    )
-    assert r1.status_code == 200
-
-    # Second PUT — OpenAPI.
-    r2 = await client.put(
-        f"/v1/capabilities/{cap_id}/interface",
-        headers=headers,
-        json={
-            "interface_source": {
-                "openapi": "3.0.0",
-                "paths": {
-                    "/orders": {
-                        "post": {
-                            "operationId": "createOrder",
-                            "responses": {"201": {"content": {"application/json": {"schema": {"type": "object"}}}}},
-                        }
-                    }
-                },
+    harness.configure_fetcher_for(persona)
+    with patch_validator_for_actor(persona):
+        # First PUT — TypeScript.
+        r1 = await client.put(
+            f"/v1/capabilities/{cap_id}/interface",
+            headers=bearer_headers(tenant_slug=persona.slug),
+            json={
+                "interface_source": "type X = { id: string; }",
+                "interface_format": "typescript",
             },
-            "interface_format": "openapi",
-        },
-    )
-    assert r2.status_code == 200, r2.text
+        )
+        assert r1.status_code == 200
 
-    # Current truth GET reflects the OpenAPI surface only.
-    get = await client.get(f"/v1/capabilities/{cap_id}/interface", headers=headers)
+        # Second PUT — OpenAPI.
+        r2 = await client.put(
+            f"/v1/capabilities/{cap_id}/interface",
+            headers=bearer_headers(tenant_slug=persona.slug),
+            json={
+                "interface_source": {
+                    "openapi": "3.0.0",
+                    "paths": {
+                        "/orders": {
+                            "post": {
+                                "operationId": "createOrder",
+                                "responses": {
+                                    "201": {
+                                        "content": {
+                                            "application/json": {"schema": {"type": "object"}}
+                                        }
+                                    }
+                                },
+                            }
+                        }
+                    },
+                },
+                "interface_format": "openapi",
+            },
+        )
+        assert r2.status_code == 200, r2.text
+
+        # Current truth GET reflects the OpenAPI surface only.
+        get = await client.get(
+            f"/v1/capabilities/{cap_id}/interface",
+            headers=bearer_headers(tenant_slug=persona.slug),
+        )
     assert get.status_code == 200
     body = get.json()
     assert body["interface_format"] == "openapi"
@@ -207,20 +238,28 @@ async def test_second_put_supersedes_first(pg_container: str, app_client) -> Non
 
 
 @pytest.mark.asyncio
-async def test_put_non_owner_returns_404(pg_container: str, app_client) -> None:
-    client = app_client
+async def test_put_non_owner_returns_404(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
     # Owner tenant has a capability; a different tenant tries to write.
-    _, _, _, owned_cap = await _seed_tenant_and_cap(pg_container, "iface-owner-x")
-    _, _, other_token, _ = await _seed_tenant_and_cap(pg_container, "iface-other-y")
+    slug_owner = f"iface-owner-{uuid.uuid4().hex[:6]}"
+    slug_other = f"iface-other-{uuid.uuid4().hex[:6]}"
+    _persona_owner = await _make_persona(harness, pg_container, slug=slug_owner, roles=["admin", "producer"])
+    persona_other = await _make_persona(harness, pg_container, slug=slug_other, roles=["admin", "producer"])
 
-    headers = {"Authorization": f"Bearer {other_token}"}
-    resp = await client.put(
-        f"/v1/capabilities/{owned_cap}/interface",
-        headers=headers,
-        json={
-            "interface_source": "type X = { id: string; }",
-            "interface_format": "typescript",
-        },
-    )
+    owner_tid = await _get_tenant_id(pg_container, slug_owner)
+    owned_cap = await _seed_capability(pg_container, tenant_id=owner_tid, name=f"{slug_owner}-cap")
+
+    harness.configure_fetcher_for(persona_other)
+    with patch_validator_for_actor(persona_other):
+        resp = await client.put(
+            f"/v1/capabilities/{owned_cap}/interface",
+            headers=bearer_headers(tenant_slug=persona_other.slug),
+            json={
+                "interface_source": "type X = { id: string; }",
+                "interface_format": "typescript",
+            },
+        )
     # Service raises NotFoundError (the opaque shape for cross-tenant access).
     assert resp.status_code == 404
