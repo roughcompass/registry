@@ -202,42 +202,33 @@ class RateLimitMiddleware:
             read_per_minute=settings.rate_limit_read_per_minute,
             write_per_minute=settings.rate_limit_write_per_minute,
         )
-        # LRU cache: SHA-256(raw_token) → tenant_id UUID.  Bounded to avoid
-        # unbounded memory growth on rotating-token deployments.
-        self._tenant_cache: OrderedDict[str, uuid.UUID] = OrderedDict()
+        # LRU cache: SHA-256(raw_token) → bucket key UUID. Bounded to
+        # avoid unbounded memory growth on rotating-token deployments.
+        self._bucket_key_cache: OrderedDict[str, uuid.UUID] = OrderedDict()
 
-    def _evict_tenant_cache(self) -> None:
-        while len(self._tenant_cache) > _TENANT_CACHE_MAXSIZE:
-            self._tenant_cache.popitem(last=False)
+    def _evict_bucket_key_cache(self) -> None:
+        while len(self._bucket_key_cache) > _TENANT_CACHE_MAXSIZE:
+            self._bucket_key_cache.popitem(last=False)
 
-    async def _resolve_tenant_id(self, token_hash: str, raw_token: str) -> uuid.UUID | None:
-        """Return tenant_id for *raw_token*, consulting cache first.
+    def _bucket_key_for(self, token_hash: str) -> uuid.UUID:
+        """Derive a deterministic UUID key from the token hash.
 
-        Returns None when the token is unrecognised — the request will
-        be passed through without rate limiting (auth layer handles 401).
+        Rate-limiting in the new auth model happens BEFORE the
+        entitlement-resolved auth middleware runs, so the tenant is
+        not yet known. Bucketing by token hash gives every distinct
+        bearer its own budget — strictly more conservative than the
+        previous per-tenant model (a compromised token cannot drain
+        another token's bucket within the same tenant). The UUID
+        store is reused unchanged with the synthesized key.
         """
-        if token_hash in self._tenant_cache:
-            self._tenant_cache.move_to_end(token_hash)
-            return self._tenant_cache[token_hash]
+        if token_hash in self._bucket_key_cache:
+            self._bucket_key_cache.move_to_end(token_hash)
+            return self._bucket_key_cache[token_hash]
 
-        try:
-            async with self._session_factory() as session:
-                result = await session.execute(
-                    text("SELECT tenant_id FROM api_tokens " "WHERE token_hash = :h AND revoked_at IS NULL " "LIMIT 1"),
-                    {"h": token_hash},
-                )
-                row = result.one_or_none()
-        except Exception as exc:  # noqa: BLE001
-            _log.warning("rate_limit_tenant_lookup_failed: %s", exc)
-            return None
-
-        if row is None:
-            return None
-
-        tid = row[0] if isinstance(row[0], uuid.UUID) else uuid.UUID(str(row[0]))
-        self._tenant_cache[token_hash] = tid
-        self._evict_tenant_cache()
-        return tid
+        key = uuid.uuid5(uuid.NAMESPACE_DNS, token_hash)
+        self._bucket_key_cache[token_hash] = key
+        self._evict_bucket_key_cache()
+        return key
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -270,27 +261,22 @@ class RateLimitMiddleware:
             return
 
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
-        tenant_id = await self._resolve_tenant_id(token_hash, raw_token)
-
-        if tenant_id is None:
-            # Unrecognised token — pass through; auth layer handles 401.
-            await self._app(scope, receive, send)
-            return
+        bucket_key = self._bucket_key_for(token_hash)
 
         method: str = scope.get("method", "GET").upper()
         is_read = method in _READ_METHODS
         if is_read:
-            allowed, retry_after = self._buckets.consume_read(tenant_id)
+            allowed, retry_after = self._buckets.consume_read(bucket_key)
         else:
-            allowed, retry_after = self._buckets.consume_write(tenant_id)
+            allowed, retry_after = self._buckets.consume_write(bucket_key)
 
         if allowed:
             await self._app(scope, receive, send)
             return
 
         _log.info(
-            "rate_limit_exceeded tenant=%s method=%s path=%s",
-            tenant_id,
+            "rate_limit_exceeded bucket=%s method=%s path=%s",
+            bucket_key,
             method,
             path,
         )

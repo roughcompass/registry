@@ -195,7 +195,7 @@ def _middleware_with_tenant(tenant_id: uuid.UUID, settings: Any) -> RateLimitMid
         session_factory=AsyncMock(),
     )
     token_hash = _token_hash("test-token")
-    mw._tenant_cache[token_hash] = tenant_id
+    mw._bucket_key_cache[token_hash] = tenant_id
     return mw
 
 
@@ -251,8 +251,8 @@ async def test_middleware_tenant_a_limit_does_not_throttle_tenant_b() -> None:
 
     hash_a = _token_hash("token-a")
     hash_b = _token_hash("token-b")
-    mw._tenant_cache[hash_a] = tid_a
-    mw._tenant_cache[hash_b] = tid_b
+    mw._bucket_key_cache[hash_a] = tid_a
+    mw._bucket_key_cache[hash_b] = tid_b
 
     scope_a = _make_scope("POST", "/v1/capabilities", "token-a")
     scope_b = _make_scope("POST", "/v1/capabilities", "token-b")
@@ -376,16 +376,13 @@ async def test_middleware_passes_through_unrecognised_token() -> None:
 
 
 @pytest.mark.asyncio
-async def test_middleware_tenant_cache_populated_from_db() -> None:
-    """First request resolves tenant_id from DB; subsequent calls use cache."""
+async def test_middleware_uses_deterministic_bucket_key_no_db() -> None:
+    """The ratelimit middleware no longer does a DB lookup — it derives
+    the bucket key from the token hash directly. Same token → same
+    bucket; no SQL is executed."""
     settings = _make_settings(write_per_minute=10)
-    tid = uuid.uuid4()
 
     session_mock = AsyncMock()
-    result_mock = MagicMock()
-    result_mock.one_or_none.return_value = (tid,)
-    session_mock.execute = AsyncMock(return_value=result_mock)
-
     factory_mock = MagicMock()
     factory_mock.return_value.__aenter__ = AsyncMock(return_value=session_mock)
     factory_mock.return_value.__aexit__ = AsyncMock(return_value=False)
@@ -396,17 +393,16 @@ async def test_middleware_tenant_cache_populated_from_db() -> None:
         session_factory=factory_mock,
     )
 
-    scope = _make_scope("POST", "/v1/capabilities", "known-token")
+    scope = _make_scope("POST", "/v1/capabilities", "any-token")
 
     resp1 = await _collect_response(mw, scope)
     assert resp1["status"] == 200
-    # DB was queried once.
-    assert session_mock.execute.call_count == 1
 
     resp2 = await _collect_response(mw, scope)
     assert resp2["status"] == 200
-    # DB still queried only once (cache hit).
-    assert session_mock.execute.call_count == 1
+
+    # No SQL executed across either request.
+    assert session_mock.execute.call_count == 0
 
 
 @pytest.mark.asyncio
