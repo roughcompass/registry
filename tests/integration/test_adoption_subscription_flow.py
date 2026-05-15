@@ -2,7 +2,7 @@
 
 Two headline scenarios:
 
-1. Adoption flow (the headline scenario from tasks.md §T22):
+1. Adoption flow:
    - Tenant A publishes PaymentAPI (tenant-shared, ACL=[B]).
    - Tenant B adopts with ``version_pin=^2.0``; the provides_to edge is
      created; an auto-subscription appears in B's subscriptions table.
@@ -26,8 +26,8 @@ from __future__ import annotations
 
 import datetime
 import json
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
@@ -37,9 +37,6 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import (
     VISIBILITY_PUBLIC,
     VISIBILITY_TENANT_SHARED,
@@ -51,51 +48,16 @@ from registry.workers.webhook_delivery import (
     make_digest_envelope,
     verify_signature,
 )
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    bearer_headers,
+    patch_validator_for_actor,
+)
+
+type _AppClient = tuple[AsyncClient, EntitlementAuthHarness]
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 _WEBHOOK_SECRET = "test-secret-xyz"
-
-
-async def _seed_tenant_with_token(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": ["producer", "consumer", "admin"],
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
 
 
 async def _seed_payment_api(
@@ -146,19 +108,25 @@ async def _seed_payment_api(
     return cap_id
 
 
-@pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
+async def _materialise_persona(harness: EntitlementAuthHarness, slug: str, roles: list[str]) -> uuid.UUID:
+    """JIT-materialise a persona and return its tenant_id."""
+
+    persona = harness.add_persona(slug, roles=roles)
+    harness.configure_fetcher_for(persona)
+    transport = ASGITransport(app=harness.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, app
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return uuid.UUID(resp.json()["tenant_id"])
+
+
+@pytest_asyncio.fixture
+async def app_client(pg_container: str) -> AsyncIterator[_AppClient]:
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, harness
 
 
 # ---------------------------------------------------------------------------
@@ -167,20 +135,44 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_adoption_flow_with_acl(pg_container: str, app_client) -> None:
-    client, app = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="adopt-flow-a")
-    b_tid, _, b_token = await _seed_tenant_with_token(pg_container, slug="adopt-flow-b")
-    _, _, c_token = await _seed_tenant_with_token(pg_container, slug="adopt-flow-c")
+async def test_adoption_flow_with_acl(pg_container: str, app_client: _AppClient) -> None:
+    client, harness = app_client
+    a_tid = await _materialise_persona(harness, f"adopt-flow-a-{uuid.uuid4().hex[:6]}", ["producer", "consumer"])
+    persona_b = harness.get(list(harness._personas)[-2]) if len(harness._personas) > 1 else None
+
+    # Re-materialise deterministically.
+    slug_a = f"adopt-flow-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"adopt-flow-b-{uuid.uuid4().hex[:6]}"
+    slug_c = f"adopt-flow-c-{uuid.uuid4().hex[:6]}"
+
+    persona_a = harness.add_persona(slug_a, roles=["producer", "consumer", "admin"])
+    persona_b = harness.add_persona(slug_b, roles=["producer", "consumer", "admin"])
+    persona_c = harness.add_persona(slug_c, roles=["producer", "consumer", "admin"])
+
+    harness.configure_fetcher_for(persona_a)
+    with patch_validator_for_actor(persona_a):
+        r = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug_a))
+    a_tid = uuid.UUID(r.json()["tenant_id"])
+
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        r = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug_b))
+    b_tid = uuid.UUID(r.json()["tenant_id"])
+
+    harness.configure_fetcher_for(persona_c)
+    with patch_validator_for_actor(persona_c):
+        await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug_c))
 
     cap_id = await _seed_payment_api(pg_container, tenant_id=a_tid, shared_with=[b_tid])
 
     # Tenant B adopts with version_pin ^2.0
-    resp_b = await client.post(
-        f"/v1/capabilities/{cap_id}/adoptions",
-        headers={"Authorization": f"Bearer {b_token}"},
-        json={"version_pin": "^2.0"},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp_b = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=slug_b),
+            json={"version_pin": "^2.0"},
+        )
     assert resp_b.status_code == 201, resp_b.text
 
     # provides_to edge exists.
@@ -211,11 +203,13 @@ async def test_adoption_flow_with_acl(pg_container: str, app_client) -> None:
         await engine.dispose()
 
     # Tenant C is outside the ACL → 403/404.
-    resp_c = await client.post(
-        f"/v1/capabilities/{cap_id}/adoptions",
-        headers={"Authorization": f"Bearer {c_token}"},
-        json={},
-    )
+    harness.configure_fetcher_for(persona_c)
+    with patch_validator_for_actor(persona_c):
+        resp_c = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=slug_c),
+            json={},
+        )
     assert resp_c.status_code in (403, 404), resp_c.text
 
 
@@ -225,16 +219,30 @@ async def test_adoption_flow_with_acl(pg_container: str, app_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container: str, app_client) -> None:
-    _client, app = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="webhook-a")
-    b_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="webhook-b")
+async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container: str, app_client: _AppClient) -> None:
+    _client, harness = app_client
+
+    slug_a = f"webhook-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"webhook-b-{uuid.uuid4().hex[:6]}"
+
+    persona_a = harness.add_persona(slug_a, roles=["producer", "consumer"])
+    persona_b = harness.add_persona(slug_b, roles=["producer", "consumer"])
+
+    harness.configure_fetcher_for(persona_a)
+    with patch_validator_for_actor(persona_a):
+        r = await _client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug_a))
+    a_tid = uuid.UUID(r.json()["tenant_id"])
+
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        r = await _client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug_b))
+    b_tid = uuid.UUID(r.json()["tenant_id"])
+
     cap_id = await _seed_payment_api(pg_container, tenant_id=a_tid, shared_with=[b_tid])
 
     engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
-        # Insert a subscription with a webhook URL + secret.
         sub_id = uuid.uuid4()
         async with factory() as session, session.begin():
             await session.execute(
@@ -262,9 +270,7 @@ async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container:
     finally:
         await engine.dispose()
 
-    # Fire emit_event via the app's SubscriptionService → inserts notifications
-    # + notification_deliveries rows.
-    subs_svc = app.state.subscriptions
+    subs_svc = harness.app.state.subscriptions
     count = await subs_svc.emit_event(
         capability_id=cap_id,
         event_kind="version_published",
@@ -275,7 +281,6 @@ async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container:
     )
     assert count == 1
 
-    # Run the worker once against a MockTransport that captures the request.
     captured: dict[str, Any] = {}
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -285,11 +290,9 @@ async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container:
         return httpx.Response(202)
 
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    # Use the live app clock — emit_event() wrote next_retry_at at the same
-    # wall-clock, so the worker must compare with the matching clock.
     worker = WebhookDeliveryWorker(
-        session_factory=app.state.session_factory,
-        clock=app.state.clock,
+        session_factory=harness.app.state.session_factory,
+        clock=harness.app.state.clock,
         http_client=http,
     )
     try:
@@ -298,7 +301,6 @@ async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container:
         await worker.close()
     assert attempted == 1, "the worker did not claim the pending delivery row"
 
-    # Payload contract: version_after=2.4.0 + no freeform description fields.
     body = json.loads(captured["body"])
     assert body["version_after"] == "2.4.0"
     assert body["version_before"] == "2.3.5"
@@ -306,16 +308,14 @@ async def test_webhook_delivery_signs_and_delivers_minimal_payload(pg_container:
     forbidden = {"body", "description", "fact_body", "content", "message"}
     assert not (set(body.keys()) & forbidden)
 
-    # HMAC signs the body with the subscription's secret.
     assert verify_signature(captured["body"], _WEBHOOK_SECRET, captured["sig"])
 
-    # notification_deliveries row updated → success.
     engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             res = await session.execute(
-                text("SELECT status, http_status FROM notification_deliveries " "WHERE tenant_id = :tid"),
+                text("SELECT status, http_status FROM notification_deliveries WHERE tenant_id = :tid"),
                 {"tid": b_tid},
             )
             row = res.first()
