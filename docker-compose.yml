@@ -45,6 +45,23 @@ services:
       # Job kwargs (session_factory, embedder) aren't picklable, so SQLAlchemyJobStore
       # cannot persist them. Use MemoryJobStore until persisted jobs are needed.
       SCHEDULER_USE_MEMORY_JOBSTORE: "true"
+      # OIDC + entitlement wiring against the local mock services. The
+      # mock IDP echoes the request Host as the issuer, so tokens minted
+      # from the host (`localhost:8090`) and from inside the compose
+      # network (`mock-oauth2-server:8080`) carry different `iss` values
+      # — both forms are allowlisted so either developer path works.
+      OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/default/.well-known/openid-configuration
+      OIDC_ISSUER_ALLOWLIST: "http://mock-oauth2-server:8080/default,http://localhost:8090/default"
+      RESOURCE_URI_ALLOWLIST: registry
+      ENTITLEMENT_SERVICE_URL: http://mock-entitlement-service:8000
+      ENTITLEMENT_SERVICE_ENV: DEV
+      ENTITLEMENT_SERVICE_DISCRIMINATOR: REGISTRY
+      ENTITLEMENT_ROLE_MAPPING: "ADMIN:admin,PRODUCER:producer,CONSUMER:consumer,AUDITOR:auditor"
+      # Mock-oauth2-server issues 3600s tokens by default; the production
+      # default ceiling (900s) is below that, so dev would reject every
+      # JWT for token-ttl-exceeded. Relaxing only in compose is a dev
+      # affordance, not a production posture.
+      OIDC_MAX_TOKEN_TTL_SECONDS: "3600"
     ports:
       - "8000:8000"
     depends_on:

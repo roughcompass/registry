@@ -452,26 +452,23 @@ done
 
 Repeat for `lifecycle_state` values (`active`, `deprecated`, `archived`, `experimental`), `edge_rel` values, and any other closed vocabulary your deployment uses.
 
-### Step 3 — Create roles and the first actor
+### Step 3 — Grant the first admin in the entitlement service
 
-```bash
-# Mint an admin actor for the new tenant
-curl -X POST \
-  "https://api.example.com/v1/admin/tenants/<tenant_id>/actors" \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"display_name": "tenant-admin", "email": "admin@example.com"}'
-# → returns actor_id
+The registry does not mint or store credentials — role grants live in the entitlement service and are resolved per-request from the validated JWT's `sub` claim. Grant the new tenant's first admin by adding an entitlement string in the upstream entitlement service:
 
-# Mint a token for that actor
-python scripts/mint_token.py \
-  --tenant-id <tenant_uuid> \
-  --actor-id <actor_uuid> \
-  --roles admin --roles producer --roles consumer \
-  --description 'initial admin token'
+```
+<tenant_slug>_<ENTITLEMENT_SERVICE_DISCRIMINATOR>_ADMIN
 ```
 
-The script prints the plaintext token exactly once. Store it in your secret management system immediately.
+For example, with `ENTITLEMENT_SERVICE_DISCRIMINATOR=REGISTRY` and tenant slug `acme`:
+
+```
+acme_REGISTRY_ADMIN
+```
+
+Map this entitlement to the admin user's `sub` (whatever your IdP issues — email, employee ID, OIDC `sub`). On the user's next authenticated request, the resolver returns the entitlement, parses it to `(tenant_slug=acme, role=admin)`, and JIT-materialises the matching actor row. No registry-side script runs; no plaintext token is generated.
+
+The exact mechanism for editing the entitlement service is deployment-specific (LDAP write, IAM console, custom UI, ticket workflow). Refer to your entitlement-service operator runbook.
 
 ---
 

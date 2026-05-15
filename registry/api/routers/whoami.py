@@ -29,9 +29,11 @@ async def whoami(
 ) -> WhoAmIResponse:
     """Return the actor + tenant + roles the current credential resolves to.
 
-    The roles list is the same list the tenant-middleware attaches to
-    the TenantContext (sourced from `api_tokens.roles` for bearer tokens
-    or from `actor_roles` for OIDC JWTs).
+    The roles list is the same set the tenant middleware attaches to
+    the TenantContext — derived from the entitlement service's grant
+    resolution for the validated JWT's `sub` claim, mapped through
+    `ENTITLEMENT_ROLE_MAPPING` to one of {admin, producer, consumer,
+    auditor}.
     """
     session_factory = request.app.state.session_factory
     payload = await resolve_whoami(session_factory, ctx)

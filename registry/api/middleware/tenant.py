@@ -1,7 +1,7 @@
 """TenantContext injection for FastAPI request handling.
 
-Resolves ``Authorization: Bearer <token>`` to a ``TenantContext`` via the
-nine-step pipeline defined in the auth ADR §5:
+Resolves ``Authorization: Bearer <token>`` to a ``TenantContext`` via a
+nine-step pipeline:
 
 1. Extract bearer token (401 if missing).
 2. Validate JWT via ``validate_oidc_token`` (401 on any CatalogError).
@@ -42,8 +42,9 @@ Failure-to-status mapping (step 4):
 - ``EntitlementServiceError`` → 503 (resolver may have served stale
   cache before raising; if so, the request reached step 7 instead.)
 
-The middleware never touches the api_token table. Opaque-token auth was
-removed in this iteration.
+The middleware validates a JWT against the configured OIDC discovery
+URL and resolves grants via the entitlement service. There is no
+in-DB token table and no opaque-bearer path.
 """
 
 from __future__ import annotations
@@ -211,13 +212,16 @@ def _select_tenant_grant(
             status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
         )
 
-    # Multiple grants — header is required.
+    # Multiple grants — header is required. The ``code`` field has to
+    # be present for the global error envelope to preserve the dict
+    # shape; without it ``coerce_to_envelope`` collapses the detail to
+    # ``str(...)`` and the available_tenants list is lost.
     if header_value is None:
         available = [g.tenant_external_id for g in grants]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "error": "tenant_required",
+                "code": "tenant_required",
                 "message": (
                     "multiple tenants available; specify X-Tenant-ID header"
                 ),

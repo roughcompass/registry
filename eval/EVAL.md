@@ -364,6 +364,8 @@ Closed the on-ramp gap between "the app supports three auth lanes" and "a first-
 
 **Reusable architectural pattern.** Whenever a product surface has a production form (OIDC) and a CI/service form (API tokens), add a dev affordance that composes the same primitives without introducing a third mechanism — local dev becomes a wrapper over the production stack, not a parallel implementation.
 
+**Superseded by entitlement-auth consolidation (migration `0021_entitlement_auth_consolidation`).** The `api_tokens` table and `scripts/mint_token.py` have been removed from the system — every request now resolves OIDC JWT → entitlement service for roles, with no in-DB token lookup. Lane 2 (API tokens) collapses into lane 1; lane 3 (`make dev-token`) now seeds a mock-OIDC client + canned entitlements in the local mock services instead of minting a bearer token, and `.env.dev` carries `CLIENT_ID`/`CLIENT_SECRET` rather than `REGISTRY_DEV_TOKEN`. The three-lane breakdown above is preserved as historical context for what shipped under ADX-T01…T10; current behavior lives in [docs/01-overview/04-auth.md](../docs/01-overview/04-auth.md).
+
 ---
 
 ## Retrieval Ergonomics (closed 2026-05-11)

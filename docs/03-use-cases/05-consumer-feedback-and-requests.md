@@ -47,7 +47,7 @@ Annotations are the carrier for consumer feedback. There is no dedicated feedbac
 
 The response includes the assigned `annotation_id`, the initial `status` (`open`), the `author_tenant_id` stamped from the calling token, and `created_at`. If the PII scanner detects sensitive data in the body at warn-level, a `warnings` array appears in the response; a block-level match rejects the annotation with HTTP 422 before any row is written.
 
-**Before calling.** The caller's [tenant](../01-overview/03-vocabulary.md#tenant) must have visibility to the capability. Any actor with `consumer`, `producer`, or `admin` role can submit an annotation. See [auth.md](../01-overview/04-auth.md) for token scoping.
+**Before calling.** The caller's [tenant](../01-overview/03-vocabulary.md#tenant) must have visibility to the capability. Any actor with `consumer`, `producer`, or `admin` role can submit an annotation. See [authorization.md](../01-overview/05-authorization.md) for how role grants and tenant scope are resolved.
 
 ---
 
@@ -98,4 +98,5 @@ When a bug report or feature request eventually lands in a capability release, t
 
 - [API reference — annotations](../05-reference/01-api.md) — endpoint contracts for `POST`, `GET`, and `PATCH` on annotations
 - [MCP tools reference](../05-reference/02-mcp-tools.md) — parameter tables for `submit_annotation`, `list_my_annotations`, and `triage_annotation`
-- [Auth](../01-overview/04-auth.md) — how to obtain a token with the right role for the annotation surface
+- [Authentication](../01-overview/04-authentication.md) — how to obtain a bearer token
+- [Authorization](../01-overview/05-authorization.md) — how role grants gate the annotation surface

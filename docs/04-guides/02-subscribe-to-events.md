@@ -10,7 +10,7 @@ This guide walks a consumer team through declaring an adoption, subscribing to l
 
 **Preconditions:**
 
-- A bearer token with `consumer` role for your tenant. See [`overview/auth.md`](../01-overview/04-auth.md).
+- A bearer token with `consumer` role for your tenant. See [`overview/authentication.md`](../01-overview/04-authentication.md) for how to obtain one and [`overview/authorization.md`](../01-overview/05-authorization.md) for how roles are resolved.
 - The UUID or slug-form name of the capability you want to subscribe to.
 - A publicly accessible HTTPS endpoint able to receive POST requests, if using webhooks.
 

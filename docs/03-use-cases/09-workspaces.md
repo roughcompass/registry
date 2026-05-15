@@ -15,7 +15,7 @@ For an agent, it means persistent cross-session memory — decisions written at 
 
 It is the same primitive. A workspace is a container of typed, Markdown-bodied entries — `note`, `decision`, `open_question`, `saved_query`, `saved_view`, or `private_annotation` — with optional references to capability UUIDs. Entries are visible only to the owning actor or tenant, plus anyone explicitly granted a share. Nothing in a workspace flows into the catalog or becomes visible to other tenants through normal registry queries.
 
-**Before calling any workspace endpoint:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned and a valid bearer token must be available. Any authenticated `consumer`, `producer`, or `admin` role can create and manage workspaces. See [auth.md](../01-overview/04-auth.md) for how to obtain a token.
+**Before calling any workspace endpoint:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned and a valid bearer token must be available. Any authenticated `consumer`, `producer`, or `admin` role can create and manage workspaces. See [authentication.md](../01-overview/04-authentication.md) for how to obtain a token.
 
 ---
 
@@ -228,5 +228,6 @@ Results are cursor-paginated. Entries from workspaces the caller cannot access a
 ## Read next
 
 - [API reference](../05-reference/01-api.md) — endpoint contracts for `POST`, `GET`, `PATCH`, `DELETE` on workspaces, entries, and shares
-- [Auth](../01-overview/04-auth.md) — how to obtain and scope a bearer token
+- [Authentication](../01-overview/04-authentication.md) — how to obtain a bearer token
+- [Authorization](../01-overview/05-authorization.md) — how role grants and tenant selection scope the token
 - [PII policies guide](../04-guides/04-pii-policies.md) — workspace entry bodies are PII-scanned on write; this guide explains how policies are configured

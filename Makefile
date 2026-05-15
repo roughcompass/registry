@@ -51,7 +51,7 @@ TEST_ROOT   := tests
 
 .PHONY: help install-dev lint format format-check typecheck doc-refs test-hygiene \
         test-unit test-integration test-conformance test-perf test all \
-        migrate openapi-export dev-token dev-seed seeds-validate clean \
+        migrate openapi-export dev-token dev-jwt dev-seed seeds-validate clean \
         build-docker helm-package
 
 # -----------------------------------------------------------------------------
@@ -141,12 +141,38 @@ migrate: ## Apply Alembic migrations to the database in $DATABASE_URL.
 openapi-export: ## Regenerate the committed openapi.json from the live app.
 	$(PYTHON) scripts/export_openapi.py
 
-# Bootstrap a local-dev tenant + actor + token. Idempotent — re-running
-# reuses the tenant/actor and mints a new token. Override TOKEN_OUT to
-# also write REGISTRY_DEV_TOKEN=... to that file (e.g. `make dev-token
-# TOKEN_OUT=.env.dev`). Requires $DATABASE_URL pointing at a migrated DB.
-dev-token: ## Mint a dev tenant + token in one shot. TOKEN_OUT=.env.dev to persist.
-	$(PYTHON) scripts/bootstrap_dev_tenant.py $(if $(TOKEN_OUT),--write-env-file $(TOKEN_OUT))
+# Bootstrap a local-dev tenant + actor + mock-IDP/entitlement seed.
+# Idempotent — re-running reuses the existing tenant + actor rows and
+# re-registers the client + canned entitlements without minting new
+# credentials. Writes DEV_TENANT_SLUG, DEV_TENANT_ID, DEV_ACTOR_ID,
+# DEV_USER_ID, CLIENT_ID, and CLIENT_SECRET to .env.dev so the
+# developer can fetch a JWT from the mock IDP and call the API.
+# Requires $DATABASE_URL pointing at a migrated DB plus the mock OIDC
+# + mock entitlement services running on their default compose ports
+# (or pass --skip-mock-seed). Pass --env-file=PATH to write somewhere
+# other than .env.dev. See docs/02-get-started/01-quickstart.md for
+# the JWT-fetch step.
+dev-token: ## Seed dev tenant + actor + mock-IDP/entitlement state. Writes .env.dev.
+	$(PYTHON) scripts/bootstrap_dev_tenant.py
+
+# Mint a fresh JWT from the local mock IDP using the client credentials
+# in .env.dev. Stdout is the bare access_token so it composes:
+#   export TOKEN=$(make dev-jwt)
+#   curl -H "Authorization: Bearer $(make dev-jwt)" http://localhost:8000/v1/whoami
+# Requires `make dev-token` to have been run (for .env.dev) and the mock
+# OIDC server reachable on its compose port. Token TTL is 3600s — re-run
+# to refresh.
+dev-jwt: ## Mint a fresh JWT from the local mock IDP. Stdout-only (pipe-friendly).
+	@if [ ! -f .env.dev ]; then \
+	  echo "error: .env.dev not found; run \`make dev-token\` first" >&2; exit 1; \
+	fi; \
+	set -a; . ./.env.dev; set +a; \
+	curl -fsS -X POST http://localhost:8090/default/token \
+	  -d grant_type=client_credentials \
+	  -d client_id=$$CLIENT_ID \
+	  -d client_secret=$$CLIENT_SECRET \
+	  -d scope=registry \
+	| $(PYTHON) -c "import json,sys; t=json.load(sys.stdin).get('access_token'); sys.exit('error: no access_token in mock IDP response') if not t else print(t)"
 
 # Follow-up to dev-token: seed the dev tenant from every numbered bundle
 # directory under seeds/ (00-core, 01-capability, …). One command, full

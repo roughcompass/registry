@@ -59,7 +59,7 @@ _log = logging.getLogger(__name__)
 # OpenAPI documentation — preamble + tag descriptions surfaced at /docs.
 # Every endpoint is tenant-scoped. "admin: …" tags require the admin role
 # within the CALLING tenant; they are never service-operator surfaces.
-# Service operators interact via env vars / helm / migrations / mint_token.py.
+# Service operators interact via env vars / helm / migrations — not REST.
 # ---------------------------------------------------------------------------
 
 
@@ -70,11 +70,12 @@ notifications, and a breaking-change advisor.
 
 ### Authentication & tenancy
 
-Every endpoint is **tenant-scoped**. The calling tenant is resolved from
-the `Authorization: Bearer <token>` header (or OIDC JWT when
-`OIDC_DISCOVERY_URL` is configured). No endpoint ever returns data from a
-tenant other than the caller's — cross-tenant relationships go through
-explicit adoption events (see the `adoptions` section).
+Every endpoint is **tenant-scoped**. The calling tenant is resolved
+from the `Authorization: Bearer <JWT>` header: the JWT is validated
+against the OIDC discovery URL and the entitlement service returns the
+grants that anchor the `TenantContext`. No endpoint ever returns data
+from a tenant other than the caller's — cross-tenant relationships go
+through explicit adoption events (see the `adoptions` section).
 
 ### Roles within a tenant
 
@@ -91,7 +92,7 @@ Sections tagged `admin: …` require the **`admin` role within the calling
 tenant**. They are NOT service-operator surfaces. There is no cross-tenant
 admin surface in the API. Service operators (the people running the
 deployment) interact with the system through environment variables, helm
-values, Alembic migrations, and `scripts/mint_token.py` — not REST.
+values, and Alembic migrations — not REST.
 
 ### HTTP method conventions
 
@@ -498,9 +499,9 @@ def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
 
     Declares two OpenAPI 3 security schemes:
 
-    - `bearerAuth` — HTTP Bearer with `bearerFormat: opaque`. Always present.
-      `make dev-token` mints one for local dev (zero-state); production /
-      break-glass tokens come from `scripts/mint_token.py` (needs UUIDs).
+    - `bearerAuth` — HTTP Bearer with `bearerFormat: JWT`. Always present
+      so a caller can paste a JWT into Swagger's **Authorize** dialog
+      without going through the interactive OAuth flow.
     - `oidcAuth` — `openIdConnect` pointing at the configured discovery URL.
       Emitted only when `settings.oidc_discovery_url` is set, so deployments
       without an IdP advertise only the bearer lane.
@@ -526,16 +527,18 @@ def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
             "bearerAuth": {
                 "type": "http",
                 "scheme": "bearer",
-                "bearerFormat": "opaque",
+                "bearerFormat": "JWT",
                 "description": (
-                    "Paste an API token.\n\n"
-                    "- **Local development:** run `make dev-token` — it seeds a "
-                    "tenant + actor + role grants and prints a fresh token. "
-                    "No env-var setup required if the docker-compose stack is up.\n"
-                    "- **Production / break-glass:** mint with "
-                    "`python scripts/mint_token.py --tenant-id <uuid> "
-                    "--actor-id <uuid> --roles <role>`. Requires the tenant "
-                    "and actor to already exist."
+                    "Paste a JWT issued by an OpenID Connect provider.\n\n"
+                    "- **Local development:** run `make dev-token` to seed "
+                    "the dev tenant + mock-IDP client, then exchange the "
+                    "client credentials for a JWT via "
+                    "`POST {MOCK_OIDC_URL}/default/token` with "
+                    "`grant_type=client_credentials` and `scope=registry`.\n"
+                    "- **Production:** present a JWT from the IdP at "
+                    "`OIDC_DISCOVERY_URL`. The entitlement service "
+                    "resolves grants from the JWT's `sub` claim; the "
+                    "tenant + actor are JIT-materialised on first sight."
                 ),
             },
         }
@@ -545,8 +548,9 @@ def _install_openapi_security(app: FastAPI, settings: Settings) -> None:
                 "openIdConnectUrl": settings.oidc_discovery_url,
                 "description": (
                     "JWT issued by the configured OpenID Connect provider. "
-                    "The token must carry `sub` and `tenant_id`/`tid` claims; "
-                    "the matching actor must pre-exist in the catalog."
+                    "The token must carry `sub`, `iss`, `aud`, `exp`, and "
+                    "`iat` claims; tenant + actor are JIT-materialised "
+                    "from the entitlement service's grant resolution."
                 ),
             }
         components = schema.setdefault("components", {})
@@ -1033,7 +1037,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         annotation_service=annotation_svc,
         workspace_service=workspace_svc,
     )
-    mcp_router = create_mcp_app(server=registry_mcp_server)
+    mcp_router = create_mcp_app(server=registry_mcp_server, parent_app=app)
     app.mount("/mcp", mcp_router)
 
     # ASGI middleware: per-tenant in-process token-bucket rate limiting.

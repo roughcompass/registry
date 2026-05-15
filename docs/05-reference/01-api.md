@@ -2,7 +2,7 @@
 
 The registry service exposes a REST API under `/v1` and an MCP surface at `/mcp`. This document explains how to discover the live schema, covers the major resource groups and their semantics, and describes common headers and error shapes.
 
-For MCP tool reference, see [mcp-tools.md](02-mcp-tools.md). For authentication, see [overview/auth.md](../01-overview/04-auth.md).
+For MCP tool reference, see [mcp-tools.md](02-mcp-tools.md). For authentication and authorization, see [overview/authentication.md](../01-overview/04-authentication.md) and [overview/authorization.md](../01-overview/05-authorization.md).
 
 ---
 

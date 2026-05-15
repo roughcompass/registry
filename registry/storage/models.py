@@ -449,8 +449,8 @@ class WebhookDelivery(Base, TenantMixin):
     processed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-# Role + ActorRole were deleted with the api_token / RBAC consolidation —
-# role grants live in the entitlement service, not the catalog DB.
+# Role grants are not modelled in this catalog DB — they live in the
+# entitlement service and are resolved per-request via the claim resolver.
 
 
 # --- External-ID registry ---

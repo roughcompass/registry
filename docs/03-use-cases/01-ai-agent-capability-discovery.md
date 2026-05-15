@@ -11,7 +11,7 @@ An AI agent planning a new build needs to know what shared capabilities already 
 
 The agent authenticates with the same bearer token used for REST, calls `whoami` to confirm its tenant scope, then uses `search_capabilities` with a natural-language description of what it needs. It can traverse edges to understand dependencies, read bi-temporal attributes to check current interface contracts, and submit annotations to flag gaps back to the producer — all within a single session.
 
-**Before calling any tool:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned, the MCP endpoint must be reachable at `GET /mcp/sse`, and a valid bearer token must be available. See [auth.md](../01-overview/04-auth.md) for how to obtain a token.
+**Before calling any tool:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned, the MCP endpoint must be reachable at `GET /mcp/sse`, and a valid bearer token must be available. See [authentication.md](../01-overview/04-authentication.md) for how to obtain a token.
 
 ---
 
@@ -154,7 +154,8 @@ For the AISDLC pattern, where each pipeline stage is a registered capability and
 ## Read next
 
 - [MCP Tools Reference](../05-reference/02-mcp-tools.md) — full parameter tables and response shapes for every tool mentioned on this page
-- [Auth](../01-overview/04-auth.md) — how to obtain and scope a bearer token for the MCP surface
+- [Authentication](../01-overview/04-authentication.md) — how to obtain a bearer token for the MCP surface
+- [Authorization](../01-overview/05-authorization.md) — how role grants and tenant selection scope the token
 - [How the registry is structured](../01-overview/02-how-its-structured.md) — data model, tenant isolation, and API surface overview
 - [Subscribe to events](../04-guides/02-subscribe-to-events.md) — guide for setting up webhook delivery after an adoption
 - [Event-driven consumers](04-event-driven-consumers.md) — use case for the full subscription and notification lifecycle

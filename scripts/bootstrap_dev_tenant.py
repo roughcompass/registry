@@ -20,8 +20,10 @@ Usage::
 
     docker compose up -d            # start mock-oauth2-server + mock-entitlement-service + postgres
     python scripts/bootstrap_dev_tenant.py
-    python scripts/bootstrap_dev_tenant.py --tenant-slug 111205 --actor-id F731821
-    python scripts/bootstrap_dev_tenant.py --actor-entitlements 111205_REGISTRY_ADMIN
+    python scripts/bootstrap_dev_tenant.py --tenant-slug acme --actor-id F731821
+    python scripts/bootstrap_dev_tenant.py \
+      --actor-entitlements dev_REGISTRY_ADMIN \
+      --actor-entitlements acme_REGISTRY_CONSUMER
 
 The script writes ``CLIENT_ID``, ``CLIENT_SECRET``, and the actor's
 user ID into ``.env.dev`` so the developer can ``source .env.dev`` and
@@ -48,7 +50,7 @@ import httpx  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
-_DEFAULT_TENANT_SLUG = "111205"
+_DEFAULT_TENANT_SLUG = "dev"
 _DEFAULT_TENANT_DISPLAY_NAME = "Local Development Tenant"
 _DEFAULT_ACTOR_USER_ID = "dev-admin"
 _DEFAULT_ACTOR_DISPLAY_NAME = "Dev Admin"
@@ -56,9 +58,6 @@ _DEFAULT_CLIENT_ID = "registry-dev"
 _DEFAULT_CLIENT_SECRET = "dev-secret"
 _DEFAULT_MOCK_OIDC_URL = "http://localhost:8090"
 _DEFAULT_MOCK_ENTITLEMENT_URL = "http://localhost:8091"
-_DEFAULT_ENTITLEMENTS: tuple[str, ...] = (
-    "111205_REGISTRY_ADMIN",
-)
 _DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:password@localhost:5544/registry"
 
 
@@ -232,7 +231,15 @@ async def _bootstrap(args: argparse.Namespace) -> tuple[uuid.UUID, uuid.UUID, li
         )
 
     database_url = os.environ["DATABASE_URL"]
-    entitlements = list(args.actor_entitlements) if args.actor_entitlements else list(_DEFAULT_ENTITLEMENTS)
+    # The default entitlement is derived from the tenant slug so the
+    # entitlement string the mock service hands back parses cleanly
+    # against the deployment's discriminator. Override with
+    # --actor-entitlements for multi-tenant or non-admin scenarios.
+    entitlements = (
+        list(args.actor_entitlements)
+        if args.actor_entitlements
+        else [f"{args.tenant_slug}_REGISTRY_ADMIN"]
+    )
 
     engine = create_async_engine(
         database_url,
@@ -260,11 +267,21 @@ def main(argv: list[str] | None = None) -> int:
         oidc_ok = _register_mock_oidc_client(
             args.mock_oidc_url, args.client_id, args.client_secret
         )
-        entitlement_ok = _seed_entitlements(
-            args.mock_entitlement_url,
-            args.actor_id,
-            scenario="success_one_tenant" if len(entitlements) == 1 else "success_multi_tenant",
-            entitlements=entitlements,
+        # Under the client_credentials grant the JWT's `sub` claim equals
+        # the client_id, so the entitlement service must be keyed by
+        # client_id for the JIT actor flow to find a match. The DB row
+        # seeded with oidc_subject=actor_id remains as a fixture for
+        # tests that forge JWTs with `sub=<actor_id>` via make_jwt.
+        scenario = "success_one_tenant" if len(entitlements) == 1 else "success_multi_tenant"
+        entitlement_targets = {args.client_id, args.actor_id}
+        entitlement_ok = all(
+            _seed_entitlements(
+                args.mock_entitlement_url,
+                target,
+                scenario=scenario,
+                entitlements=entitlements,
+            )
+            for target in entitlement_targets
         )
     else:
         oidc_ok = entitlement_ok = True
@@ -287,7 +304,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  Mock entitlement seeded: {entitlement_ok} ({args.mock_entitlement_url})")
     print(f"  Wrote: {args.env_file}")
     print()
-    print("Next: source .env.dev && fetch a JWT from the mock IDP and curl the API.")
+    print("This command seeded the dev tenant + mock-IDP client credentials —")
+    print("it does NOT print a JWT. To get a JWT, run:")
+    print()
+    print("  export TOKEN=$(make dev-jwt)")
+    print("  curl -H \"Authorization: Bearer $TOKEN\" http://localhost:8000/v1/whoami")
+    print()
+    print("`make dev-jwt` reads .env.dev, hits the mock IDP, and prints the")
+    print("access_token to stdout. JWT TTL is 3600s; re-run to refresh.")
     return 0
 
 

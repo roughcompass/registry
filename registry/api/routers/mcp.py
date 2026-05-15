@@ -12,13 +12,14 @@ no separate process.
 
 Auth design
 -----------
-FastMCP tool handlers do not run inside FastAPI's Depends machinery. The
-Bearer token would normally be extracted from the raw ASGI scope and
-threaded into each tool call via a per-request token holder. The
-entitlement-auth rewrite removed the legacy bearer validator, so the
-MCP path is currently stubbed (see ``_resolve_tenant`` below). A
-follow-up will rewire MCP through the entitlement-resolved auth
-pipeline.
+FastMCP tool handlers do not run inside FastAPI's Depends machinery,
+so the Bearer token is extracted from the raw ASGI scope at SSE-connect
+time and stashed in ContextVars (``_request_token``, ``_request_app``,
+``_request_x_tenant_id``). Each tool call reads those vars and runs
+``_resolve_tenant``, which mirrors the REST middleware pipeline:
+JWT validation → entitlement-service grant resolution → JIT actor
+upsert → ``TenantContext``. The SSE handshake itself is unauthenticated
+(it just opens the event stream); authentication is per-tool-call.
 
 Transport
 ---------
@@ -1300,13 +1301,13 @@ def create_registry_mcp_server(
 # ---------------------------------------------------------------------------
 
 
-def create_mcp_app(server: FastMCP) -> ASGIApp:
+def create_mcp_app(server: FastMCP, parent_app: Any = None) -> ASGIApp:
     """Build a Starlette ASGI sub-app from a FastMCP server.
 
     Mounts the MCP server in-process:
 
         registry_mcp_server = create_registry_mcp_server(...)
-        mcp_router = create_mcp_app(server=registry_mcp_server)
+        mcp_router = create_mcp_app(server=registry_mcp_server, parent_app=app)
         app.mount("/mcp", mcp_router)
 
     Transport: SSE (mcp<2.0 only exposes SSE HTTP transport; StreamableHTTP
@@ -1318,10 +1319,16 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
 
     Auth: the Bearer token is extracted from the SSE request headers and
     stored in a ContextVar before handing off to the MCP server. Each
-    tool call would normally read the ContextVar and resolve it through
-    the entitlement-resolved auth path. The legacy bearer validator was
-    removed; MCP authentication is currently stubbed pending a follow-up
-    rewire.
+    tool call reads the ContextVar and resolves it through the
+    entitlement-resolved auth path (see ``_resolve_tenant``).
+
+    ``parent_app`` is the FastAPI app this sub-app will be mounted under.
+    A mounted sub-app's ``request.app`` is the sub-app itself — whose
+    ``state`` is empty — so the tool handlers can't reach
+    ``app.state.settings`` / ``claim_resolver`` / ``oidc_cache`` via
+    ``request.app``. Capturing the parent app at construction time and
+    storing it in the ``_request_app`` ContextVar is how the tool
+    handlers find their dependencies.
     """
     sse_transport = SseServerTransport("/messages/")
 
@@ -1339,15 +1346,18 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
             await asyncio.sleep(0.5)
 
     async def handle_sse(request: Request) -> None:
-        # Extract Bearer token + X-Tenant-ID header + the FastAPI app
-        # from the SSE request scope; store all three in ContextVars so
-        # the tool handlers + _resolve_tenant can read them. The app
-        # reference is how tool handlers reach
-        # ``app.state.claim_resolver`` without threading a request
-        # object through every call signature.
+        # Extract Bearer token + X-Tenant-ID header from the SSE request
+        # scope; store both plus the parent app reference in ContextVars
+        # so the tool handlers + _resolve_tenant can read them. Inside a
+        # mounted sub-app ``request.app`` is the sub-app whose state is
+        # empty — the parent app captured at construction time is what
+        # carries ``state.settings`` / ``state.claim_resolver`` /
+        # ``state.oidc_cache``. Fall back to request.app for standalone
+        # use where a parent isn't supplied.
         raw_token = _extract_bearer(dict(request.scope))
         token_var_token = _request_token.set(raw_token)
-        app_var_token = _request_app.set(request.app)
+        app_ref = parent_app if parent_app is not None else request.app
+        app_var_token = _request_app.set(app_ref)
 
         # X-Tenant-ID is optional; an absent header means "auto-select
         # if the caller has exactly one tenant grant, otherwise reject".

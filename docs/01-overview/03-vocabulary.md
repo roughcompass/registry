@@ -238,7 +238,7 @@ Use the preview before publishing an interface update to assess impact before co
 
 In the default `oidc` auth mode, the caller's tenant scope is embedded in the JWT claims. In `rsam` mode the service calls an external entitlement reference API to resolve which tenants the caller holds authority over.
 
-For API callers, the practical difference is: in RSAM mode, your token may resolve to multiple tenants. Call `GET /v1/whoami` to confirm the resolved tenant scope before making write calls. See [auth.md](04-auth.md) for configuration details.
+For API callers, the practical difference is: in RSAM mode, your token may resolve to multiple tenants. Call `GET /v1/whoami` to confirm the resolved tenant scope before making write calls. See [authorization.md](05-authorization.md#rsam-mode--internal-directory-authority) for configuration details.
 
 ---
 
@@ -262,7 +262,8 @@ The scanner does not run on reads. PII scan policies are configured per tenant v
 | I want to… | Go to |
 |---|---|
 | Run the service locally | [get-started/quickstart.md](../02-get-started/01-quickstart.md) |
-| Understand auth (OIDC, tokens, RSAM) | [overview/auth.md](04-auth.md) |
+| Understand who's making a request (OIDC, JWT, claims) | [overview/authentication.md](04-authentication.md) |
+| Understand what they can do (entitlements, roles, RSAM) | [overview/authorization.md](05-authorization.md) |
 | Find every API endpoint | [reference/api.md](../05-reference/01-api.md) |
 | Configure the service | [reference/configuration.md](../05-reference/03-configuration.md) |
 | Operate progressions | [operations/progression.md](../06-operations/02-progression.md) |

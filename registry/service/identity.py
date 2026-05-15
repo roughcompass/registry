@@ -3,9 +3,9 @@
 Both the REST ``GET /v1/whoami`` handler and the MCP ``whoami`` tool need
 the same payload shape: actor + tenant identity plus the role set the
 caller holds for the selected tenant. This module assembles it from two
-selects (Actor, Tenant). The api_token row is gone — the auth path no
-longer mints opaque tokens, so the wire format's ``token_id`` /
-``token_expires_at`` fields are always ``None``.
+selects (Actor, Tenant). The wire format's ``token_id`` /
+``token_expires_at`` fields are preserved for response-shape stability
+but are always ``None`` — no auth path populates them.
 
 Serialisation is intentionally left to the callers:
 - REST: adapts ``WhoamiPayload`` into ``WhoAmIResponse`` (Pydantic) and
@@ -32,9 +32,9 @@ class WhoamiPayload:
     """Typed intermediate representation of the whoami payload.
 
     Callers convert this to their own wire format (Pydantic model, JSON
-    dict, …). The wire-format ``token_id`` / ``token_expires_at`` fields
-    survive in this dataclass for response-shape compatibility but are
-    always ``None`` — the auth path no longer issues opaque tokens.
+    dict, …). The ``token_id`` / ``token_expires_at`` fields are
+    preserved for response-shape stability but are always ``None`` —
+    no auth path populates them.
     """
 
     tenant_id: uuid.UUID
@@ -56,7 +56,7 @@ async def resolve_whoami(
 
     Both lookups are nullable — the wire format gracefully reports
     blank fields when the rows are absent. Token fields are always
-    ``None`` (the api_token table is gone).
+    ``None`` — no auth path populates them.
     """
     async with session_factory() as session:
         actor = (

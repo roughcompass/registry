@@ -43,25 +43,32 @@ What is now running:
 
 ---
 
-## Step 2 — Mint a token
+## Step 2 — Bootstrap the dev tenant + fetch a JWT
 
 ```bash
 make dev-token
 ```
 
-This seeds a `dev` tenant, creates a `dev-admin` actor with all four roles (`consumer`, `producer`, `admin`, `auditor`), and prints a bearer token. Example output:
+This seeds a `111205` tenant + a `dev-admin` actor in Postgres, registers a `registry-dev` client in the local mock OIDC server (`mock-oauth2-server` on port 8090), and seeds canned entitlements for that user in the mock entitlement service. The IDs and mock-client credentials land in `.env.dev`:
 
 ```
-REGISTRY_DEV_TOKEN=reg_dev_xxxxxxxxxxxxxx...
+DEV_TENANT_SLUG=111205
+DEV_TENANT_ID=<uuid>
+DEV_ACTOR_ID=<uuid>
+DEV_USER_ID=dev-admin
+CLIENT_ID=registry-dev
+CLIENT_SECRET=dev-secret
 ```
 
-Copy the token value. To persist it to a file for reuse:
+`.env.dev` is git-ignored. `make dev-token` is idempotent — re-running reuses the same tenant + actor + client.
+
+Exchange the dev credentials for a bearer JWT against the mock IDP:
 
 ```bash
-make dev-token TOKEN_OUT=.env.dev
+export TOKEN=$(make dev-jwt)
 ```
 
-`.env.dev` is git-ignored. `make dev-token` is idempotent — running it again reuses the same tenant and actor and mints a fresh token.
+`make dev-jwt` reads `.env.dev`, hits the mock IDP, and prints the JWT to stdout — composable with `$(make dev-jwt)` inside any curl command. TTL is 3600s; re-run to refresh. See [authentication.md](../01-overview/04-authentication.md#fetching-a-jwt) for the equivalent raw curl and why `scope=registry` matters.
 
 ---
 
@@ -80,8 +87,6 @@ Seeds closed-vocabulary values (entity types, edge relationship types, lifecycle
 ## Step 4 — Make an authenticated call
 
 ```bash
-export TOKEN=<paste-token-here>
-
 curl -H "Authorization: Bearer $TOKEN" \
      http://localhost:8000/v1/capabilities
 ```
@@ -121,6 +126,7 @@ docker compose down -v     # stop containers AND wipe the database
 | I want to… | Go to |
 |---|---|
 | Understand tenants, entities, visibility | [overview/vocabulary.md](../01-overview/03-vocabulary.md) |
-| Set up OIDC or production tokens | [overview/auth.md](../01-overview/04-auth.md) |
+| Set up OIDC or production tokens | [overview/authentication.md](../01-overview/04-authentication.md) |
+| Understand role grants, tenant selection, RSAM mode | [overview/authorization.md](../01-overview/05-authorization.md) |
 | Configure env vars | [reference/configuration.md](../05-reference/03-configuration.md) |
 | Call from an AI agent via MCP | [reference/mcp-tools.md](../05-reference/02-mcp-tools.md) |

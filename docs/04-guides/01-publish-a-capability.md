@@ -10,7 +10,7 @@ This guide walks a producer team through the steps to register a new capability,
 
 **Preconditions:**
 
-- A bearer token with the `producer` role for your tenant. See [`overview/auth.md`](../01-overview/04-auth.md) if you do not have one.
+- A bearer token with the `producer` role for your tenant. See [`overview/authentication.md`](../01-overview/04-authentication.md) for how to obtain one and [`overview/authorization.md`](../01-overview/05-authorization.md) for how roles are resolved.
 - At least one entity type in your tenant's closed vocabulary. Use `GET /v1/admin/tenants/<tenant_id>/vocabulary` to list what is seeded; add missing values via `POST /v1/admin/tenants/<tenant_id>/vocabulary` with `vocab_type: entity_type`.
 
 **What this guide covers:**
