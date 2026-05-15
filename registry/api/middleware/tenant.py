@@ -54,6 +54,7 @@ from collections.abc import AsyncGenerator
 from typing import Any
 
 from fastapi import Depends, HTTPException, Request, status
+from prometheus_client import Counter
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from registry.api.auth.oidc import validate_oidc_token
@@ -67,6 +68,18 @@ from registry.exceptions import CatalogError
 from registry.types import Clock, SystemClock, TenantContext, TenantMembership
 
 _log = logging.getLogger(__name__)
+
+
+# Counter for entitlement entries that the middleware drops downstream
+# of the parser. The parser has its own counter for shape failures
+# (other_namespace, malformed string, unknown role); this counter
+# covers the middleware-layer drop reasons: a tenant the operator has
+# disabled, a tenant the resolver looked up but can't materialize, etc.
+_DROPPED_ENTRIES = Counter(
+    "registry_entitlement_dropped_entries_total",
+    "Entitlement entries dropped by the middleware before reaching the route handler.",
+    ["reason"],
+)
 
 
 def _bearer_token(request: Request) -> str:
@@ -314,6 +327,7 @@ async def get_tenant_context(
         # here means the operator disabled the tenant between the
         # resolver's tenant lookup and this actor upsert. Race; treat
         # as 403.
+        _DROPPED_ENTRIES.labels(reason="disabled_tenant").inc()
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
         ) from exc

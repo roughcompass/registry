@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import cachetools  # type: ignore[import-untyped]
+from prometheus_client import Counter
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -66,6 +67,19 @@ from registry.auth.resolver import (
 from registry.config import Settings
 
 _log = logging.getLogger(__name__)
+
+
+# Cache outcome counter — three label values cover the full state machine:
+# - hit: a non-expired cache entry was returned without an upstream call.
+# - miss: the cache had no entry (or it had expired) and the upstream
+#   was called.
+# - fallback: an upstream cacheable failure (5xx/timeout/network) was
+#   bridged by serving a still-valid cache entry instead of propagating.
+_CACHE_TOTAL = Counter(
+    "registry_entitlement_cache_total",
+    "Entitlement resolver cache outcomes per request.",
+    ["result"],
+)
 
 
 # Default fetcher signature used when no client / fetcher is injected.
@@ -212,6 +226,7 @@ class EntitlementResolver(ClaimResolverBase):
         existing = self._cache.get(key)
         now = time.monotonic()
         if existing is not None and existing.expires_at > now:
+            _CACHE_TOTAL.labels(result="hit").inc()
             return ResolvedIdentity(
                 user_id=resolved_identity,
                 tenant_grants=list(existing.grants),
@@ -237,12 +252,14 @@ class EntitlementResolver(ClaimResolverBase):
             # Re-check inside the lock — another coroutine may have refreshed.
             now = time.monotonic()
             if entry.expires_at > now:
+                _CACHE_TOTAL.labels(result="hit").inc()
                 return ResolvedIdentity(
                     user_id=resolved_identity,
                     tenant_grants=list(entry.grants),
                     audit_identity=entry.audit_identity,
                 )
 
+            _CACHE_TOTAL.labels(result="miss").inc()
             try:
                 grants, audit_identity = await self._fetch_and_resolve(
                     claims, resolved_identity
@@ -399,6 +416,7 @@ class EntitlementResolver(ClaimResolverBase):
         """
         now = time.monotonic()
         if entry.expires_at > now:
+            _CACHE_TOTAL.labels(result="fallback").inc()
             stale_age = now - (entry.expires_at - _ttl_from_jwt({"exp": time.time()}))
             await self._emit_stale_cache_event(
                 resolved_identity,
