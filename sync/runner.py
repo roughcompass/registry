@@ -466,11 +466,14 @@ async def resolve_sync_actor(
     actor = result.scalar_one_or_none()
     if actor is None:
         # Provision the sync-worker actor on first use.
+        # oidc_subject is NOT NULL; use a deterministic sentinel that is
+        # clearly non-human so it can never collide with a real OIDC subject.
         actor = Actor(
             actor_id=uuid.uuid4(),
             tenant_id=tenant_id,
             display_name=display_name,
             actor_kind="sync_worker",
+            oidc_subject=f"sync-worker:{tenant_id.hex[:8]}:{source_type}",
             created_at=datetime.now(tz=UTC),
         )
         session.add(actor)
