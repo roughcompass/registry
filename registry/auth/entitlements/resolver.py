@@ -197,13 +197,6 @@ class EntitlementResolver(ClaimResolverBase):
 
     # ------------------------------------------------------------------
     # ClaimResolverBase interface
-    #
-    # ``is_in_scope`` is retained until the auth_mode discriminator is
-    # removed entirely (a separate task). Once the discriminator is gone,
-    # this method and the abstract requirement go with it; the factory
-    # collapses to a direct instantiation.
-    def is_in_scope(self, claims: dict[str, Any]) -> bool:
-        return self.settings.auth_mode == "rsam"
 
     async def resolve(self, claims: dict[str, Any]) -> ResolvedIdentity:
         """Resolve a caller's entitlements into a ``ResolvedIdentity``.

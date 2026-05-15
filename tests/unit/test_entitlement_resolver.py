@@ -25,7 +25,6 @@ def _settings() -> Settings:
         database_url="postgresql+asyncpg://test/test",
         pgbouncer_url="postgresql+asyncpg://test/test",
         scheduler_jobstore_url="postgresql+asyncpg://test/test",
-        auth_mode="rsam",
         auth_claim_source_url="https://entitlement.example.com",
         entitlement_service_url="https://entitlement.test.local",
         entitlement_service_env="DEV",
@@ -317,22 +316,7 @@ class TestRolePrecedence:
             assert result.tenant_grants[0].catalog_role == winner
 
 
-@pytest.mark.asyncio
-class TestIsInScope:
-    """is_in_scope is preserved (defer deletion to the auth_mode-removal task)."""
-
-    async def test_in_scope_when_legacy_mode_enabled(self):
-        resolver = _make_resolver(AsyncMock())
-        # Default settings have auth_mode="rsam" — see _settings().
-        assert resolver.is_in_scope({}) is True
-
-    async def test_not_in_scope_for_other_modes(self):
-        # Construct with a different mode by passing settings directly.
-        s = _settings()
-        s.auth_mode = "oidc"
-        resolver = EntitlementResolver(
-            settings=s,
-            session_factory=_session_factory_mock(),
-            fetcher=AsyncMock(),
-        )
-        assert resolver.is_in_scope({}) is False
+# `is_in_scope` was removed from the abstract interface and from
+# EntitlementResolver in the discriminator-removal task; the previous
+# test class for it is gone. The factory in registry.auth.resolver now
+# instantiates EntitlementResolver directly.

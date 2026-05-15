@@ -100,20 +100,9 @@ class Settings:
     oidc_expected_audience: str | None = None
     token_hash_algorithm: str = "sha256"
 
-    # --- Auth mode + external claim source ---
-    # Which authentication/tenant-scope mode the service operates in.
-    # "oidc"  — tenant scope is derived from standard token claims (default).
-    # "rsam"  — tenant scope is resolved via an external claim source
-    #           (e.g. an entitlement reference API). Requires auth_claim_source_url.
-    # Future modes are added here; the middleware selects behaviour by this value.
-    auth_mode: str = "oidc"
-
-    # Base URL of the external claim source. Must be set when auth_mode != "oidc".
-    # Leave unset (None) in pure OIDC deployments.
+    # --- Auth: external claim source legacy fields ---
+    # Retained pending OAR-T04 deletion (depends on this task landing).
     auth_claim_source_url: str | None = None
-
-    # TTL (seconds) for the external claim-source cache. Applies only when
-    # auth_mode uses an external claim source. 0 disables caching.
     auth_claim_cache_ttl_seconds: int = 300
 
     # Maximum staleness (seconds) tolerated when the claim source is unreachable
@@ -167,7 +156,7 @@ class Settings:
     # the entitlement-resolution code path; the entitlement-related fields
     # below all become required (validated in __post_init__). Empty/unset =
     # entitlement path is disabled (legacy behavior continues to apply via
-    # auth_mode/auth_claim_source_url).
+    # the legacy claim-source URL field).
     entitlement_service_url: str = ""
 
     # Environment indicator passed as the `env` query param to the
@@ -209,15 +198,6 @@ class Settings:
     progression_definition_cache_ttl_seconds: int = 60
 
     def __post_init__(self) -> None:
-        # Enforce that any auth mode that uses an external claim source is given
-        # the URL for that source. Failing silently here would produce confusing
-        # runtime errors deep in claim-resolution code.
-        if self.auth_mode != "oidc" and self.auth_claim_source_url is None:
-            raise ValueError(
-                f"AUTH_CLAIM_SOURCE_URL must be set when AUTH_MODE is {self.auth_mode!r}. "
-                "Provide the base URL of the external claim source, or set AUTH_MODE=oidc."
-            )
-
         # Entitlement service config: required-together. When the entitlement
         # path is wired (entitlement_service_url is non-empty), every related
         # field must also be provided and well-formed. Defaults of empty
@@ -363,7 +343,6 @@ def get_settings() -> Settings:
         http_methods_mode=os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest").strip().lower(),
         http_method_alias_separator=os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", "colon").strip().lower(),
         closure_refresh_concurrency=int(os.environ.get("CLOSURE_REFRESH_CONCURRENCY", "8")),
-        auth_mode=os.environ.get("AUTH_MODE", "oidc").strip().lower(),
         auth_claim_source_url=os.environ.get("AUTH_CLAIM_SOURCE_URL") or None,
         auth_claim_cache_ttl_seconds=int(os.environ.get("AUTH_CLAIM_CACHE_TTL_SECONDS", "300")),
         auth_stale_ceiling_seconds=int(os.environ.get("AUTH_STALE_CEILING_SECONDS", "86400")),

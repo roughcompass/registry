@@ -62,11 +62,12 @@ _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 
 def _entitlement_settings(pg_url: str) -> Settings:
-    """Build Settings with auth_mode='rsam'.
+    """Build Settings configured for the entitlement-resolved auth path.
 
-    auth_claim_source_url is required by Settings when auth_mode != 'oidc'.
-    We supply a placeholder because the actual HTTP call to the entitlement
-    API is replaced by the injected fetch_authorities stub — it is never called.
+    The legacy ``auth_claim_source_url`` placeholder is supplied because
+    the field still exists pending its own deletion task; the actual
+    HTTP call to the entitlement service is replaced by the injected
+    fetcher stub and is never invoked.
     """
     return Settings(
         database_url=pg_url,
@@ -74,7 +75,6 @@ def _entitlement_settings(pg_url: str) -> Settings:
         scheduler_jobstore_url=pg_url,
         scheduler_use_memory_jobstore=True,
         embedding_model="stub",
-        auth_mode="rsam",
         auth_claim_source_url="http://stub-entitlement-api.test",  # never called in tests
         rate_limit_enabled=False,
     )
@@ -198,7 +198,7 @@ async def test_entitlement_full_write_path(pg_container: str) -> None:
     """RSAM resolver → JIT tenant → TenantContext → POST /v1/capabilities → 201.
 
     Verifies:
-    - build_resolver factory dispatches to EntitlementResolver when auth_mode='rsam'.
+    - build_resolver factory returns an EntitlementResolver instance.
     - JIT tenant and actor are materialised from the SEAL authority.
     - Entity write against the JIT tenant's context succeeds.
     - fetch_authorities is called exactly once with the correct subject.

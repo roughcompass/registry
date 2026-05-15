@@ -39,7 +39,6 @@ def _settings(*, max_entries: int = 10000) -> Settings:
         database_url="postgresql+asyncpg://test/test",
         pgbouncer_url="postgresql+asyncpg://test/test",
         scheduler_jobstore_url="postgresql+asyncpg://test/test",
-        auth_mode="rsam",
         auth_claim_source_url="https://entitlement.example.com",
         entitlement_service_url="https://entitlement.test.local",
         entitlement_service_env="DEV",

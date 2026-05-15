@@ -1,14 +1,10 @@
 """Base class, shared data types, and resolver factory for claim-source resolvers.
 
-All resolver implementations (OIDC-derived, RSAM, and any future plug-in)
-return the same `ResolvedIdentity` three-tuple. The `build_resolver` factory
-selects the active resolver by inspecting `Settings.auth_mode` and delegates
-to the matching `ClaimResolverBase` subclass.
-
-Adding a new auth mode means:
-1. Subclass `ClaimResolverBase` and implement `is_in_scope` + `resolve`.
-2. Register the new subclass in `build_resolver` below.
-3. Add the mode string to `Settings.auth_mode`'s documented allowed values.
+All resolver implementations return the same ``ResolvedIdentity`` shape.
+The ``build_resolver`` factory returns the single configured concrete
+implementation — currently always ``EntitlementResolver``. The factory
+seam survives so that adding a future resolver variant doesn't churn
+every call site.
 """
 
 from __future__ import annotations
@@ -102,15 +98,6 @@ class ClaimResolverBase(ABC):
     """
 
     @abstractmethod
-    def is_in_scope(self, claims: dict[str, Any]) -> bool:
-        """Return True if this resolver should handle the given claims dict.
-
-        The factory calls this method to select the resolver; it must not
-        perform I/O or raise. A resolver that depends on Settings should
-        check `settings.auth_mode` here.
-        """
-
-    @abstractmethod
     async def resolve(self, claims: dict[str, Any]) -> ResolvedIdentity:
         """Convert raw token claims into a `ResolvedIdentity`.
 
@@ -129,41 +116,21 @@ class ClaimResolverBase(ABC):
 # ---------------------------------------------------------------------------
 # Resolver factory
 #
-# `build_resolver` constructs the right `ClaimResolverBase` subclass for the
-# current auth mode. Registration order matters when multiple resolvers could
-# return `True` from `is_in_scope` for the same claims — the first match wins.
-# Currently only one resolver is active at a time (mode is service-wide), so
-# order is informational rather than a tie-breaker.
+# Single-mode now: only `EntitlementResolver` exists. The factory is a
+# trivial constructor; it survives as a stable seam so future mode
+# additions wouldn't churn every call site.
 
 
 def build_resolver(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
 ) -> ClaimResolverBase:
-    """Return the claim-source resolver appropriate for the configured auth mode.
-
-    Each resolver's `is_in_scope` is checked in registration order; the first
-    resolver that claims scope is returned. Raises `ValueError` if no registered
-    resolver matches — this indicates an unsupported `auth_mode` value that
-    should have been caught at startup by `Settings.__post_init__`.
-    """
-    # Import here to avoid circular imports: claim_source imports from this
-    # module, so top-level import would create a cycle.
+    """Return the claim-source resolver. Always ``EntitlementResolver``."""
+    # Import here to avoid circular imports: the resolver imports from this
+    # module, so a top-level import would create a cycle.
     from registry.auth.entitlements.resolver import EntitlementResolver  # noqa: PLC0415
 
-    registered: list[ClaimResolverBase] = [
-        EntitlementResolver(settings=settings, session_factory=session_factory),
-    ]
-
-    dummy_claims: dict[str, Any] = {}
-    for resolver in registered:
-        if resolver.is_in_scope(dummy_claims):
-            return resolver
-
-    raise ValueError(
-        f"No claim-source resolver registered for auth_mode={settings.auth_mode!r}. "
-        "Add a ClaimResolverBase subclass and register it in build_resolver."
-    )
+    return EntitlementResolver(settings=settings, session_factory=session_factory)
 
 
 __all__ = [

@@ -22,7 +22,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from registry.config import Settings
 from registry.logging_config import configure_logging
 
-# Minimal Settings that avoids the __post_init__ auth_mode guard.
+# Minimal Settings — log-format tests don't need entitlement config.
 _JSON_SETTINGS = Settings(
     database_url="postgresql://x/y",
     pgbouncer_url="postgresql://x/y",
