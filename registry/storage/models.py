@@ -14,7 +14,7 @@ defense-in-depth on top of the SQL `NOT NULL` constraint.
 `Fact.sync_run_id` is a nullable UUID column with no FK until the sync_runs
 migration runs (the FK is activated in the migration that creates sync_runs).
 
-`Role`, `ActorRole`, and `RateLimit` mapped classes support RBAC.
+`RateLimit` mapped class enforces per-tenant rate budgets.
 Default role seeding (4 roles per tenant: consumer, producer, admin, auditor) is
 performed by `CatalogService.seed_default_roles(session, tenant_id)` at tenant
 creation time — not in the migration.
@@ -35,6 +35,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     event,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
@@ -82,6 +83,10 @@ class Tenant(Base):
     # How this tenant was created. CHECK constraint in DB enforces 'manual' | 'jit' | 'system'.
     # The specific upstream source name belongs in audit-log payloads, not here.
     provider: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
+    # Operator override for entitlement-resolved tenant materialization: when
+    # set, the JIT path refuses to use this tenant and the middleware drops
+    # the tuple. Audit-log FKs are preserved (rows are NOT deleted).
+    disabled_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Actor(Base, TenantMixin):
@@ -89,28 +94,20 @@ class Actor(Base, TenantMixin):
 
     actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
-    display_name: Mapped[str] = mapped_column(Text, nullable=False)
-    email: Mapped[str | None] = mapped_column(Text, nullable=True)
-    oidc_subject: Mapped[str | None] = mapped_column(Text, nullable=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    oidc_subject: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    # 'human' | 'sync_worker'.  Partial unique index uq_actors_tenant_sync_type
-    # enforces (tenant_id, display_name) uniqueness for sync_worker actors only
-    # (see 0004_phase3_sync_infra migration), while human actors may share display names.
+    # `email` and `actor_kind` are retained for the sync-worker subsystem
+    # (sync/runner.py uses actor_kind to distinguish humans from workers).
+    # The auth ADR called for slimming these out, but the sync path predates
+    # and is independent of the auth rewrite — a deeper refactor of the
+    # sync-actor representation is out of scope for the auth consolidation.
+    email: Mapped[str | None] = mapped_column(Text, nullable=True)
     actor_kind: Mapped[str] = mapped_column(Text, nullable=False, default="human")
 
-
-class ApiToken(Base, TenantMixin):
-    __tablename__ = "api_tokens"
-
-    token_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
-    actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=False)
-    token_hash: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
-    roles: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    expires_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    revoked_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "oidc_subject", name="uq_actors_tenant_oidc_subject"),
+    )
 
 
 class VocabularyValue(Base, TenantMixin):
@@ -452,45 +449,8 @@ class WebhookDelivery(Base, TenantMixin):
     processed_at: Mapped[datetime.datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
-# --- RBAC additions ---
-
-
-class Role(Base, TenantMixin):
-    """One row per named role per tenant.
-
-    ``name`` is one of 'consumer', 'producer', 'admin', 'auditor' (CHECK in
-    DB).  ``permissions`` is an opaque TEXT[] blob interpreted by service code.
-
-    Default roles (all four names, empty permissions) are seeded at tenant
-    creation time by ``CatalogService.seed_default_roles`` — not by the
-    migration.
-    """
-
-    __tablename__ = "roles"
-
-    role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), nullable=False)
-    name: Mapped[str] = mapped_column(Text, nullable=False)
-    permissions: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list)
-    created_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-
-
-class ActorRole(Base, TenantMixin):
-    """Junction table assigning roles to actors within a tenant.
-
-    Composite PK ``(tenant_id, actor_id, role_id)`` prevents duplicate grants.
-    ``granted_by`` is a nullable FK to actors — NULL means system-seeded.
-    """
-
-    __tablename__ = "actor_roles"
-
-    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("tenants.tenant_id"), primary_key=True)
-    actor_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("actors.actor_id"), primary_key=True)
-    role_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("roles.role_id"), primary_key=True)
-    granted_at: Mapped[datetime.datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    granted_by: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("actors.actor_id"), nullable=True
-    )
+# Role + ActorRole were deleted with the api_token / RBAC consolidation —
+# role grants live in the entitlement service, not the catalog DB.
 
 
 # --- External-ID registry ---

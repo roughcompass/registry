@@ -1,9 +1,11 @@
 """Identity resolution — shared payload assembly for whoami surfaces.
 
 Both the REST ``GET /v1/whoami`` handler and the MCP ``whoami`` tool need
-the same three-select payload (Actor, Tenant, ApiToken) serialised into the
-same nine-field shape.  This module is the single source of truth so a new
-field is added in one place and both wire formats pick it up automatically.
+the same payload shape: actor + tenant identity plus the role set the
+caller holds for the selected tenant. This module assembles it from two
+selects (Actor, Tenant). The api_token row is gone — the auth path no
+longer mints opaque tokens, so the wire format's ``token_id`` /
+``token_expires_at`` fields are always ``None``.
 
 Serialisation is intentionally left to the callers:
 - REST: adapts ``WhoamiPayload`` into ``WhoAmIResponse`` (Pydantic) and
@@ -21,7 +23,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from registry.storage.models import Actor, ApiToken, Tenant
+from registry.storage.models import Actor, Tenant
 from registry.types import TenantContext
 
 
@@ -30,9 +32,9 @@ class WhoamiPayload:
     """Typed intermediate representation of the whoami payload.
 
     Callers convert this to their own wire format (Pydantic model, JSON
-    dict, …).  The fields here are the canonical nine-field contract;
-    adding a tenth field to this dataclass automatically propagates to
-    every caller.
+    dict, …). The wire-format ``token_id`` / ``token_expires_at`` fields
+    survive in this dataclass for response-shape compatibility but are
+    always ``None`` — the auth path no longer issues opaque tokens.
     """
 
     tenant_id: uuid.UUID
@@ -50,40 +52,19 @@ async def resolve_whoami(
     session_factory: async_sessionmaker[AsyncSession],
     ctx: TenantContext,
 ) -> WhoamiPayload:
-    """Assemble the whoami payload from three sequential selects.
+    """Assemble the whoami payload from Actor + Tenant selects.
 
-    Fetches Actor, Tenant, and the most-recent non-revoked ApiToken for the
-    calling actor within the calling tenant.  All three lookups are nullable
-    — a valid token can resolve even if the actor row was soft-deleted; the
-    callers handle ``None`` fields gracefully.
-
-    Args:
-        session_factory: Async session maker — the same factory the REST
-            request and MCP tool already hold.
-        ctx: Tenant context resolved by the auth layer for the current
-            request.  Never constructed by this function.
-
-    Returns:
-        A ``WhoamiPayload`` populated from the three rows.  Fields that
-        depend on rows that may not exist (actor, token) are ``None`` when
-        the row is absent.
+    Both lookups are nullable — the wire format gracefully reports
+    blank fields when the rows are absent. Token fields are always
+    ``None`` (the api_token table is gone).
     """
     async with session_factory() as session:
-        actor = (await session.execute(select(Actor).where(Actor.actor_id == ctx.actor_id))).scalar_one_or_none()
+        actor = (
+            await session.execute(select(Actor).where(Actor.actor_id == ctx.actor_id))
+        ).scalar_one_or_none()
 
-        tenant = (await session.execute(select(Tenant).where(Tenant.tenant_id == ctx.tenant_id))).scalar_one_or_none()
-
-        token_row: ApiToken | None = (
-            await session.execute(
-                select(ApiToken)
-                .where(
-                    ApiToken.tenant_id == ctx.tenant_id,
-                    ApiToken.actor_id == ctx.actor_id,
-                    ApiToken.revoked_at.is_(None),
-                )
-                .order_by(ApiToken.created_at.desc())
-                .limit(1)
-            )
+        tenant = (
+            await session.execute(select(Tenant).where(Tenant.tenant_id == ctx.tenant_id))
         ).scalar_one_or_none()
 
     return WhoamiPayload(
@@ -93,8 +74,8 @@ async def resolve_whoami(
         actor_id=ctx.actor_id,
         actor_display_name=actor.display_name if actor else None,
         actor_email=actor.email if actor else None,
-        token_id=token_row.token_id if token_row else None,
-        token_expires_at=token_row.expires_at if token_row else None,
+        token_id=None,
+        token_expires_at=None,
         roles=list(ctx.roles),
     )
 

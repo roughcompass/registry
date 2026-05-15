@@ -44,17 +44,6 @@ from registry.api.routers.admin_pii import (
     pii_pattern_router,
 )
 from registry.api.routers.admin_pii import router as _pii_router
-from registry.api.routers.admin_rbac import (
-    AssignRoleRequest,
-    RoleResponse,
-    assign_role,
-    get_actor,
-    get_tenant,
-    list_actors,
-    list_roles,
-    remove_role,
-)
-from registry.api.routers.admin_rbac import router as _rbac_router
 from registry.api.routers.admin_sync import (
     SupersededFactResponse,
     SyncRunResponse,
@@ -65,9 +54,6 @@ from registry.api.routers.admin_sync import (
 )
 from registry.api.routers.admin_sync import mutation_router as _sync_mutation
 from registry.api.routers.admin_sync import router as _sync_router
-from registry.api.routers.admin_tokens import MintTokenRequest, MintTokenResponse
-from registry.api.routers.admin_tokens import mutation_router as _tokens_mutation
-from registry.api.routers.admin_tokens import router as _tokens_router
 from registry.api.routers.admin_vocab import (
     CapabilityTypeSchemaCreate,
     CapabilityTypeSchemaPatch,
@@ -104,11 +90,9 @@ from registry.service.lifecycle import LifecycleService  # noqa: F401
 # ---------------------------------------------------------------------------
 
 router = APIRouter()
-router.include_router(_tokens_router)
 router.include_router(_sync_router)
 router.include_router(_vocab_router)
 router.include_router(_audit_router)
-router.include_router(_rbac_router)
 router.include_router(_pii_router)
 
 # ---------------------------------------------------------------------------
@@ -118,7 +102,6 @@ router.include_router(_pii_router)
 # ---------------------------------------------------------------------------
 
 admin_mutation_router = APIRouter()
-admin_mutation_router.include_router(_tokens_mutation)
 admin_mutation_router.include_router(_sync_mutation)
 admin_mutation_router.include_router(_vocab_mutation)
 
@@ -132,9 +115,6 @@ __all__ = [
     "pii_field_policy_router",
     # Service re-export for mock.patch compatibility
     "LifecycleService",
-    # Token models
-    "MintTokenRequest",
-    "MintTokenResponse",
     # Sync models
     "SyncSourceCreate",
     "SyncSourcePatch",
@@ -161,15 +141,6 @@ __all__ = [
     "AuditRow",
     "AuditResponse",
     "query_audit_log",
-    # RBAC models + handlers
-    "RoleResponse",
-    "AssignRoleRequest",
-    "get_tenant",
-    "get_actor",
-    "list_actors",
-    "list_roles",
-    "assign_role",
-    "remove_role",
     # PII models + handlers
     "PiiPatternCreate",
     "PiiPatternPatch",

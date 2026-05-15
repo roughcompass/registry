@@ -49,7 +49,6 @@ from starlette.requests import Request
 from starlette.routing import Mount, Route
 from starlette.types import ASGIApp
 
-from registry.api.auth.tokens import validate_token
 from registry.exceptions import CatalogError, NotFoundError, TenantIsolationError
 from registry.service.annotations import AnnotationService
 from registry.service.catalog import CatalogService
@@ -85,18 +84,18 @@ async def _resolve_tenant(
 ) -> TenantContext:
     """Resolve the per-request Bearer token to a TenantContext.
 
-    Raises ToolError on auth failure so the MCP caller sees a structured
-    error rather than an HTTP 401 (MCP protocol uses tool-level errors
-    rather than HTTP status codes).
+    The MCP server doesn't yet flow through the entitlement-resolved
+    auth pipeline that the REST middleware uses (the MCP transport
+    builds its own request scope rather than going through the
+    FastAPI dependency tree). Wiring it requires constructing the
+    pipeline here against ``app.state.claim_resolver`` —
+    a follow-up refactor since the api_token validator was deleted.
+    Until then, MCP requests cannot be authenticated.
     """
-    raw = _request_token.get()
-    if not raw:
-        raise ToolError("missing bearer token")
-    try:
-        async with session_factory() as session:
-            return await validate_token(session, raw, clock)
-    except CatalogError as exc:
-        raise ToolError("invalid or expired token") from exc
+    raise ToolError(
+        "MCP authentication is being rewired against the entitlement-resolved "
+        "auth path; the legacy api_token validator was removed. See OAR follow-up."
+    )
 
 
 def _extract_bearer(scope: dict[str, Any]) -> str:
