@@ -1,20 +1,43 @@
-"""RSAM-backed claim-source resolver.
+"""Entitlement-service-backed claim resolver.
 
-Resolves tenant grants for IDA-authenticated callers via an external authority
-list rather than token claims. IDA tokens authenticate the caller; RSAM provides
-the tenant-scope grants. The two concerns are separated: token validity is
-checked by the OIDC validator; tenant grants are resolved here.
+Identity is established by the OIDC validator before this class is reached
+(``iss``, ``aud``, ``exp``, signature). Authorization is established here:
+the resolver fetches the caller's entitlements from the upstream service,
+parses them through the configurable grammar, and materializes tenant +
+actor rows so the rest of the request handler can operate on the catalog's
+internal types.
 
-The `fetch_authorities` callable is the sole I/O boundary for the authority
-list. Production code uses the default stub (which raises `NotImplementedError`)
-until the live HTTP call is wired. Tests inject a lambda or `AsyncMock` at
-construction time — no module-level patching is needed or permitted.
+Cache wrap algorithm
+--------------------
+1. Compute the cache key. Prefer ``jti`` when the IDP mints one; otherwise
+   fall back to ``sha256(resolved_identity:iat)``. The fallback uses the
+   resolved identity (post sub→winaccountname fallback) — never raw
+   ``sub`` — so two Windows-AD users sharing the same ``iat`` second do
+   not collide.
+2. Fast path: if a non-expired cache entry exists, return it immediately.
+3. Acquire a per-entry lock (single-flight) so concurrent first-sightings
+   for the same JWT issue exactly one upstream call.
+4. Re-check inside the lock (another coroutine may have refreshed).
+5. On miss: fetch entitlements from upstream, parse, JIT-upsert tenants
+   and the actor, then store the entry with an expiry derived from the
+   JWT's ``exp`` claim.
+6. On a cacheable upstream failure (5xx/timeout/network): if a
+   non-expired cache entry exists, serve it stale and emit an audit event;
+   otherwise propagate the failure. Non-cacheable failures (401/403/429/
+   malformed) always propagate without consulting the cache — those are
+   authoritative answers from upstream and stale data must not override
+   them.
+
+The cache is per-process (in-memory). It is bounded by
+``settings.entitlement_cache_max_entries`` with LRU eviction and a
+per-entry TTL derived from JWT ``exp``.
 """
 
 from __future__ import annotations
 
 import asyncio
 import datetime
+import hashlib
 import logging
 import time
 import uuid
@@ -23,342 +46,393 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import HTTPException, status
+import cachetools  # type: ignore[import-untyped]
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-# ---------------------------------------------------------------------------
-# Per-process grant cache
-#
-# The cache stores resolved grants per subject (JWT `sub`) so that repeated
-# requests from the same caller within the TTL window do not issue a
-# `fetch_authorities` call. The stale-on-failure path serves cached grants
-# when `fetch_authorities` raises, up to `auth_stale_ceiling_seconds` from
-# the original cache write. After the ceiling the call fails-closed.
-#
-# Invalidation: TTL expiry only. An explicit per-actor invalidation endpoint
-# (POST /v1/admin/actors/{id}:refresh) is deferred — add a TODO comment in
-# the admin router when that endpoint is wired; this class would expose a
-# `invalidate(subject)` method at that point.
-#
-# The cache is per-process (in-memory dict). Do not share with other services.
+from registry.auth.entitlements import client as entitlement_client
+from registry.auth.entitlements import parser as entitlement_parser
+from registry.auth.entitlements.actor_store import (
+    upsert_entitlement_actor,
+    upsert_entitlement_tenant,
+)
 from registry.auth.resolver import (
     AuditIdentity,
     ClaimResolverBase,
     ResolvedIdentity,
     TenantGrant,
 )
-from registry.auth.entitlements import parser
-from registry.auth.entitlements.actor_store import upsert_entitlement_actor, upsert_entitlement_tenant
 from registry.config import Settings
 
 _log = logging.getLogger(__name__)
 
-# Minimum TTL clamp — prevents operators from setting a value so low that it
-# produces pathological cache churn and defeats the single-flight guarantee.
-_MIN_TTL_SECONDS = 30
+
+# Default fetcher signature used when no client / fetcher is injected.
+# The signature mirrors the productiona ``client.fetch_entitlements`` call
+# so swapping a stub for a real function in tests is a one-line change.
+EntitlementFetcher = Callable[..., Awaitable[list[str]]]
 
 
-# ---------------------------------------------------------------------------
-# Default stub — production fail-closed
-#
-# The live HTTP call to the external authority endpoint is not yet wired because
-# the endpoint contract (URL path, response schema, caller-auth mechanism) has
-# not been confirmed with the upstream team. Until that confirmation arrives and
-# the call is implemented, production code that reaches `fetch_authorities`
-# without an injected callable fails loudly with NotImplementedError — an
-# immediate, unambiguous signal rather than a silent empty-grant return.
+async def _default_fetcher(**_kwargs: Any) -> list[str]:
+    """Loud default — production code must inject a real fetcher.
 
-
-async def _default_stub(subject: str) -> list[str]:
+    The middleware lifespan is responsible for wiring an
+    ``httpx.AsyncClient`` and binding it to a callable that calls
+    ``client.fetch_entitlements``. This stub raises rather than silently
+    returning empty grants so a missing wire-up surfaces immediately.
+    """
     raise NotImplementedError(
-        "RSAM fetch_authorities is not yet wired — inject a callable to enable "
-        "this code path. See the auth/entitlements/resolver module docstring for details."
+        "EntitlementResolver was constructed without a fetcher. "
+        "The middleware lifespan must inject one — "
+        "use functools.partial(client.fetch_entitlements, http_client) or equivalent."
     )
-
-
-# ---------------------------------------------------------------------------
-# Cache entry dataclass
 
 
 @dataclass
 class _EntitlementCacheEntry:
-    """One cached slot for a subject's resolved grants.
+    """One cached resolution for a single JWT.
 
-    `grants` and `audit_identity` are stored together so a stale-serve can
-    reconstruct a full ResolvedIdentity without hitting the database.
-
-    `cached_at` is a monotonic timestamp (from time.monotonic()) — it is
-    only used for age comparisons, never formatted or logged as wall-clock time.
-
-    `lock` serialises concurrent refreshes for the same subject (single-flight).
-    A separate dict-structure lock (`_cache_load_lock`) protects the insertion of
-    new entries into the dict; once an entry exists its own lock takes over.
+    ``expires_at`` is bounded by the JWT's own ``exp`` claim (clamped to
+    a sane minimum). ``lock`` serializes refreshes for the same cache key
+    so concurrent first-misses issue exactly one upstream call.
     """
 
     grants: list[TenantGrant]
     audit_identity: AuditIdentity
-    cached_at: float
+    expires_at: float                     # absolute time.monotonic() value
+    jwt_exp_monotonic: float              # absolute time.monotonic() of JWT exp
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
-# ---------------------------------------------------------------------------
-# Resolver implementation
+# Minimum cache TTL — protects against pathological churn when a JWT is
+# already very close to expiry at the time of the first request.
+_MIN_CACHE_TTL_SECONDS = 30
+
+
+def _cache_key(claims: dict[str, Any], resolved_identity: str) -> str:
+    """Derive a stable cache key for a JWT.
+
+    ``jti`` is preferred when present — every IDP that mints unique
+    per-token IDs guarantees no collisions. Falls back to a SHA-256 of
+    ``resolved_identity:iat`` for tokens that don't include ``jti``.
+
+    The fallback uses ``resolved_identity`` (post-sub/winaccountname
+    fallback), not raw ``sub``: two Windows-AD users that share the same
+    ``iat`` second but have different ``winaccountname`` values must
+    produce distinct keys. Hashing also keeps the key length bounded
+    when the resolved identity is a long DN-style string.
+    """
+    jti = claims.get("jti")
+    if jti:
+        return f"jti:{jti}"
+    iat = claims.get("iat", "")
+    digest = hashlib.sha256(f"{resolved_identity}:{iat}".encode()).hexdigest()
+    return f"id-iat:{digest}"
+
+
+def _ttl_from_jwt(claims: dict[str, Any]) -> float:
+    """Compute cache TTL (seconds) bounded by the JWT's own ``exp`` claim.
+
+    The JWT is the cache lifetime: once the token expires, any cached
+    entry derived from it is stale and must not be served (even on
+    upstream failure). Returns at least ``_MIN_CACHE_TTL_SECONDS`` to
+    avoid pathological churn on near-expiry tokens.
+    """
+    exp = claims.get("exp")
+    if exp is None:
+        return float(_MIN_CACHE_TTL_SECONDS)
+    remaining = float(exp) - time.time()
+    return max(float(_MIN_CACHE_TTL_SECONDS), remaining)
 
 
 class EntitlementResolver(ClaimResolverBase):
-    """ClaimResolverBase implementation for IDA+RSAM deployments.
+    """Resolves an authenticated caller's entitlements into a ``ResolvedIdentity``.
 
-    IDA tokens authenticate the caller (iss/aud/exp/sig checks run in the OIDC
-    validator before this class is reached); RSAM provides the tenant-scope
-    grants. The two concerns are separated so token validity and grant resolution
-    can evolve independently.
+    The OIDC validator authenticates the caller (signature, ``iss``,
+    ``aud``, ``exp``) before this class is reached. This resolver
+    handles authorization: it asks the upstream entitlement service
+    what tenants and roles the caller holds, JIT-materializes any
+    new tenants and the actor row, and returns the catalog's internal
+    representation.
 
     Constructor parameters
     ----------------------
     settings:
-        Service settings. `auth_mode` is checked in `is_in_scope`; cache
-        TTL and stale-on-failure settings are read from the same object.
+        Service settings. Cache size, timeouts, discriminator, and role
+        mapping are all read from here.
     session_factory:
-        Callable that returns an `AsyncSession`. Used by `upsert_entitlement_tenant`
-        to materialise JIT tenant rows. Each SEAL in the authority list gets
-        its own session call so a failure on one SEAL does not roll back others.
-    fetch_authorities:
-        Async callable `(subject: str) -> list[str]`. Returns the raw authority
-        strings for the given subject. Defaults to `_default_stub`, which raises
-        `NotImplementedError` loudly rather than silently returning empty grants.
-        Inject a real callable or an `AsyncMock` for testing.
+        Builds an ``AsyncSession`` for tenant/actor upserts. Each tenant
+        gets its own session so a write failure on one does not roll back
+        the others.
+    fetcher:
+        Async callable matching ``client.fetch_entitlements``'s signature.
+        The middleware lifespan binds an ``httpx.AsyncClient`` and passes a
+        ``functools.partial`` here. Defaults to a loud stub so a missing
+        wire-up fails immediately at first call.
     """
 
     def __init__(
         self,
         settings: Settings,
         session_factory: async_sessionmaker[AsyncSession],
-        fetch_authorities: Callable[[str], Awaitable[list[str]]] = _default_stub,
+        fetcher: EntitlementFetcher = _default_fetcher,
     ) -> None:
         self.settings = settings
         self._session_factory = session_factory
-        self._fetch_authorities = fetch_authorities
+        self._fetcher = fetcher
 
-        # Cache configuration — TTL is clamped to a minimum to prevent pathological churn.
-        self._ttl_seconds: int = max(_MIN_TTL_SECONDS, settings.auth_claim_cache_ttl_seconds)
-        self._stale_ceiling_seconds: int = settings.auth_stale_ceiling_seconds
-        self._serve_stale: bool = settings.auth_serve_stale_on_failure
-
-        # Per-process grant cache. Key: JWT `sub`. Value: _EntitlementCacheEntry.
-        self._cache: dict[str, _EntitlementCacheEntry] = {}
-        # Protects structural mutations to self._cache (insertion of new entries).
-        # Once an entry exists, per-entry entry.lock serialises refreshes for that subject.
+        # Bounded LRU cache. Per-entry TTL is enforced manually via the
+        # ``expires_at`` field on each ``_EntitlementCacheEntry`` —
+        # ``cachetools.TTLCache`` only supports a single global TTL,
+        # which doesn't fit the JWT-exp-bounded model.
+        max_entries = max(1, settings.entitlement_cache_max_entries)
+        self._cache: cachetools.LRUCache[str, _EntitlementCacheEntry] = cachetools.LRUCache(
+            maxsize=max_entries
+        )
+        # Protects structural mutations to the LRU (insertion of new
+        # entries). Once an entry exists, its own ``lock`` serializes
+        # per-key refreshes.
         self._cache_load_lock: asyncio.Lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # ClaimResolverBase interface
-
+    #
+    # ``is_in_scope`` is retained until the auth_mode discriminator is
+    # removed entirely (a separate task). Once the discriminator is gone,
+    # this method and the abstract requirement go with it; the factory
+    # collapses to a direct instantiation.
     def is_in_scope(self, claims: dict[str, Any]) -> bool:
-        """Return True when the service is running in RSAM auth mode.
-
-        The mode check lives in Settings; claims content is not inspected
-        because IDA tokens may not carry a mode discriminator.
-        """
         return self.settings.auth_mode == "rsam"
 
     async def resolve(self, claims: dict[str, Any]) -> ResolvedIdentity:
-        """Resolve RSAM authorities into a `ResolvedIdentity`.
+        """Resolve a caller's entitlements into a ``ResolvedIdentity``.
 
-        Cache wrap algorithm:
-        1. Extract subject from `claims["sub"]`.
-        2. Fast path: if a cache entry exists and is within TTL, return it immediately.
-        3. Acquire dict-structure lock to find or create the per-subject entry.
-        4. Acquire per-subject lock (single-flight). Re-check cache inside the lock.
-        5. On cache miss: call the fetch + parse + JIT + audit emission flow.
-           On success, store the result. Return the resolved identity.
-        6. On fetch failure:
-           - stale-on-failure disabled → propagate exception (fail-closed).
-           - stale-on-failure enabled + entry within ceiling → emit
-             `auth.entitlement_stale_cache_served` audit event and return cached identity.
-           - stale-on-failure enabled but no entry or ceiling exceeded → raise
-             HTTP 503 (service unavailable, retry after TTL).
+        See module docstring for the full cache wrap algorithm. The
+        cache key is derived from ``claims`` and the caller's identity;
+        the upstream call is single-flighted per cache key.
         """
-        subject: str = claims["sub"]
+        resolved_identity = self._resolved_identity_from_claims(claims)
+        key = _cache_key(claims, resolved_identity)
 
-        # Step 2: fast path — check TTL without acquiring any lock.
+        # Step 2: fast path — read without any lock.
+        existing = self._cache.get(key)
         now = time.monotonic()
-        existing = self._cache.get(subject)
-        if existing is not None and (now - existing.cached_at) < self._ttl_seconds:
+        if existing is not None and existing.expires_at > now:
             return ResolvedIdentity(
-                user_id=subject,
-                tenant_grants=existing.grants,
+                user_id=resolved_identity,
+                tenant_grants=list(existing.grants),
                 audit_identity=existing.audit_identity,
             )
 
-        # Step 3: acquire dict-structure lock to ensure the per-subject entry exists.
+        # Step 3: ensure a per-key entry exists before we wait on its lock.
         async with self._cache_load_lock:
-            if subject not in self._cache:
-                self._cache[subject] = _EntitlementCacheEntry(
+            entry = self._cache.get(key)
+            if entry is None:
+                entry = _EntitlementCacheEntry(
                     grants=[],
-                    audit_identity=AuditIdentity(sub=subject, email=None, preferred_username=subject),
-                    cached_at=0.0,  # age=0 means never populated; TTL check will fail.
+                    audit_identity=AuditIdentity(
+                        sub=resolved_identity, email=None, preferred_username=resolved_identity
+                    ),
+                    expires_at=0.0,
+                    jwt_exp_monotonic=0.0,
                 )
-            entry = self._cache[subject]
+                self._cache[key] = entry
 
-        # Step 4: acquire per-subject lock — single-flight for concurrent callers.
+        # Step 4: per-key single-flight.
         async with entry.lock:
-            # Re-check: another coroutine may have refreshed the entry while we waited.
+            # Re-check inside the lock — another coroutine may have refreshed.
             now = time.monotonic()
-            if entry.cached_at > 0.0 and (now - entry.cached_at) < self._ttl_seconds:
+            if entry.expires_at > now:
                 return ResolvedIdentity(
-                    user_id=subject,
-                    tenant_grants=entry.grants,
+                    user_id=resolved_identity,
+                    tenant_grants=list(entry.grants),
                     audit_identity=entry.audit_identity,
                 )
 
-            # Step 5: cache miss — run the full fetch + parse + JIT flow.
             try:
-                grants, audit_identity = await self._fetch_and_resolve(subject)
-            except Exception as exc:
-                # Step 6: failure path.
-                return await self._handle_fetch_failure(subject, entry, exc)
+                grants, audit_identity = await self._fetch_and_resolve(
+                    claims, resolved_identity
+                )
+            except entitlement_client.EntitlementServiceError as exc:
+                # Cacheable failure (5xx / timeout / network) — serve stale
+                # if a non-expired entry exists, otherwise propagate.
+                return await self._handle_cacheable_failure(
+                    key, entry, resolved_identity, exc
+                )
+            except entitlement_client.EntitlementClientError:
+                # Non-cacheable failure (401/403/404/429/malformed) — never
+                # serve stale; upstream's authoritative answer must propagate.
+                raise
 
-            # Success: populate cache entry.
+            # Success: populate cache entry with JWT-exp-bounded expiry.
+            ttl = _ttl_from_jwt(claims)
             entry.grants = grants
             entry.audit_identity = audit_identity
-            entry.cached_at = time.monotonic()
+            entry.expires_at = time.monotonic() + ttl
+            entry.jwt_exp_monotonic = entry.expires_at
 
             return ResolvedIdentity(
-                user_id=subject,
-                tenant_grants=grants,
+                user_id=resolved_identity,
+                tenant_grants=list(grants),
                 audit_identity=audit_identity,
             )
 
-    async def _handle_fetch_failure(
-        self,
-        subject: str,
-        entry: _EntitlementCacheEntry,
-        exc: Exception,
-    ) -> ResolvedIdentity:
-        """Apply the stale-on-failure policy when `fetch_authorities` raises.
+    # ------------------------------------------------------------------
+    # Helpers
 
-        If stale-on-failure is disabled, or there is no cached entry, or the
-        cache is older than `stale_ceiling_seconds`, raises an HTTP 503 (or
-        propagates the original exception when stale-on-failure is disabled).
+    @staticmethod
+    def _resolved_identity_from_claims(claims: dict[str, Any]) -> str:
+        """Identity extraction with sub → winaccountname fallback.
 
-        When a valid stale entry is available and the operator has opted in,
-        emits `auth.entitlement_stale_cache_served` and returns the cached identity.
+        The OIDC validator should have populated one of these by the time
+        the resolver runs; this helper just picks the right one. Empty
+        strings are treated as missing (some IDPs emit ``sub=""`` rather
+        than omitting the claim).
         """
-        if not self._serve_stale:
-            raise exc
-
-        now = time.monotonic()
-        stale_age = now - entry.cached_at if entry.cached_at > 0.0 else None
-
-        if stale_age is not None and stale_age < self._stale_ceiling_seconds:
-            # Stale-serve: emit audit event and return cached result.
-            tenant_id = entry.grants[0].tenant_id if entry.grants else None
-            await self._emit_stale_cache_event(subject, tenant_id, stale_age)
-            _log.warning(
-                "RSAM fetch_authorities failed; serving stale grant cache for subject=%s " "stale_age_seconds=%d",
-                subject,
-                int(stale_age),
-            )
-            return ResolvedIdentity(
-                user_id=subject,
-                tenant_grants=entry.grants,
-                audit_identity=entry.audit_identity,
-            )
-
-        # No usable stale entry (never populated or ceiling exceeded).
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=(
-                "The RSAM authority service is temporarily unavailable. " f"Retry after {self._ttl_seconds} seconds."
-            ),
-            headers={"Retry-After": str(self._ttl_seconds)},
+        sub = claims.get("sub")
+        if sub:
+            return str(sub)
+        win = claims.get("winaccountname")
+        if win:
+            return str(win)
+        # Reaching here is a programming error — the OIDC validator should
+        # have rejected the token before resolve() is called.
+        raise ValueError(
+            "EntitlementResolver.resolve called with a claim set lacking "
+            "both 'sub' and 'winaccountname' — the OIDC validator should "
+            "have rejected this token."
         )
 
-    async def _fetch_and_resolve(self, subject: str) -> tuple[list[TenantGrant], AuditIdentity]:
-        """Run the full fetch + parse + JIT + audit emission flow.
+    async def _fetch_and_resolve(
+        self,
+        claims: dict[str, Any],
+        resolved_identity: str,
+    ) -> tuple[list[TenantGrant], AuditIdentity]:
+        """Fetch entitlements upstream, parse, and JIT-materialize tenants.
 
-        This is the core resolution path extracted from `resolve()` so the cache
-        wrap can call it cleanly. Returns (grants, audit_identity). Raises on
-        any upstream failure — the caller decides how to handle stale data.
+        Raises every exception type from ``client.py`` unchanged — the
+        caller decides which are cacheable. Returns ``(grants,
+        audit_identity)`` on success.
         """
-        # Fetch raw authority strings — may raise on upstream failure.
-        # Measure wall-clock latency around the I/O call for the audit payload.
-        _t0 = time.monotonic()
-        raw_authorities: list[str] = await self._fetch_authorities(subject)
-        _latency_ms = int((time.monotonic() - _t0) * 1000)
+        raw_jwt = claims.get("__raw_token", "")
+        request_id = claims.get("__request_id")
 
-        # Parse, discard non-matching strings
-        parsed = [parser.parse_authority(a) for a in raw_authorities]
-        valid = [p for p in parsed if p is not None]
+        t0 = time.monotonic()
+        raw_entitlements = await self._fetcher(
+            resolved_identity=resolved_identity,
+            raw_jwt=raw_jwt,
+            settings=self.settings,
+            request_id=request_id,
+        )
+        latency_ms = int((time.monotonic() - t0) * 1000)
 
-        # Group by seal_id, collect roles per SEAL
-        roles_by_seal: dict[str, list[str]] = defaultdict(list)
-        for authority in valid:
-            role = parser.verb_to_role(authority.verb)
-            roles_by_seal[authority.seal_id].append(role)
+        parsed = entitlement_parser.parse_entitlements(raw_entitlements, self.settings)
 
-        # Upsert tenant, upsert actor (one per tenant), build grants
+        # Group by tenant_slug so a user holding multiple roles for the
+        # same tenant collapses to a single grant.
+        roles_by_slug: dict[str, list[str]] = defaultdict(list)
+        for entry in parsed:
+            roles_by_slug[entry.tenant_slug].append(entry.role)
+
         tenant_grants: list[TenantGrant] = []
-        for seal_id, roles in roles_by_seal.items():
-            best_role = parser.highest_role(roles)
+        for tenant_slug, roles in roles_by_slug.items():
+            best_role = self._highest_role(roles)
             async with self._session_factory() as session, session.begin():
-                tenant_uuid = await upsert_entitlement_tenant(session, seal_id)
-                # Actor row is guaranteed for downstream AuditIdentity SELECT.
-                await upsert_entitlement_actor(session, tenant_uuid, subject)
+                tenant_uuid = await upsert_entitlement_tenant(session, tenant_slug)
+                await upsert_entitlement_actor(session, tenant_uuid, resolved_identity)
             tenant_grants.append(
                 TenantGrant(
                     tenant_id=tenant_uuid,
-                    tenant_external_id=seal_id,
+                    tenant_external_id=tenant_slug,
                     catalog_role=best_role,
                 )
             )
 
-        # Populate AuditIdentity from actors table.
-        # When there are zero grants, no actor row exists — fall back to subject-only
-        # identity (the resolver layer translates zero grants to 403 separately).
         if tenant_grants:
-            audit_identity = await self._build_audit_identity(subject, tenant_grants[0].tenant_id)
+            audit_identity = await self._build_audit_identity(
+                resolved_identity, tenant_grants[0].tenant_id
+            )
         else:
-            audit_identity = AuditIdentity(sub=subject, email=None, preferred_username=subject)
+            audit_identity = AuditIdentity(
+                sub=resolved_identity, email=None, preferred_username=resolved_identity
+            )
 
-        # Log RSAM authority resolution summary so operators can track resolver
-        # activity, latency, and authority counts without a dedicated audit row.
-        # The audit_log schema requires non-null target_type and target_id which
-        # are not meaningful for a cross-tenant auth event; structured logging is
-        # the appropriate observability surface here.
         _log.info(
-            "auth.claim_source.invoked subject=%s source=entitlement latency_ms=%d authority_count=%d",
-            subject,
-            _latency_ms,
-            len(raw_authorities),
+            "auth.entitlement.resolved subject=%s latency_ms=%d "
+            "raw_entitlement_count=%d resolved_grant_count=%d",
+            resolved_identity,
+            latency_ms,
+            len(raw_entitlements),
+            len(tenant_grants),
         )
 
         return tenant_grants, audit_identity
+
+    async def _handle_cacheable_failure(
+        self,
+        key: str,
+        entry: _EntitlementCacheEntry,
+        resolved_identity: str,
+        exc: entitlement_client.EntitlementServiceError,
+    ) -> ResolvedIdentity:
+        """Serve stale on a cacheable upstream failure if possible.
+
+        Stale-on-failure is mandatory in the new model — there is no
+        operator toggle. The only gate is whether a non-expired cache
+        entry exists for this JWT (a stale-but-not-expired-relative-to-
+        the-token entry is still trustworthy because the upstream
+        granted it within the token's lifetime).
+        """
+        now = time.monotonic()
+        if entry.expires_at > now:
+            stale_age = now - (entry.expires_at - _ttl_from_jwt({"exp": time.time()}))
+            await self._emit_stale_cache_event(
+                resolved_identity,
+                entry.grants[0].tenant_id if entry.grants else None,
+                max(0, int(stale_age)),
+            )
+            _log.warning(
+                "entitlement_service unavailable; serving stale cache for key=%s reason=%s",
+                key,
+                exc.reason,
+            )
+            return ResolvedIdentity(
+                user_id=resolved_identity,
+                tenant_grants=list(entry.grants),
+                audit_identity=entry.audit_identity,
+            )
+        # Cold cache or entry past its JWT-bounded expiry — propagate.
+        raise exc
+
+    @staticmethod
+    def _highest_role(roles: list[str]) -> str:
+        """Pick the highest-precedence internal role from a non-empty list.
+
+        Precedence: admin > producer > consumer > auditor. Returns the
+        first listed role if none match (defensive — the parser should
+        have already filtered to known names).
+        """
+        precedence = ("admin", "producer", "consumer", "auditor")
+        weights = {role: len(precedence) - i for i, role in enumerate(precedence)}
+        return max(roles, key=lambda r: weights.get(r, 0))
 
     async def _emit_stale_cache_event(
         self,
         subject: str,
         tenant_id: uuid.UUID | None,
-        stale_age: float,
+        stale_age_seconds: int,
     ) -> None:
-        """Write the `auth.entitlement_stale_cache_served` audit row.
+        """Write the ``auth.entitlement_stale_cache_served`` audit row.
 
-        Payload keys:
-          - tenant_id: first grant's tenant UUID as a string, or null when the
-            cached identity has no grants.
-          - stale_age_seconds: integer seconds since the cache entry was written.
-
-        The write is best-effort: a failure here does not block the stale-serve
-        response. Log and swallow any exception so the caller still gets its
-        (stale) identity.
+        Best-effort: a write failure here does not block the stale-serve
+        response — the caller still gets its (stale) identity and the
+        operational signal is the warning log emitted by the caller.
         """
         tenant_id_str = str(tenant_id) if tenant_id is not None else "null"
-        stale_age_int = int(stale_age)
         now = datetime.datetime.now(tz=datetime.UTC)
         try:
-            async with self._session_factory() as _audit_session:
-                await _audit_session.execute(
+            async with self._session_factory() as session:
+                await session.execute(
                     text(
                         "INSERT INTO audit_log "
                         "(audit_id, tenant_id, actor_id, action, target_type, "
@@ -372,27 +446,26 @@ class EntitlementResolver(ClaimResolverBase):
                         "after_jsonb": (
                             '{"tenant_id": '
                             + (f'"{tenant_id_str}"' if tenant_id is not None else "null")
-                            + f', "stale_age_seconds": {stale_age_int}}}'
+                            + f', "stale_age_seconds": {stale_age_seconds}}}'
                         ),
                         "ts": now,
                     },
                 )
-                await _audit_session.commit()
-        except Exception:  # noqa: BLE001
-            _log.exception("Failed to emit auth.entitlement_stale_cache_served audit event for subject=%s", subject)
+                await session.commit()
+        except Exception:  # noqa: BLE001 — best-effort audit
+            _log.exception(
+                "Failed to emit auth.entitlement_stale_cache_served audit for subject=%s",
+                subject,
+            )
 
-    async def _build_audit_identity(self, subject: str, tenant_id: uuid.UUID) -> AuditIdentity:
-        """Fetch the actor row for (tenant_id, oidc_subject=subject) and build the
-        full AuditIdentity. The actor row is guaranteed to exist because Step 5a
-        upserted it; a miss is a programming error and raises RuntimeError.
+    async def _build_audit_identity(
+        self, subject: str, tenant_id: uuid.UUID
+    ) -> AuditIdentity:
+        """Look up the just-upserted actor row and assemble its AuditIdentity.
 
-        Field rules:
-          - sub: always the JWT subject.
-          - email: actor.email when non-NULL; None otherwise (admins can populate
-            later via the actors admin path).
-          - preferred_username: actor.display_name when non-NULL; subject as
-            last-resort fallback (display_name is NOT NULL in the schema, so this
-            is defensive only).
+        The actor row is guaranteed to exist because the JIT upsert in
+        ``_fetch_and_resolve`` created it. A miss here is a programming
+        error rather than a runtime case to handle.
         """
         async with self._session_factory() as session:
             row = await session.execute(
@@ -404,13 +477,21 @@ class EntitlementResolver(ClaimResolverBase):
             )
             actor = row.first()
         if actor is None:
-            raise RuntimeError("actor row missing after JIT upsert — programming error")
+            raise RuntimeError(
+                "actor row missing after JIT upsert — programming error"
+            )
         display_name, email = actor
         return AuditIdentity(
             sub=subject,
-            email=email or None,
+            email=email,
             preferred_username=display_name or subject,
         )
 
 
-__all__ = ["EntitlementResolver", "_default_stub"]
+__all__ = [
+    "EntitlementResolver",
+    "_cache_key",
+    "_ttl_from_jwt",
+    "_EntitlementCacheEntry",
+    "EntitlementFetcher",
+]
