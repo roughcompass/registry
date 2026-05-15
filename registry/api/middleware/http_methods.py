@@ -245,12 +245,22 @@ class HttpMethodRouter:
 
         if self._mode in ("post_only", "both"):
             alias_path = f"{path}{self._sep_char}{action}"
-            # POST-tunneled aliases tag an operation_id suffix so OpenAPI does
-            # not collide with the verb route when mode='both'.
+            # POST-tunneled aliases need their own operation_id so OpenAPI
+            # doesn't collide with the verb route under mode='both'. Two
+            # cases:
+            #   1. Caller supplied operation_id → derive the tunnel id by
+            #      suffixing ``_via_post`` so we never re-use the verb id.
+            #   2. Caller didn't supply one → synthesise a id from path +
+            #      action; this is also the only collision-free choice when
+            #      the handler closure name isn't unique across call sites.
             tunneled_kwargs = dict(route_kwargs)
-            if "operation_id" not in tunneled_kwargs:
+            caller_op_id = tunneled_kwargs.get("operation_id")
+            if caller_op_id:
+                tunneled_kwargs["operation_id"] = f"{caller_op_id}_via_post"
+            else:
                 tunneled_kwargs["operation_id"] = (
-                    f"tunnel_{verb_lower}_{action}" f"_{path.replace('/', '_').replace('{', '').replace('}', '')}"
+                    f"tunnel_{verb_lower}_{action}"
+                    f"_{path.replace('/', '_').replace('{', '').replace('}', '')}"
                 ).strip("_")
 
             self._router.add_api_route(

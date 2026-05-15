@@ -9493,7 +9493,7 @@
     "/v1/concepts/{entity_id}": {
       "delete": {
         "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
-        "operationId": "_delete_v1_concepts__entity_id__delete",
+        "operationId": "v1_concepts_delete",
         "parameters": [
           {
             "description": "Concept UUID or slug",
@@ -9572,7 +9572,7 @@
       },
       "patch": {
         "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
-        "operationId": "_patch_v1_concepts__entity_id__patch",
+        "operationId": "v1_concepts_update",
         "parameters": [
           {
             "description": "Concept UUID or slug",
@@ -9627,7 +9627,7 @@
     "/v1/concepts/{entity_id}:delete": {
       "post": {
         "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
-        "operationId": "tunnel_delete_delete__entity_id",
+        "operationId": "v1_concepts_delete_via_post",
         "parameters": [
           {
             "description": "Concept UUID or slug",
@@ -9665,7 +9665,7 @@
     "/v1/concepts/{entity_id}:update": {
       "post": {
         "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
-        "operationId": "tunnel_patch_update__entity_id",
+        "operationId": "v1_concepts_update_via_post",
         "parameters": [
           {
             "description": "Concept UUID or slug",
@@ -10544,7 +10544,7 @@
     "/v1/operations/{entity_id}": {
       "delete": {
         "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
-        "operationId": "_delete_v1_operations__entity_id__delete",
+        "operationId": "v1_operations_delete",
         "parameters": [
           {
             "description": "Operation UUID or slug",
@@ -10623,7 +10623,7 @@
       },
       "patch": {
         "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
-        "operationId": "_patch_v1_operations__entity_id__patch",
+        "operationId": "v1_operations_update",
         "parameters": [
           {
             "description": "Operation UUID or slug",
@@ -10678,7 +10678,7 @@
     "/v1/operations/{entity_id}:delete": {
       "post": {
         "description": "Soft-delete idempotency: 204 on first or repeat delete; 404 on never-existing.",
-        "operationId": "tunnel_delete_delete__entity_id",
+        "operationId": "v1_operations_delete_via_post",
         "parameters": [
           {
             "description": "Operation UUID or slug",
@@ -10716,7 +10716,7 @@
     "/v1/operations/{entity_id}:update": {
       "post": {
         "description": "Update mutable attributes on the entity.\n\nHonours the ``If-Match`` request header (advisory): if present and\nstale, returns 412 Precondition Failed; if absent, logs a debug\nwarning and accepts the write.  ETag is computed before the write so\na stale precondition fails fast.",
-        "operationId": "tunnel_patch_update__entity_id",
+        "operationId": "v1_operations_update_via_post",
         "parameters": [
           {
             "description": "Operation UUID or slug",

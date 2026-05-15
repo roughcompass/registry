@@ -249,12 +249,22 @@ def make_entity_router(
     _mode, _sep = get_mode_settings()
     _mr = HttpMethodRouter(_mutation_base, mode=_mode, separator=_sep)
 
+    # The handler closures are named identically (``_patch`` / ``_delete``)
+    # across every call to ``make_entity_router`` — concepts, operations,
+    # and any future entity types share the same closure names. FastAPI
+    # auto-generates the operation_id from the function name when one is
+    # not supplied, so two calls produce identical IDs and the OpenAPI
+    # spec emits a "Duplicate Operation ID" warning. Give each route an
+    # explicit operation_id derived from the prefix to break the tie.
+    _slug = prefix.strip("/").replace("/", "_") or "entity"
+
     _mr.add_mutation_route(
         path="/{entity_id}",
         action="update",
         handler=_patch,
         verb="PATCH",
         response_model=CapabilityResponse,
+        operation_id=f"{_slug}_update",
     )
 
     _mr.add_mutation_route(
@@ -264,6 +274,7 @@ def make_entity_router(
         verb="DELETE",
         status_code=status.HTTP_204_NO_CONTENT,
         response_class=Response,
+        operation_id=f"{_slug}_delete",
     )
 
     return router, _mutation_base
