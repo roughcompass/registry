@@ -17,7 +17,6 @@ to verify that creating an edge inserts a ``closure_outbox`` row atomically.
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
 from typing import Any
 
@@ -26,7 +25,6 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
 from registry.service.catalog import CatalogService
 from registry.service.schema import SchemaService
 from registry.service.vocabulary import VocabularyService
@@ -48,13 +46,16 @@ _LABELS = [chr(ord("A") + i) for i in range(_CHAIN_SIZE)]  # ['A','B',...,'J']
 # ---------------------------------------------------------------------------
 
 
-async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert tenant + actor + API token.  Returns (tenant_id, actor_id, raw_token)."""
+async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert tenant + actor.  Returns (tenant_id, actor_id).
+
+    Auth is handled via the entitlement harness for HTTP tests; service-layer
+    tests construct TenantContext directly.
+    """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
     try:
         async with factory() as session, session.begin():
             await session.execute(
@@ -66,27 +67,21 @@ async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID,
             )
             await session.execute(
                 text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, ARRAY['producer','consumer'], :now)"
+                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
+                    "oidc_subject, created_at) "
+                    "VALUES (:aid, :tid, :dn, :oidc, :now)"
                 ),
                 {
-                    "tid": tenant_id,
                     "aid": actor_id,
-                    "th": hash_token(raw_token),
+                    "tid": tenant_id,
+                    "dn": f"actor-{slug}",
+                    "oidc": f"oidc-sub-{slug}",
                     "now": _NOW,
                 },
             )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token
+    return tenant_id, actor_id
 
 
 async def _seed_chain(
@@ -176,7 +171,7 @@ async def _enqueue_all_edges(
         await engine.dispose()
 
 
-def _make_session_factory(pg_url: str) -> async_sessionmaker:
+def _make_session_factory(pg_url: str) -> async_sessionmaker:  # type: ignore[type-arg]
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     return get_session_factory(engine)
 
@@ -195,7 +190,7 @@ async def _count_closure_rows(pg_url: str, tenant_id: uuid.UUID) -> int:
                 text("SELECT COUNT(*) FROM closure_cache WHERE tenant_id = :tid"),
                 {"tid": tenant_id},
             )
-            return result.scalar_one()
+            return int(result.scalar_one())
     finally:
         await engine.dispose()
 
@@ -209,7 +204,7 @@ async def _count_outbox_rows(pg_url: str, tenant_id: uuid.UUID) -> int:
                 text("SELECT COUNT(*) FROM closure_outbox WHERE tenant_id = :tid"),
                 {"tid": tenant_id},
             )
-            return result.scalar_one()
+            return int(result.scalar_one())
     finally:
         await engine.dispose()
 
@@ -245,14 +240,13 @@ async def _fetch_closure_rows(
 
 
 @pytest_asyncio.fixture(scope="module")
-async def chain_setup(pg_container: str):  # type: ignore[type-arg]
+async def chain_setup(pg_container: str) -> dict[str, Any]:
     """Seed tenant + 10-cap chain for the module.  Returns setup dict."""
-    tenant_id, actor_id, raw_token = await _seed_tenant(pg_container, slug=f"t06-{uuid.uuid4().hex[:8]}")
+    tenant_id, actor_id = await _seed_tenant(pg_container, slug=f"t06-{uuid.uuid4().hex[:8]}")
     ids = await _seed_chain(pg_container, tenant_id=tenant_id)
     return {
         "tenant_id": tenant_id,
         "actor_id": actor_id,
-        "raw_token": raw_token,
         "ids": ids,
         "pg_url": pg_container,
     }
@@ -264,7 +258,7 @@ async def chain_setup(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_worker_drains_outbox_and_populates_cache(chain_setup: dict) -> None:
+async def test_worker_drains_outbox_and_populates_cache(chain_setup: dict[str, Any]) -> None:
     """After run_once(), all outbox rows are consumed and closure_cache is populated.
 
     Verifies:
@@ -297,7 +291,7 @@ async def test_worker_drains_outbox_and_populates_cache(chain_setup: dict) -> No
 
 
 @pytest.mark.asyncio
-async def test_reverse_closure_from_J_contains_nearby_ancestors(chain_setup: dict) -> None:
+async def test_reverse_closure_from_J_contains_nearby_ancestors(chain_setup: dict[str, Any]) -> None:
     """closure_cache reverse closure from J must include its 5-hop ancestors.
 
     _MAX_DEPTH=5 caps traversal at 5 hops from root.  In the 10-node chain
@@ -325,14 +319,14 @@ async def test_reverse_closure_from_J_contains_nearby_ancestors(chain_setup: dic
 
     # Nodes reachable within depth 5 from J (reverse): I, H, G, F, E.
     for label in ["I", "H", "G", "F", "E"]:
-        assert ids[label] in member_ids, f"reverse closure from J missing {label} at depth ≤ 5 (id={ids[label]})"
+        assert ids[label] in member_ids, f"reverse closure from J missing {label} at depth <= 5 (id={ids[label]})"
 
     # The cache must be non-empty for J.
     assert len(member_ids) >= 5, f"reverse closure from J expected >= 5 nodes, got {len(member_ids)}"
 
 
 @pytest.mark.asyncio
-async def test_forward_closure_from_A_contains_nearby_successors(chain_setup: dict) -> None:
+async def test_forward_closure_from_A_contains_nearby_successors(chain_setup: dict[str, Any]) -> None:
     """closure_cache forward closure from A must include its 5-hop successors.
 
     _MAX_DEPTH=5 caps traversal at 5 hops.  Forward from A can reach B(1),
@@ -354,13 +348,13 @@ async def test_forward_closure_from_A_contains_nearby_successors(chain_setup: di
 
     # Nodes reachable within depth 5 from A (forward): B, C, D, E, F.
     for label in ["B", "C", "D", "E", "F"]:
-        assert ids[label] in member_ids, f"forward closure from A missing {label} at depth ≤ 5 (id={ids[label]})"
+        assert ids[label] in member_ids, f"forward closure from A missing {label} at depth <= 5 (id={ids[label]})"
 
     assert len(member_ids) >= 5, f"forward closure from A expected >= 5 nodes, got {len(member_ids)}"
 
 
 @pytest.mark.asyncio
-async def test_mutate_edge_and_rerun_worker_updates_cache(chain_setup: dict) -> None:
+async def test_mutate_edge_and_rerun_worker_updates_cache(chain_setup: dict[str, Any]) -> None:
     """After soft-deleting the A→B edge, re-running the worker updates the cache.
 
     The forward closure from A should no longer reach B, C, …, J after
@@ -411,7 +405,8 @@ async def test_mutate_edge_and_rerun_worker_updates_cache(chain_setup: dict) -> 
 
     # A no longer has any outgoing active edges, so its closure must be empty.
     assert len(member_ids) == 0, (
-        f"forward closure from A should be empty after removing A→B edge, " f"but found: {member_ids}"
+        f"forward closure from A should be empty after removing A→B edge, "
+        f"but found: {member_ids}"
     )
 
 
@@ -423,7 +418,7 @@ async def test_create_edge_via_catalog_service_emits_outbox_row(pg_container: st
     path works end-to-end — catalog.create_edge must insert the outbox row atomically.
     """
     pg_url = pg_container
-    tenant_id, actor_id, _ = await _seed_tenant(pg_url, slug=f"t06-emit-{uuid.uuid4().hex[:8]}")
+    tenant_id, actor_id = await _seed_tenant(pg_url, slug=f"t06-emit-{uuid.uuid4().hex[:8]}")
 
     # Create two entities for the edge.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
@@ -482,7 +477,8 @@ async def test_create_edge_via_catalog_service_emits_outbox_row(pg_container: st
     # Count outbox rows after.
     after = await _count_outbox_rows(pg_url, tenant_id)
     assert after == before + 1, (
-        f"expected closure_outbox to grow by 1 after create_edge, " f"got before={before} after={after}"
+        f"expected closure_outbox to grow by 1 after create_edge, "
+        f"got before={before} after={after}"
     )
 
     await svc_engine.dispose()
@@ -492,7 +488,7 @@ async def test_create_edge_via_catalog_service_emits_outbox_row(pg_container: st
 async def test_evict_stale_removes_old_rows(pg_container: str) -> None:
     """evict_stale() must delete closure_cache rows older than 90 days."""
     pg_url = pg_container
-    tenant_id, _, _ = await _seed_tenant(pg_url, slug=f"t06-evict-{uuid.uuid4().hex[:8]}")
+    tenant_id, _ = await _seed_tenant(pg_url, slug=f"t06-evict-{uuid.uuid4().hex[:8]}")
 
     # Insert two entity stubs for the cache row FKs.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
