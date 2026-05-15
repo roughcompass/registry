@@ -71,6 +71,19 @@ _log = logging.getLogger(__name__)
 
 _request_token: ContextVar[str] = ContextVar("_mcp_request_token", default="")
 
+# Per-request app reference — written by handle_sse so tool handlers can
+# reach app.state.claim_resolver / app.state.settings / app.state.oidc_cache
+# without threading them through every call signature. The MCP transport
+# does not pass a request object into tool handlers, so this is the only
+# way to get at app-scoped state from a tool body.
+_request_app: ContextVar[Any] = ContextVar("_mcp_request_app", default=None)
+
+# Per-request selected tenant identifier — populated by handle_sse from an
+# optional ``X-Tenant-ID`` SSE header so multi-tenant callers can pin
+# their session to one tenant. Empty string = unset; the resolver returns
+# a single tenant context if the caller has exactly one grant.
+_request_x_tenant_id: ContextVar[str] = ContextVar("_mcp_request_x_tenant_id", default="")
+
 
 # ---------------------------------------------------------------------------
 # Auth helper (mirrors tenant middleware, uses tokens.py directly)
@@ -81,19 +94,141 @@ async def _resolve_tenant(
     session_factory: async_sessionmaker[AsyncSession],
     clock: Clock,
 ) -> TenantContext:
-    """Resolve the per-request Bearer token to a TenantContext.
+    """Resolve the per-request Bearer token to a TenantContext via the
+    entitlement-resolved auth pipeline.
 
-    The MCP server doesn't yet flow through the entitlement-resolved
-    auth pipeline that the REST middleware uses (the MCP transport
-    builds its own request scope rather than going through the
-    FastAPI dependency tree). Wiring it requires constructing the
-    pipeline here against ``app.state.claim_resolver`` —
-    a follow-up refactor since the api_token validator was deleted.
-    Until then, MCP requests cannot be authenticated.
+    The MCP transport doesn't run inside FastAPI's Depends machinery,
+    so this function reads three ContextVars set by ``handle_sse``:
+    ``_request_token`` (raw JWT from the SSE Authorization header),
+    ``_request_app`` (the FastAPI app — used to reach
+    ``app.state.claim_resolver`` and the OIDC cache), and
+    ``_request_x_tenant_id`` (optional tenant selector).
+
+    Steps mirror the REST middleware:
+    1. Read the bearer token from the ContextVar.
+    2. Validate the JWT via ``validate_oidc_token``.
+    3. Enrich claims with the raw token + X-Tenant-ID for the resolver.
+    4. Call ``claim_resolver.resolve(claims)``.
+    5. Apply the X-Tenant-ID selection rules.
+    6. Idempotent actor upsert; build TenantContext.
+
+    Raises ``ToolError`` (the MCP-level equivalent of HTTPException) on
+    any failure path. The plaintext token is never logged.
     """
-    raise ToolError(
-        "MCP authentication is being rewired against the entitlement-resolved "
-        "auth path; the legacy api_token validator was removed. See OAR follow-up."
+    raw_token = _request_token.get()
+    if not raw_token:
+        raise ToolError("missing bearer token")
+
+    app = _request_app.get()
+    if app is None:
+        raise ToolError("MCP auth not initialised (no app reference on context)")
+
+    settings = getattr(app.state, "settings", None)
+    if settings is None:
+        raise ToolError("MCP auth not initialised (settings missing on app.state)")
+
+    resolver = getattr(app.state, "claim_resolver", None)
+    if resolver is None:
+        raise ToolError(
+            "entitlement-resolver not configured — set ENTITLEMENT_SERVICE_URL "
+            "and restart with the entitlement-resolved auth path enabled"
+        )
+
+    oidc_cache = getattr(app.state, "oidc_cache", None)
+
+    # Import here to avoid a top-level circular: middleware imports from
+    # registry.api.auth.oidc which imports from registry.config which …
+    from registry.api.auth.oidc import validate_oidc_token  # noqa: PLC0415
+    from registry.auth.entitlements import client as ent_client  # noqa: PLC0415
+    from registry.auth.entitlements.actor_store import (  # noqa: PLC0415
+        DisabledTenantError,
+        upsert_entitlement_actor,
+    )
+    from registry.exceptions import CatalogError  # noqa: PLC0415
+    from registry.types import TenantMembership  # noqa: PLC0415
+
+    # Step 2 — JWT validation.
+    try:
+        claims, resolved_identity = await validate_oidc_token(
+            raw_token, settings, cache=oidc_cache
+        )
+    except CatalogError as exc:
+        raise ToolError("authentication required") from exc
+
+    # Step 3 — enrich claims for the resolver fetcher.
+    x_tenant_id = _request_x_tenant_id.get() or None
+    enriched_claims = dict(claims)
+    enriched_claims["__raw_token"] = raw_token
+    if x_tenant_id:
+        enriched_claims["__x_tenant_id"] = x_tenant_id
+
+    # Step 4 — delegate to the resolver.
+    try:
+        resolved = await resolver.resolve(enriched_claims)
+    except ent_client.EntitlementAuthError as exc:
+        raise ToolError(
+            f"authentication required ({exc.status_code})"
+        ) from exc
+    except ent_client.EntitlementNotFoundError as exc:
+        raise ToolError("access denied") from exc
+    except ent_client.EntitlementRateLimitError as exc:
+        raise ToolError("entitlement service rate-limited") from exc
+    except ent_client.EntitlementMalformedError as exc:
+        raise ToolError("entitlement service returned malformed response") from exc
+    except ent_client.EntitlementServiceError as exc:
+        raise ToolError("entitlement service unavailable") from exc
+
+    if not resolved.tenant_grants:
+        raise ToolError("access denied")
+
+    # Step 5 — tenant selection. MCP sessions are long-lived and tool
+    # handlers don't have per-call headers, so the X-Tenant-ID set on
+    # the SSE connect is reused across every tool call. If unset, we
+    # auto-select when the caller has exactly one grant; otherwise we
+    # error explicitly so the caller knows to set the header.
+    if x_tenant_id:
+        selected = next(
+            (g for g in resolved.tenant_grants if g.tenant_external_id == x_tenant_id),
+            None,
+        )
+        if selected is None:
+            raise ToolError("X-Tenant-ID does not match any granted tenant")
+    elif len(resolved.tenant_grants) == 1:
+        selected = resolved.tenant_grants[0]
+    else:
+        raise ToolError(
+            "multiple tenants granted; set X-Tenant-ID on the SSE connection"
+        )
+
+    # Step 6 — actor upsert + TenantContext build.
+    display_name = (
+        resolved.audit_identity.preferred_username
+        if resolved.audit_identity is not None
+        else resolved_identity
+    )
+    try:
+        async with session_factory() as session, session.begin():
+            actor_id = await upsert_entitlement_actor(
+                session, selected.tenant_id, resolved_identity, display_name
+            )
+    except DisabledTenantError as exc:
+        raise ToolError("access denied") from exc
+
+    tenant_memberships = [
+        TenantMembership(
+            tenant_id=g.tenant_id,
+            tenant_slug=g.tenant_external_id,
+            roles=frozenset({g.catalog_role}),
+        )
+        for g in resolved.tenant_grants
+    ]
+
+    return TenantContext(
+        tenant_id=selected.tenant_id,
+        actor_id=actor_id,
+        roles=[selected.catalog_role],
+        oidc_subject=resolved_identity,
+        tenant_memberships=tenant_memberships,
     )
 
 
@@ -1204,10 +1339,24 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
             await asyncio.sleep(0.5)
 
     async def handle_sse(request: Request) -> None:
-        # Extract Bearer token from request headers and store in ContextVar
-        # so every tool call invoked during this SSE session can read it.
+        # Extract Bearer token + X-Tenant-ID header + the FastAPI app
+        # from the SSE request scope; store all three in ContextVars so
+        # the tool handlers + _resolve_tenant can read them. The app
+        # reference is how tool handlers reach
+        # ``app.state.claim_resolver`` without threading a request
+        # object through every call signature.
         raw_token = _extract_bearer(dict(request.scope))
         token_var_token = _request_token.set(raw_token)
+        app_var_token = _request_app.set(request.app)
+
+        # X-Tenant-ID is optional; an absent header means "auto-select
+        # if the caller has exactly one tenant grant, otherwise reject".
+        x_tenant_id = ""
+        for name, value in request.scope.get("headers", []):
+            if name.lower() == b"x-tenant-id":
+                x_tenant_id = value.decode("latin-1").strip()
+                break
+        tenant_var_token = _request_x_tenant_id.set(x_tenant_id)
         try:
             async with sse_transport.connect_sse(request.scope, request.receive, request._send) as streams:
                 # Race the MCP server against a disconnect watchdog.  Without
@@ -1247,6 +1396,8 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
                     raise
         finally:
             _request_token.reset(token_var_token)
+            _request_app.reset(app_var_token)
+            _request_x_tenant_id.reset(tenant_var_token)
 
     starlette_app = Starlette(
         routes=[
