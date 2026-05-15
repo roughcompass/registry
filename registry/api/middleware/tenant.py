@@ -1,35 +1,49 @@
 """TenantContext injection for FastAPI request handling.
 
-Resolves `Authorization: Bearer <token>` to a `TenantContext`. The
-`X-Tenant-Id` header is **explicitly ignored** on the standard OIDC path —
-tenant identity is derived solely from the token so it cannot be forged by a
-caller sending a crafted header.
+Resolves ``Authorization: Bearer <token>`` to a ``TenantContext`` via the
+nine-step pipeline defined in the auth ADR §5:
 
-In RSAM auth mode the behaviour is different:
+1. Extract bearer token (401 if missing).
+2. Validate JWT via ``validate_oidc_token`` (401 on any CatalogError).
+3. Tuck the raw token + request id into the claims dict so the resolver
+   can forward them to the entitlement service.
+4. Call ``EntitlementResolver.resolve(claims)`` — the resolver handles
+   cache check, single-flight, the upstream fetch, parser, JIT tenant
+   upsert, and stale-on-failure semantics. Each typed
+   ``EntitlementClientError`` from the upstream maps to a specific HTTP
+   status (steps 4a–4f below).
+5. (resolver internal) parse entitlement strings and JIT-upsert tenants.
+6. Empty grants → 403.
+7. Resolve tenant via the ``X-Tenant-ID`` header:
+   - Single grant + no header → auto-select.
+   - Single + matching header → select.
+   - Single + non-matching header → 403.
+   - Multiple + no header → 400.
+   - Multiple + matching header → select.
+   - Multiple + non-matching header → 403.
+8. Idempotent JIT actor upsert for the selected tenant — surfaces the
+   specific ``actor_id`` for use in audit logs.
+9. Construct ``TenantContext`` with ``oidc_subject``,
+   ``tenant_memberships``, ``selected_tenant_id`` (canonical),
+   ``tenant_id`` (legacy alias), ``actor_id``, and the selected
+   tenant's role set.
 
-- An IDA JWT authenticates the caller (signature and expiry only; no tenant
-  claim is required or expected in the token).
-- The OIDC validator returns a sentinel `TenantContext` carrying the verified
-  subject but nil tenant/actor UUIDs.
-- The RSAM resolver converts that subject into a `ResolvedIdentity` that
-  carries zero or more `TenantGrant` entries (one per SEAL the caller holds).
-- The tenant-selector step maps the grant list to a single `TenantContext`:
-  - Zero grants → 403 ``no_tenant_grants``.
-  - One grant + no header → auto-select (no header required).
-  - Multiple grants + no header → 400 ``tenant_context_required``.
-  - Header present and matches a grant → select that grant.
-  - Header present but no matching grant → 403 ``tenant_not_authorized``.
+``get_authenticated_context`` is the tenantless variant for endpoints
+that need the caller identified but not tenant-scoped (e.g.
+``/v1/whoami``). It runs steps 1–6 and returns a TenantContext with
+empty memberships and ``actor_id=None``.
 
-Header names are configurable via `Settings.auth_tenant_id_header` (primary)
-and `Settings.auth_seal_id_header_alias` (optional alias).  The primary header
-wins when both are present in the same request.
+Failure-to-status mapping (step 4):
+- ``EntitlementAuthError(401)`` → 401 ``authentication required``
+- ``EntitlementAuthError(403)`` → 403 ``access denied``
+- ``EntitlementNotFoundError`` → 403
+- ``EntitlementRateLimitError`` → 503
+- ``EntitlementMalformedError`` → 503
+- ``EntitlementServiceError`` → 503 (resolver may have served stale
+  cache before raising; if so, the request reached step 7 instead.)
 
-Token routing (non-RSAM path):
-- If the raw token has two dots (JWT format) **and** OIDC is configured,
-  the OIDC path is tried first.  On any ``CatalogError`` from OIDC, fall
-  back to the API-token path so opaque tokens that happen to contain dots
-  still work.
-- Otherwise go directly to the API-token path.
+The middleware never touches the api_token table. Opaque-token auth was
+removed in this iteration.
 """
 
 from __future__ import annotations
@@ -42,9 +56,15 @@ from typing import Any
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from registry.api.auth.tokens import validate_token
+from registry.api.auth.oidc import validate_oidc_token
+from registry.auth.entitlements import client as entitlement_client
+from registry.auth.entitlements.actor_store import (
+    DisabledTenantError,
+    upsert_entitlement_actor,
+)
+from registry.auth.resolver import ResolvedIdentity, TenantGrant
 from registry.exceptions import CatalogError
-from registry.types import Clock, SystemClock, TenantContext
+from registry.types import Clock, SystemClock, TenantContext, TenantMembership
 
 _log = logging.getLogger(__name__)
 
@@ -53,14 +73,11 @@ def _bearer_token(request: Request) -> str:
     auth = request.headers.get("authorization", "")
     scheme, _, raw = auth.partition(" ")
     if scheme.lower() != "bearer" or not raw:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing bearer token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required",
+        )
     return raw
-
-
-def _looks_like_jwt(token: str) -> bool:
-    """Return True if *token* has the three-part base64url dot structure of a JWT."""
-    parts = token.split(".")
-    return len(parts) == 3 and all(parts)
 
 
 def get_clock() -> Clock:
@@ -69,177 +86,302 @@ def get_clock() -> Clock:
 
 
 async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]:
-    """Resolve an AsyncSession from the app state and wrap the request in a transaction.
+    """Per-request AsyncSession wrapped in a transaction.
 
-    Wrapping in ``session.begin()`` makes the per-request session commit on
-    success and rollback on raised exceptions. Without this, writes made
-    via the yielded session would roll back when the ``async with factory()``
-    block exits — the autobegin transaction is never committed.
+    Wrapping in ``session.begin()`` makes the per-request session commit
+    on success and rollback on raised exceptions. Without this, writes
+    made via the yielded session would roll back when the
+    ``async with factory()`` block exits — the autobegin transaction is
+    never committed.
     """
     factory = request.app.state.session_factory
     async with factory() as session, session.begin():
         yield session
 
 
-# ---------------------------------------------------------------------------
-# RSAM tenant-selector logic
+def _enrich_claims_for_resolver(
+    request: Request, claims: dict[str, Any], raw_token: str
+) -> dict[str, Any]:
+    """Tuck the raw JWT and request id into the claims dict so the
+    resolver's fetcher can forward them to the entitlement service.
+
+    These two underscore-prefixed keys are the documented contract
+    between the middleware and the resolver — the OIDC validator never
+    produces these names, so collisions are impossible.
+    """
+    claims["__raw_token"] = raw_token
+    request_id = request.headers.get("X-Request-ID")
+    if request_id:
+        claims["__request_id"] = request_id
+    return claims
 
 
-def _select_entitlement_tenant(request: Request, resolved_identity: Any) -> TenantContext:
-    """Apply the per-request tenant-selector rules to a ``ResolvedIdentity``.
+async def _resolve_entitlements(
+    request: Request, claims: dict[str, Any]
+) -> ResolvedIdentity:
+    """Call the resolver and translate every typed upstream error into
+    the appropriate ``HTTPException``.
 
-    Returns a fully-populated ``TenantContext`` on success, or raises
-    ``HTTPException`` with a structured JSON body on every failure path.
+    The resolver's typed exception hierarchy is the failure-mode
+    contract: each subclass has a single defined response. Mapping them
+    to HTTP statuses here keeps that contract single-sourced and makes
+    the call sites in the pipeline read linearly.
+    """
+    resolver = getattr(request.app.state, "claim_resolver", None)
+    if resolver is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="claim resolver not configured",
+        )
+
+    try:
+        return await resolver.resolve(claims)  # type: ignore[no-any-return]
+    except entitlement_client.EntitlementAuthError as exc:
+        # 401 → authentication; 403 → forbidden. Upstream's
+        # authoritative answer; cache MUST NOT be consulted (the
+        # resolver enforces this — never serves stale on auth errors).
+        if exc.status_code == 401:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="authentication required",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
+        ) from exc
+    except entitlement_client.EntitlementNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
+        ) from exc
+    except entitlement_client.EntitlementRateLimitError as exc:
+        # 429-after-retry from upstream → 503 to client. Cache MUST NOT
+        # be consulted (the resolver enforces this).
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="service unavailable",
+        ) from exc
+    except entitlement_client.EntitlementMalformedError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="service unavailable",
+        ) from exc
+    except entitlement_client.EntitlementServiceError as exc:
+        # 5xx / timeout / network → 503. The resolver will have already
+        # served stale cache transparently if a non-expired entry
+        # exists; reaching here means cold cache.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="service unavailable",
+        ) from exc
+
+
+def _select_tenant_grant(
+    request: Request, grants: list[TenantGrant]
+) -> TenantGrant:
+    """Apply the X-Tenant-ID header selection rules to a non-empty list
+    of tenant grants. Raises ``HTTPException`` on every failure path.
 
     Selection rules (in evaluation order):
-    1. Zero grants → 403.
-    2. Exactly one grant → auto-select; the caller does not need to send a
-       header.
-    3. Multiple grants, no header → 400 listing available tenant identifiers.
-    4. Multiple grants, header present and matching a grant → select that grant.
-    5. Multiple grants, header present but no grant matches → 403.
+    - Single grant + no header → auto-select.
+    - Single grant + header that matches → select.
+    - Single grant + header that does NOT match → 403.
+    - Multiple grants + no header → 400 listing available tenants.
+    - Multiple grants + matching header → select.
+    - Multiple grants + non-matching header → 403.
     """
-    from registry.auth.resolver import ResolvedIdentity  # noqa: PLC0415
+    header_value = request.headers.get("X-Tenant-ID")
 
-    identity: ResolvedIdentity = resolved_identity
-    grants = identity.tenant_grants
-
-    # Rule 1: no grants at all
-    if not grants:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": "no_tenant_grants", "message": "caller holds no tenant grants"},
-        )
-
-    # Rule 2: exactly one grant — auto-select, no header needed
     if len(grants) == 1:
-        grant = grants[0]
-        return TenantContext(
-            tenant_id=grant.tenant_id,
-            actor_id=uuid.UUID(int=0),  # resolved from DB by downstream; sentinel here
-            roles=[grant.catalog_role],
+        only = grants[0]
+        if header_value is None or header_value == only.tenant_external_id:
+            return only
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
         )
 
-    # Multiple grants: try to read header
-    settings = getattr(request.app.state, "settings", None)
-    primary_header = "X-Tenant-ID" if settings is None else settings.auth_tenant_id_header
-    alias_header: str | None = "X-SEAL-ID" if settings is None else settings.auth_seal_id_header_alias
-
-    header_value: str | None = request.headers.get(primary_header)
-    if header_value is None and alias_header is not None:
-        header_value = request.headers.get(alias_header)
-
-    # Rule 3: multiple grants, no header
+    # Multiple grants — header is required.
     if header_value is None:
         available = [g.tenant_external_id for g in grants]
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
-                "error": "tenant_context_required",
-                "message": "multiple tenant grants; send the tenant identifier in the request header",
-                "available_tenant_ids": available,
+                "error": "tenant_required",
+                "message": (
+                    "multiple tenants available; specify X-Tenant-ID header"
+                ),
+                "available_tenants": available,
             },
         )
 
-    # Rule 4 / 5: header present — find a matching grant
-    matched = next((g for g in grants if g.tenant_external_id == header_value), None)
+    matched = next(
+        (g for g in grants if g.tenant_external_id == header_value), None
+    )
     if matched is None:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail={"error": "tenant_not_authorized", "message": "requested tenant not in caller's grant set"},
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
         )
+    return matched
 
+
+def _build_tenant_context(
+    *,
+    resolved_identity: str,
+    actor_id: uuid.UUID,
+    grants: list[TenantGrant],
+    selected: TenantGrant,
+) -> TenantContext:
+    """Assemble the TenantContext returned to route handlers.
+
+    Both names (``tenant_id`` legacy field and ``selected_tenant_id``
+    forward alias) point at the same UUID — see ``registry.types``.
+    """
+    tenant_memberships = [
+        TenantMembership(
+            tenant_id=g.tenant_id,
+            tenant_slug=g.tenant_external_id,
+            roles=frozenset({g.catalog_role}),
+        )
+        for g in grants
+    ]
     return TenantContext(
-        tenant_id=matched.tenant_id,
-        actor_id=uuid.UUID(int=0),  # resolved from DB by downstream; sentinel here
-        roles=[matched.catalog_role],
+        tenant_id=selected.tenant_id,
+        actor_id=actor_id,
+        roles=[selected.catalog_role],
+        oidc_subject=resolved_identity,
+        tenant_memberships=tenant_memberships,
     )
 
 
 async def get_tenant_context(
     request: Request,
     session: AsyncSession = Depends(get_db_session),
-    clock: Clock = Depends(get_clock),
 ) -> TenantContext:
-    """FastAPI dependency: resolve bearer token to TenantContext or raise 401/403.
+    """FastAPI dependency: resolve bearer JWT to a fully-tenant-scoped
+    ``TenantContext``. Implements the nine-step pipeline.
 
-    If the token looks like a JWT and the app has OIDC configured, the OIDC
-    path is attempted first.  On failure it falls back to the API-token path.
-
-    When auth_mode is 'rsam', the OIDC validator returns a sentinel context
-    carrying the verified subject.  This function then calls the RSAM claim
-    resolver to convert the subject to a ``ResolvedIdentity`` and applies the
-    per-request tenant-selector rules before returning a fully-resolved
-    ``TenantContext``.
+    Use this on routes that operate within a tenant. For routes that
+    need the caller identified but not tenant-scoped (e.g. capability
+    introspection), use ``get_authenticated_context`` instead.
     """
     raw = _bearer_token(request)
 
-    if _looks_like_jwt(raw):
-        settings = getattr(request.app.state, "settings", None)
-        if settings is not None and settings.oidc_discovery_url is not None:
-            from registry.api.auth.oidc import validate_oidc_token  # noqa: PLC0415
+    settings = request.app.state.settings
+    cache = getattr(request.app.state, "oidc_cache", None)
 
-            oidc_cache = getattr(request.app.state, "oidc_cache", None)
-            try:
-                claims_payload, resolved_identity = await validate_oidc_token(
-                    raw, settings, cache=oidc_cache
-                )
-            except CatalogError:
-                # Fall through to API-token path.
-                _log.debug("oidc_validation_failed; falling back to api_token path")
-                sentinel = None
-            else:
-                # Bridge to the existing middleware shape until the
-                # middleware pipeline is rewritten in a follow-on task.
-                # The sentinel carries the resolved identity in roles[0]
-                # so the downstream RSAM branch can pull it back out;
-                # the nil UUIDs are intentional placeholders that the
-                # claim-source resolver overwrites before any service
-                # code is reached.
-                import uuid as _uuid  # noqa: PLC0415
-                sentinel = TenantContext(
-                    tenant_id=_uuid.UUID(int=0),
-                    actor_id=_uuid.UUID(int=0),
-                    roles=[resolved_identity],
-                )
+    # Step 2: validate JWT — every CatalogError surfaces as 401.
+    try:
+        claims, resolved_identity = await validate_oidc_token(
+            raw, settings, cache=cache
+        )
+    except CatalogError as exc:
+        _log.debug("oidc_validation_failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required",
+        ) from exc
 
-            if sentinel is not None:
-                # In RSAM mode the OIDC validator returns a sentinel with nil UUIDs
-                # and roles=[subject].  The RSAM grant resolver takes over from here.
-                if settings.auth_mode == "rsam":
-                    # Extract subject from sentinel (stored in roles[0]).
-                    subject = sentinel.roles[0] if sentinel.roles else None
-                    if not subject:
-                        raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="invalid token: missing subject",
-                        )
+    # Step 3: pass the raw token + request id through the claims dict
+    # so the resolver's fetcher can use them.
+    enriched_claims = _enrich_claims_for_resolver(request, dict(claims), raw)
 
-                    resolver = getattr(request.app.state, "claim_resolver", None)
-                    if resolver is None:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="claim resolver not configured",
-                        )
+    # Steps 4–6: delegate to the resolver. Cache + fetch + parse +
+    # JIT-tenant-upsert all happen inside resolve(); typed exceptions
+    # from the upstream entitlement client surface here as HTTP errors.
+    resolved = await _resolve_entitlements(request, enriched_claims)
 
-                    try:
-                        resolved = await resolver.resolve({"sub": subject})
-                    except Exception as exc:
-                        _log.warning("entitlement_resolve_failed: %s", type(exc).__name__)
-                        raise HTTPException(
-                            status_code=status.HTTP_502_BAD_GATEWAY,
-                            detail="claim source unavailable",
-                        ) from exc
+    if not resolved.tenant_grants:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
+        )
 
-                    return _select_entitlement_tenant(request, resolved)
+    # Step 7: tenant selection.
+    selected_grant = _select_tenant_grant(request, resolved.tenant_grants)
 
-                # Non-RSAM OIDC path: sentinel is the real TenantContext.
-                return sentinel
+    # Step 8: idempotent actor upsert for the selected tenant — surfaces
+    # the specific actor_id used by audit log writes. The resolver's
+    # internal per-grant upserts already created the row; this one
+    # returns its actor_id (DO UPDATE RETURNING is idempotent).
+    display_name = (
+        resolved.audit_identity.preferred_username
+        if resolved.audit_identity is not None
+        else resolved_identity
+    )
+    try:
+        actor_id = await upsert_entitlement_actor(
+            session, selected_grant.tenant_id, resolved_identity, display_name
+        )
+    except DisabledTenantError as exc:
+        # The resolver has already filtered disabled tenants; reaching
+        # here means the operator disabled the tenant between the
+        # resolver's tenant lookup and this actor upsert. Race; treat
+        # as 403.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="access denied"
+        ) from exc
+
+    # Step 9: assemble the TenantContext.
+    return _build_tenant_context(
+        resolved_identity=resolved_identity,
+        actor_id=actor_id,
+        grants=resolved.tenant_grants,
+        selected=selected_grant,
+    )
+
+
+async def get_authenticated_context(request: Request) -> TenantContext:
+    """FastAPI dependency for authenticated-but-tenantless routes.
+
+    Runs steps 1–4 of the pipeline (bearer → validate JWT → resolve
+    entitlements). Returns a TenantContext with the resolved identity
+    and the full tenant_memberships list, but no selected tenant and
+    no actor_id (those are tenant-scoped concepts).
+
+    Use this on routes that need to know who the caller is (for
+    introspection, listing accessible tenants, etc.) but don't operate
+    inside any single tenant.
+    """
+    raw = _bearer_token(request)
+
+    settings = request.app.state.settings
+    cache = getattr(request.app.state, "oidc_cache", None)
 
     try:
-        return await validate_token(session, raw, clock)
+        claims, resolved_identity = await validate_oidc_token(
+            raw, settings, cache=cache
+        )
     except CatalogError as exc:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token") from exc
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="authentication required",
+        ) from exc
+
+    enriched_claims = _enrich_claims_for_resolver(request, dict(claims), raw)
+
+    resolved = await _resolve_entitlements(request, enriched_claims)
+
+    tenant_memberships = [
+        TenantMembership(
+            tenant_id=g.tenant_id,
+            tenant_slug=g.tenant_external_id,
+            roles=frozenset({g.catalog_role}),
+        )
+        for g in resolved.tenant_grants
+    ]
+
+    # Tenantless: no tenant_id chosen, no actor_id available.
+    # tenant_id is non-Optional in the legacy shape — use the nil UUID
+    # as a sentinel that handlers should not consume.
+    return TenantContext(
+        tenant_id=uuid.UUID(int=0),
+        actor_id=uuid.UUID(int=0),
+        roles=[],
+        oidc_subject=resolved_identity,
+        tenant_memberships=tenant_memberships,
+    )
 
 
-__all__ = ["get_clock", "get_db_session", "get_tenant_context"]
+__all__ = [
+    "get_authenticated_context",
+    "get_clock",
+    "get_db_session",
+    "get_tenant_context",
+]

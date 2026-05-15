@@ -790,9 +790,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        import functools  # noqa: PLC0415
+
+        import httpx  # noqa: PLC0415
+
         from registry.api.auth.oidc import _OidcCache  # noqa: PLC0415
+        from registry.auth.entitlements.client import (  # noqa: PLC0415
+            fetch_entitlements,
+        )
+        from registry.auth.entitlements.resolver import (  # noqa: PLC0415
+            EntitlementResolver,
+        )
 
         app.state.oidc_cache = _OidcCache()
+
+        # Entitlement service wiring — only when the deployment has
+        # configured ENTITLEMENT_SERVICE_URL. Legacy / test deployments
+        # without it skip this path; the middleware fails closed (500
+        # "claim resolver not configured") on the first authenticated
+        # request, which is the right loud signal during transition.
+        if settings.entitlement_service_url:
+            app.state.entitlement_client = httpx.AsyncClient()
+            bound_fetcher = functools.partial(
+                fetch_entitlements, app.state.entitlement_client
+            )
+            app.state.claim_resolver = EntitlementResolver(
+                settings=settings,
+                session_factory=session_factory,
+                fetcher=bound_fetcher,
+            )
+        else:
+            app.state.entitlement_client = None
+            app.state.claim_resolver = None
+
         scheduler.start()
         # Fire the audit partition age check once at startup so operators see
         # the WARNING immediately without waiting up to an hour.
@@ -810,6 +840,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             scheduler.shutdown(wait=False)
             # Release the webhook worker's HTTP client on shutdown.
             await webhook_worker.close()
+            # Close the entitlement-service HTTP client.
+            if app.state.entitlement_client is not None:
+                await app.state.entitlement_client.aclose()
 
     app = FastAPI(
         title=settings.service_name,
