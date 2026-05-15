@@ -16,17 +16,6 @@ def _base_kwargs() -> dict:
 
 
 class TestSettingsDefaults:
-    def test_auth_defaults(self):
-        s = Settings(**_base_kwargs())
-        # The legacy single-field claim-source URL remains as a
-        # transitional field pending its own deletion task.
-        assert s.auth_claim_source_url is None
-        assert s.auth_claim_cache_ttl_seconds == 300
-        assert s.auth_stale_ceiling_seconds == 86400
-        assert s.auth_serve_stale_on_failure is False
-        assert s.auth_tenant_id_header == "X-Tenant-ID"
-        assert s.auth_seal_id_header_alias == "X-SEAL-ID"
-
     def test_progression_default(self):
         s = Settings(**_base_kwargs())
         assert s.progression_definition_cache_ttl_seconds == 60

@@ -100,30 +100,6 @@ class Settings:
     oidc_expected_audience: str | None = None
     token_hash_algorithm: str = "sha256"
 
-    # --- Auth: external claim source legacy fields ---
-    # Retained pending OAR-T04 deletion (depends on this task landing).
-    auth_claim_source_url: str | None = None
-    auth_claim_cache_ttl_seconds: int = 300
-
-    # Maximum staleness (seconds) tolerated when the claim source is unreachable
-    # and auth_serve_stale_on_failure is True. Acts as a hard ceiling — responses
-    # older than this are never served even in stale-on-failure mode.
-    auth_stale_ceiling_seconds: int = 86400
-
-    # When True, serve stale cached claim data if the external claim source is
-    # unreachable, up to auth_stale_ceiling_seconds. Default False (fail closed).
-    # Operators should consider the security trade-off before enabling this.
-    auth_serve_stale_on_failure: bool = False
-
-    # HTTP header name used to carry the per-request tenant identifier.
-    # Must match whatever the upstream gateway or client sends.
-    auth_tenant_id_header: str = "X-Tenant-ID"
-
-    # Optional alias header accepted alongside auth_tenant_id_header.
-    # Useful for compatibility with clients that send a legacy header name.
-    # Set to None to disable alias header acceptance.
-    auth_seal_id_header_alias: str | None = "X-SEAL-ID"
-
     # --- Auth: OIDC validation contract ---
     # Acceptable `iss` values. Tokens whose issuer is not in this list are
     # rejected even if their signature validates against a trusted JWKS — this
@@ -343,14 +319,6 @@ def get_settings() -> Settings:
         http_methods_mode=os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest").strip().lower(),
         http_method_alias_separator=os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", "colon").strip().lower(),
         closure_refresh_concurrency=int(os.environ.get("CLOSURE_REFRESH_CONCURRENCY", "8")),
-        auth_claim_source_url=os.environ.get("AUTH_CLAIM_SOURCE_URL") or None,
-        auth_claim_cache_ttl_seconds=int(os.environ.get("AUTH_CLAIM_CACHE_TTL_SECONDS", "300")),
-        auth_stale_ceiling_seconds=int(os.environ.get("AUTH_STALE_CEILING_SECONDS", "86400")),
-        auth_serve_stale_on_failure=(
-            os.environ.get("AUTH_SERVE_STALE_ON_FAILURE", "false").lower() in ("1", "true", "yes")
-        ),
-        auth_tenant_id_header=os.environ.get("AUTH_TENANT_ID_HEADER", "X-Tenant-ID"),
-        auth_seal_id_header_alias=os.environ.get("AUTH_SEAL_ID_HEADER_ALIAS", "X-SEAL-ID") or None,
         oidc_issuer_allowlist=_parse_csv_list(os.environ.get("OIDC_ISSUER_ALLOWLIST")),
         oidc_client_id_allowlist=_parse_csv_list(os.environ.get("OIDC_CLIENT_ID_ALLOWLIST")),
         oidc_max_token_ttl_seconds=int(os.environ.get("OIDC_MAX_TOKEN_TTL_SECONDS", "900")),

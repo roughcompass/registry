@@ -64,10 +64,8 @@ _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 def _entitlement_settings(pg_url: str) -> Settings:
     """Build Settings configured for the entitlement-resolved auth path.
 
-    The legacy ``auth_claim_source_url`` placeholder is supplied because
-    the field still exists pending its own deletion task; the actual
-    HTTP call to the entitlement service is replaced by the injected
-    fetcher stub and is never invoked.
+    The actual HTTP call to the entitlement service is replaced by the
+    injected fetcher stub and is never invoked.
     """
     return Settings(
         database_url=pg_url,
@@ -75,7 +73,6 @@ def _entitlement_settings(pg_url: str) -> Settings:
         scheduler_jobstore_url=pg_url,
         scheduler_use_memory_jobstore=True,
         embedding_model="stub",
-        auth_claim_source_url="http://stub-entitlement-api.test",  # never called in tests
         rate_limit_enabled=False,
     )
 
