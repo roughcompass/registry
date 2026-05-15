@@ -54,7 +54,6 @@ class LoadCounts:
     tenants_created: int = 0
     tenants_present: int = 0
     actors_created: int = 0
-    role_grants_created: int = 0
     adoptions_created: int = 0
     progression_definitions_created: int = 0
     capability_type_schemas_created: int = 0
@@ -108,7 +107,6 @@ _ALLOWED_TOP_LEVEL: frozenset[str] = frozenset(
 # Roles the bootstrap script provisions per tenant. Re-declared here so
 # the loader can seed roles when it creates a new tenant without
 # importing the script (which would pull in the whole bootstrap CLI).
-_DEFAULT_ROLES: tuple[str, ...] = ("admin", "producer", "consumer", "auditor")
 
 
 def _parse_iso(value: str | None) -> datetime.datetime | None:
@@ -670,17 +668,9 @@ async def _apply_tenants(
             )
             counts.tenants_created += 1
 
-        # Default roles per tenant — required for actor_roles inserts.
-        for role_name in _DEFAULT_ROLES:
-            await session.execute(
-                text(
-                    "INSERT INTO roles "
-                    "(role_id, tenant_id, name, permissions, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :name, '{}', :now) "
-                    "ON CONFLICT (tenant_id, name) DO NOTHING"
-                ),
-                {"tid": tenant_id, "name": role_name, "now": now},
-            )
+        # The roles + actor_roles tables were dropped when authorization
+        # moved out of the registry to the upstream entitlement service —
+        # no per-tenant role rows are needed any more.
 
         # Default rate-limit row — mirrors bootstrap_dev_tenant for parity.
         await session.execute(
@@ -707,7 +697,6 @@ async def _apply_actors(
     for row in rows:
         slug = row["tenant_slug"]
         display_name = row["display_name"]
-        roles = row.get("roles") or list(_DEFAULT_ROLES)
         tenant_id = registry.tenant_id(slug)
 
         existing = (
@@ -723,28 +712,30 @@ async def _apply_actors(
             actor_id = uuid.UUID(str(existing[0]))
         else:
             actor_id = uuid.uuid4()
+            # `oidc_subject` is NOT NULL post auth-consolidation; seeded
+            # actors aren't entitlement-resolved so we use the display
+            # name as a deterministic sentinel — unique per (tenant, name).
             await session.execute(
                 text(
                     "INSERT INTO actors "
-                    "(actor_id, tenant_id, display_name, created_at, actor_kind) "
-                    "VALUES (:aid, :tid, :name, :now, 'human')"
+                    "(actor_id, tenant_id, display_name, oidc_subject, "
+                    "created_at, actor_kind) "
+                    "VALUES (:aid, :tid, :name, :sub, :now, 'human')"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "name": display_name, "now": now},
+                {
+                    "aid": actor_id,
+                    "tid": tenant_id,
+                    "name": display_name,
+                    "sub": f"seed:{display_name}",
+                    "now": now,
+                },
             )
             counts.actors_created += 1
 
-        for role_name in roles:
-            result = await session.execute(
-                text(
-                    "INSERT INTO actor_roles "
-                    "(tenant_id, actor_id, role_id, granted_at, granted_by) "
-                    "SELECT :tid, :aid, role_id, :now, NULL "
-                    "FROM roles WHERE tenant_id = :tid AND name = :name "
-                    "ON CONFLICT DO NOTHING"
-                ),
-                {"tid": tenant_id, "aid": actor_id, "name": role_name, "now": now},
-            )
-            counts.role_grants_created += result.rowcount or 0
+        # Role grants used to live in the actor_roles table, but that
+        # table was dropped when authorization moved upstream to the
+        # entitlement service. The ``roles`` field is preserved in the
+        # seed YAML for documentation; no DB writes happen for it.
 
         registry.register_actor(slug, actor_id)
 
@@ -1308,14 +1299,15 @@ def _emit_summary(
         print(f"  {dim('Visibility changes')}: {counts.visibility_changes}")
     if counts.tenants_created or counts.tenants_present:
         print(f"  {dim('Tenants')}: " f"{counts.tenants_created} created, {counts.tenants_present} already present")
-    if counts.actors_created or counts.role_grants_created:
-        print(f"  {dim('Actors')}: " f"{counts.actors_created} created, {counts.role_grants_created} role grant(s)")
+    if counts.actors_created:
+        print(f"  {dim('Actors')}: {counts.actors_created} created")
     if counts.adoptions_created:
         print(f"  {dim('Adoptions')}: {counts.adoptions_created} cross-tenant adoption(s)")
     if counts.progression_definitions_created:
         print(f"  {dim('Progression')}: " f"{counts.progression_definitions_created} definition(s) installed")
     if counts.capability_type_schemas_created:
-        print(f"  {dim('Type schemas')}: " f"{counts.capability_type_schemas_created} capability schema row(s) installed")
+        n = counts.capability_type_schemas_created
+        print(f"  {dim('Type schemas')}: {n} capability schema row(s) installed")
     print()
     print(bold("Try it:"))
     print("  curl -H 'Authorization: Bearer <token>' http://localhost:8000/v1/capabilities")

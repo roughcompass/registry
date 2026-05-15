@@ -147,12 +147,23 @@ def _looks_like_item(value: Any) -> bool:
     return isinstance(value, dict) and "message" in value and "code" in value
 
 
+_RESERVED_ITEM_KEYS: frozenset[str] = frozenset({"path", "code", "message"})
+
+
 def _normalise_item(value: dict[str, Any], default_code: str) -> dict[str, Any]:
-    return {
+    item: dict[str, Any] = {
         "path": value.get("path"),
         "code": value.get("code") or default_code,
         "message": str(value.get("message", "")),
     }
+    # Preserve any additional fields callers attached to the detail dict
+    # (e.g. ``available_tenants`` from the multi-grant 400 response).
+    # Only the three reserved keys above are normalised; everything else
+    # passes through verbatim.
+    for key, val in value.items():
+        if key not in _RESERVED_ITEM_KEYS:
+            item[key] = val
+    return item
 
 
 def map_catalog_error(exc: Exception) -> HTTPException:

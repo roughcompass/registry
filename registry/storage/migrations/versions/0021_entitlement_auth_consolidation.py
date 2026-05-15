@@ -61,8 +61,6 @@ depends_on: tuple[str, ...] | None = None
 
 
 def upgrade() -> None:
-    bind = op.get_bind()
-
     # Step 1: drop indexes on actor_roles, then drop the table itself.
     # `if_exists=True` so a fresh DB without these indexes (already-migrated)
     # doesn't fail.
