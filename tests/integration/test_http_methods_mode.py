@@ -9,8 +9,7 @@ Covers:
 - mode=rest: POST alias → 404/405; PATCH → 200.
 
 The app is rebuilt per test class so the env var is captured at module-load
-time by get_mode_settings().  TestClient (sync ASGI) is used because we need
-the full router wiring without a real database for the mode tests.
+time by get_mode_settings().  Async httpx AsyncClient is used throughout.
 
 The delete-idempotency assertions that require a real DB are in
 test_delete_idempotency.py.
@@ -18,27 +17,29 @@ test_delete_idempotency.py.
 
 from __future__ import annotations
 
-import datetime
 import os
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+import pytest_asyncio
+from httpx import ASGITransport, AsyncClient
 
-from registry.api.auth.tokens import hash_token
 from registry.config import Settings
-from registry.storage.models import Actor, ApiToken, Tenant
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 # ---------------------------------------------------------------------------
-# Helpers — shared seeding + minimal mock-app builder
+# Helpers — mode-app builder + persona seeding
 # ---------------------------------------------------------------------------
 
 
-def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> FastAPI:
-    """Build a full Capability Catalog app with the specified HTTP methods mode.
+def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> object:
+    """Build a full app with the specified HTTP methods mode.
 
     ``get_mode_settings()`` reads env vars at module-level when each router is
     first imported.  To switch mode, we set the env var and reload the affected
@@ -55,14 +56,11 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     import registry.api.routers.admin_lifecycle as _adm_life
     import registry.api.routers.admin_pii as _adm_pii
     import registry.api.routers.admin_sync as _adm_sync
-    import registry.api.routers.admin_tokens as _adm_tok
     import registry.api.routers.admin_vocab as _adm_vocab
 
     # Every router that uses HttpMethodRouter or get_mode_settings reads the
-    # env var at module-import time. To switch mode, reload all of them so
-    # the env var is re-evaluated. Missing one here is the cluster-D defect:
-    # the un-reloaded router keeps the previously-set mode and leaks PATCH
-    # routes into post_only-mode openapi.
+    # env var at module-import time. Reload all so the env var is re-evaluated.
+    # Missing one here would cause a stale mode to leak into the OpenAPI spec.
     import registry.api.routers.adoptions as _adoptions
     import registry.api.routers.annotations as _ann
     import registry.api.routers.artifacts as _art
@@ -74,11 +72,7 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     import registry.api.routers.subscriptions as _subs
     import registry.api.routers.workspaces as _ws
 
-    # Order matters: admin.py is a facade that imports mutation_router /
-    # admin_mutation_router instances from each admin_*.py submodule. If admin
-    # is reloaded BEFORE its submodules, it captures the still-stale router
-    # instances and they leak into the include chain. Reload all leaf modules
-    # first, then admin last so its re-exports point at the fresh routers.
+    # Reload leaf modules first so admin.py's re-exports point at fresh routers.
     _to_reload = [
         _cap,
         _con,
@@ -88,7 +82,6 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
         _adm_life,
         _adm_pii,
         _adm_sync,
-        _adm_tok,
         _adm_vocab,
         _adoptions,
         _ann,
@@ -98,7 +91,6 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
         _admin,
     ]
 
-    # Default mode is "rest"; fallback string matches the current default.
     prev_mode = os.environ.get("REGISTRY_HTTP_METHODS_MODE", "rest")
     prev_sep = os.environ.get("REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR", "colon")
     try:
@@ -114,57 +106,42 @@ def _build_mode_app(mode: str, pg_container: str, app_settings: Settings) -> Fas
     finally:
         os.environ["REGISTRY_HTTP_METHODS_MODE"] = prev_mode
         os.environ["REGISTRY_HTTP_METHOD_ALIAS_SEPARATOR"] = prev_sep
-        # Restore modules to the default so subsequent tests are unaffected.
         for mod in _to_reload:
             importlib.reload(mod)
 
 
-async def _seed(pg_url: str, *, slug: str, roles: list[str]) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert tenant + actor + API token and return (tenant_id, actor_id, raw_token)."""
+async def _make_persona_with_harness(
+    harness: EntitlementAuthHarness,
+    pg_url: str,
+    *,
+    slug: str,
+    roles: list[str],
+) -> TenantPersona:
+    """Materialise a tenant+actor via /v1/whoami on the harness app."""
+    from sqlalchemy import text  # noqa: PLC0415
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: PLC0415
+
+    persona = harness.add_persona(slug, roles=roles)
+    harness.configure_fetcher_for(persona)
+    transport = ASGITransport(app=harness.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+
+    # Seed vocabulary so capability create succeeds.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw = secrets.token_urlsafe(24)
-    now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
-    from sqlalchemy import text  # noqa: PLC0415
-
     try:
         async with factory() as session, session.begin():
-            session.add(
-                Tenant(
-                    tenant_id=tenant_id,
-                    slug=slug,
-                    display_name=slug,
-                    created_at=now,
-                    is_active=True,
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"),
+                    {"slug": slug},
                 )
-            )
-            await session.flush()
-            session.add(
-                Actor(
-                    actor_id=actor_id,
-                    tenant_id=tenant_id,
-                    display_name=f"a-{slug}",
-                    email=None,
-                    oidc_subject=None,
-                    created_at=now,
-                )
-            )
-            await session.flush()
-            session.add(
-                ApiToken(
-                    token_id=uuid.uuid4(),
-                    tenant_id=tenant_id,
-                    actor_id=actor_id,
-                    token_hash=hash_token(raw),
-                    roles=roles,
-                    description=None,
-                    expires_at=None,
-                    created_at=now,
-                    revoked_at=None,
-                )
-            )
+            ).first()
+            assert row is not None
+            tenant_id = row[0]
             for kind, value in [
                 ("entity_type", "capability"),
                 ("entity_type", "concept"),
@@ -178,14 +155,20 @@ async def _seed(pg_url: str, *, slug: str, roles: list[str]) -> tuple[uuid.UUID,
                 await session.execute(
                     text(
                         "INSERT INTO vocabulary_values (tenant_id, kind, value, is_system) "
-                        "VALUES (:tid, :kind, :value, FALSE)"
-                        " ON CONFLICT DO NOTHING"
+                        "VALUES (:tid, :kind, :value, FALSE) ON CONFLICT DO NOTHING"
                     ),
                     {"tid": tenant_id, "kind": kind, "value": value},
                 )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw
+
+    return persona
+
+
+@pytest_asyncio.fixture
+async def harness(pg_container: str) -> AsyncIterator[EntitlementAuthHarness]:
+    async with EntitlementAuthHarness(pg_container) as h:
+        yield h
 
 
 # ---------------------------------------------------------------------------
@@ -197,50 +180,60 @@ class TestModeBothCapabilities:
     """PATCH and POST alias must both work and produce identical JSON in mode=both."""
 
     @pytest.mark.asyncio
-    async def test_patch_and_alias_byte_identical(self, app_settings: Settings, pg_container: str) -> None:
-        _tid, _aid, token = await _seed(
+    async def test_patch_and_alias_byte_identical(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
+        persona = await _make_persona_with_harness(
+            harness,
             pg_container,
             slug=f"http-mode-both-{uuid.uuid4().hex[:6]}",
             roles=["producer"],
         )
-        auth = {"Authorization": f"Bearer {token}"}
+        harness.configure_fetcher_for(persona)
 
         app = _build_mode_app("both", pg_container, app_settings)
-        with TestClient(app) as client:
-            # Create a capability to update.
-            r = client.post(
-                "/v1/capabilities",
-                json={"name": "svc-a"},
-                headers=auth,
-            )
-            assert r.status_code == 201, r.text
-            entity_id = r.json()["entity_id"]
+        # Wire the harness resolver into the mode app so auth is consistent.
+        app.state.claim_resolver = harness.app.state.claim_resolver  # type: ignore[attr-defined]
 
-            update_body = {"updates": {"name": "svc-a-updated"}}
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "svc-a"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r.status_code == 201, r.text
+                entity_id = r.json()["entity_id"]
 
-            # REST verb surface.
-            r_verb = client.patch(
-                f"/v1/capabilities/{entity_id}",
-                json=update_body,
-                headers=auth,
-            )
-            assert r_verb.status_code == 200, r_verb.text
+                update_body = {"updates": {"name": "svc-a-updated"}}
 
-            # POST-tunneled alias surface.
-            r_alias = client.post(
-                f"/v1/capabilities/{entity_id}:update",
-                json=update_body,
-                headers=auth,
-            )
-            assert r_alias.status_code == 200, r_alias.text
+                r_verb = await client.patch(
+                    f"/v1/capabilities/{entity_id}",
+                    json=update_body,
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r_verb.status_code == 200, r_verb.text
 
-            assert r_verb.json() == r_alias.json(), "PATCH and POST:update must return byte-identical JSON in mode=both"
+                r_alias = await client.post(
+                    f"/v1/capabilities/{entity_id}:update",
+                    json=update_body,
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r_alias.status_code == 200, r_alias.text
+
+        assert r_verb.json() == r_alias.json(), (
+            "PATCH and POST:update must return byte-identical JSON in mode=both"
+        )
 
     @pytest.mark.asyncio
-    async def test_openapi_contains_both_surfaces(self, app_settings: Settings, pg_container: str) -> None:
+    async def test_openapi_contains_both_surfaces(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
         app = _build_mode_app("both", pg_container, app_settings)
-        with TestClient(app) as client:
-            spec = client.get("/openapi.json").json()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            spec = (await client.get("/openapi.json")).json()
         paths = spec.get("paths", {})
         has_patch = any("patch" in methods for methods in paths.values())
         has_alias = any(":update" in p for p in paths)
@@ -255,71 +248,87 @@ class TestModeBothCapabilities:
 
 class TestModePostOnly:
     @pytest.mark.asyncio
-    async def test_patch_returns_405_in_post_only(self, app_settings: Settings, pg_container: str) -> None:
-        _tid, _aid, token = await _seed(
+    async def test_patch_returns_405_in_post_only(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
+        persona = await _make_persona_with_harness(
+            harness,
             pg_container,
             slug=f"http-mode-post-only-{uuid.uuid4().hex[:6]}",
             roles=["producer"],
         )
-        auth = {"Authorization": f"Bearer {token}"}
+        harness.configure_fetcher_for(persona)
 
         app = _build_mode_app("post_only", pg_container, app_settings)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            # Create a capability via the always-registered POST.
-            r = client.post(
-                "/v1/capabilities",
-                json={"name": "svc-b"},
-                headers=auth,
-            )
-            assert r.status_code == 201, r.text
-            entity_id = r.json()["entity_id"]
+        app.state.claim_resolver = harness.app.state.claim_resolver  # type: ignore[attr-defined]
 
-            # PATCH must not be registered in post_only mode.
-            r_patch = client.patch(
-                f"/v1/capabilities/{entity_id}",
-                json={"updates": {"name": "svc-b-updated"}},
-                headers=auth,
-            )
-            assert r_patch.status_code in (
-                404,
-                405,
-            ), f"PATCH must not be reachable in post_only mode, got {r_patch.status_code}"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "svc-b"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r.status_code == 201, r.text
+                entity_id = r.json()["entity_id"]
+
+                r_patch = await client.patch(
+                    f"/v1/capabilities/{entity_id}",
+                    json={"updates": {"name": "svc-b-updated"}},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+        assert r_patch.status_code in (404, 405), (
+            f"PATCH must not be reachable in post_only mode, got {r_patch.status_code}"
+        )
 
     @pytest.mark.asyncio
-    async def test_post_alias_works_in_post_only(self, app_settings: Settings, pg_container: str) -> None:
-        _tid, _aid, token = await _seed(
+    async def test_post_alias_works_in_post_only(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
+        persona = await _make_persona_with_harness(
+            harness,
             pg_container,
             slug=f"http-mode-post-only2-{uuid.uuid4().hex[:6]}",
             roles=["producer"],
         )
-        auth = {"Authorization": f"Bearer {token}"}
+        harness.configure_fetcher_for(persona)
 
         app = _build_mode_app("post_only", pg_container, app_settings)
-        with TestClient(app) as client:
-            r = client.post(
-                "/v1/capabilities",
-                json={"name": "svc-c"},
-                headers=auth,
-            )
-            assert r.status_code == 201, r.text
-            entity_id = r.json()["entity_id"]
+        app.state.claim_resolver = harness.app.state.claim_resolver  # type: ignore[attr-defined]
 
-            r_alias = client.post(
-                f"/v1/capabilities/{entity_id}:update",
-                json={"updates": {"name": "svc-c-updated"}},
-                headers=auth,
-            )
-            assert r_alias.status_code == 200, r_alias.text
-            assert r_alias.json()["name"] == "svc-c-updated"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "svc-c"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r.status_code == 201, r.text
+                entity_id = r.json()["entity_id"]
+
+                r_alias = await client.post(
+                    f"/v1/capabilities/{entity_id}:update",
+                    json={"updates": {"name": "svc-c-updated"}},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+        assert r_alias.status_code == 200, r_alias.text
+        assert r_alias.json()["name"] == "svc-c-updated"
 
     @pytest.mark.asyncio
-    async def test_openapi_no_patch_in_post_only(self, app_settings: Settings, pg_container: str) -> None:
+    async def test_openapi_no_patch_in_post_only(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
         app = _build_mode_app("post_only", pg_container, app_settings)
-        with TestClient(app) as client:
-            spec = client.get("/openapi.json").json()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            spec = (await client.get("/openapi.json")).json()
         paths = spec.get("paths", {})
         patch_paths = [p for p, methods in paths.items() if "patch" in methods]
-        assert not patch_paths, f"PATCH routes must not appear in openapi.json for mode=post_only: {patch_paths}"
+        assert not patch_paths, (
+            f"PATCH routes must not appear in openapi.json for mode=post_only: {patch_paths}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -329,56 +338,69 @@ class TestModePostOnly:
 
 class TestModeRest:
     @pytest.mark.asyncio
-    async def test_patch_works_in_rest(self, app_settings: Settings, pg_container: str) -> None:
-        _tid, _aid, token = await _seed(
+    async def test_patch_works_in_rest(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
+        persona = await _make_persona_with_harness(
+            harness,
             pg_container,
             slug=f"http-mode-rest-{uuid.uuid4().hex[:6]}",
             roles=["producer"],
         )
-        auth = {"Authorization": f"Bearer {token}"}
+        harness.configure_fetcher_for(persona)
 
         app = _build_mode_app("rest", pg_container, app_settings)
-        with TestClient(app) as client:
-            r = client.post(
-                "/v1/capabilities",
-                json={"name": "svc-d"},
-                headers=auth,
-            )
-            assert r.status_code == 201, r.text
-            entity_id = r.json()["entity_id"]
+        app.state.claim_resolver = harness.app.state.claim_resolver  # type: ignore[attr-defined]
 
-            r_patch = client.patch(
-                f"/v1/capabilities/{entity_id}",
-                json={"updates": {"name": "svc-d-updated"}},
-                headers=auth,
-            )
-            assert r_patch.status_code == 200, r_patch.text
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "svc-d"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r.status_code == 201, r.text
+                entity_id = r.json()["entity_id"]
+
+                r_patch = await client.patch(
+                    f"/v1/capabilities/{entity_id}",
+                    json={"updates": {"name": "svc-d-updated"}},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+        assert r_patch.status_code == 200, r_patch.text
 
     @pytest.mark.asyncio
-    async def test_post_alias_absent_in_rest(self, app_settings: Settings, pg_container: str) -> None:
-        _tid, _aid, token = await _seed(
+    async def test_post_alias_absent_in_rest(
+        self, harness: EntitlementAuthHarness, app_settings: Settings, pg_container: str
+    ) -> None:
+        persona = await _make_persona_with_harness(
+            harness,
             pg_container,
             slug=f"http-mode-rest2-{uuid.uuid4().hex[:6]}",
             roles=["producer"],
         )
-        auth = {"Authorization": f"Bearer {token}"}
+        harness.configure_fetcher_for(persona)
 
         app = _build_mode_app("rest", pg_container, app_settings)
-        with TestClient(app, raise_server_exceptions=False) as client:
-            r = client.post(
-                "/v1/capabilities",
-                json={"name": "svc-e"},
-                headers=auth,
-            )
-            assert r.status_code == 201, r.text
-            entity_id = r.json()["entity_id"]
+        app.state.claim_resolver = harness.app.state.claim_resolver  # type: ignore[attr-defined]
 
-            r_alias = client.post(
-                f"/v1/capabilities/{entity_id}:update",
-                json={"updates": {"name": "svc-e-updated"}},
-                headers=auth,
-            )
-            assert r_alias.status_code in (
-                404,
-                405,
-            ), f"POST alias must not be reachable in rest mode, got {r_alias.status_code}"
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                r = await client.post(
+                    "/v1/capabilities",
+                    json={"name": "svc-e"},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+                assert r.status_code == 201, r.text
+                entity_id = r.json()["entity_id"]
+
+                r_alias = await client.post(
+                    f"/v1/capabilities/{entity_id}:update",
+                    json={"updates": {"name": "svc-e-updated"}},
+                    headers=bearer_headers(tenant_slug=persona.slug),
+                )
+        assert r_alias.status_code in (404, 405), (
+            f"POST alias must not be reachable in rest mode, got {r_alias.status_code}"
+        )
