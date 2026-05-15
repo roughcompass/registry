@@ -224,13 +224,104 @@ async def test_5xx_cold_cache_returns_503(
     assert resp.status_code == 503
 
 
-# Scenarios deferred to OAR-T24 compose smoke test or follow-up:
-# - success_multi_tenant: requires X-Tenant-ID header semantics through
-#   the request path; covered in unit tests; integration version
-#   is straightforward to add as a follow-up.
-# - unknown_role: covered comprehensively in test_entitlement_parser.py
-#   unit tests; integration version is redundant.
-# - malformed: covered in test_entitlement_client.py unit tests for the
-#   typed exception; integration version exercises the same code path.
-# - timeout: tested in unit tests; integration version requires
-#   threading the deadline through the resolver's _fetch path.
+@pytest.mark.asyncio
+async def test_success_multi_tenant_requires_x_tenant_id_header(
+    app_with_resolver: tuple[FastAPI, AsyncMock]
+) -> None:
+    """A user with grants in two tenants who doesn't send X-Tenant-ID
+    gets a 400 listing the available tenants — the middleware's
+    multi-tenant selection rule."""
+    app, fetcher = app_with_resolver
+    fetcher.return_value = [
+        "t-multi-a_REGISTRY_ADMIN",
+        "t-multi-b_REGISTRY_CONSUMER",
+    ]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with _patch_validator_returning(
+            {"sub": "u-multi", "iat": 1, "exp": 9999999999}, "u-multi"
+        ):
+            # No X-Tenant-ID → 400.
+            resp_no_header = await client.get("/v1/whoami", headers=_bearer_headers())
+        assert resp_no_header.status_code == 400
+        # The available-tenants list is surfaced in the error body so
+        # the caller can fix the request without inspecting the JWT.
+        body_no = resp_no_header.json()
+        # FastAPI wraps the detail dict — check both shapes.
+        detail = body_no.get("detail", body_no)
+        if isinstance(detail, dict):
+            avail = detail.get("available_tenants", [])
+            assert "t-multi-a" in avail
+            assert "t-multi-b" in avail
+
+        # With matching X-Tenant-ID → 200, that tenant selected.
+        with _patch_validator_returning(
+            {"sub": "u-multi", "iat": 1, "exp": 9999999999}, "u-multi"
+        ):
+            resp_with_header = await client.get(
+                "/v1/whoami", headers=_bearer_headers(**{"X-Tenant-ID": "t-multi-b"})
+            )
+        assert resp_with_header.status_code == 200
+        assert resp_with_header.json().get("tenant_slug") == "t-multi-b"
+
+
+@pytest.mark.asyncio
+async def test_unknown_role_drops_to_403(
+    app_with_resolver: tuple[FastAPI, AsyncMock]
+) -> None:
+    """All entitlement entries have role suffixes outside the mapping
+    → parser drops them all → resolver returns empty grants → 403."""
+    app, fetcher = app_with_resolver
+    fetcher.return_value = ["t-ghost_REGISTRY_GHOST_ROLE"]
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with _patch_validator_returning(
+            {"sub": "u-ghost", "iat": 1, "exp": 9999999999}, "u-ghost"
+        ):
+            resp = await client.get("/v1/whoami", headers=_bearer_headers())
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_malformed_upstream_returns_503(
+    app_with_resolver: tuple[FastAPI, AsyncMock]
+) -> None:
+    """Upstream entitlement service returns a malformed body →
+    EntitlementMalformedError → 503 (no cache fallback consulted)."""
+    app, fetcher = app_with_resolver
+    fetcher.side_effect = entitlement_client.EntitlementMalformedError(
+        "non-JSON body"
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with _patch_validator_returning(
+            {"sub": "u-malformed", "iat": 1, "exp": 9999999999}, "u-malformed"
+        ):
+            resp = await client.get("/v1/whoami", headers=_bearer_headers())
+
+    assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_timeout_cold_cache_returns_503(
+    app_with_resolver: tuple[FastAPI, AsyncMock]
+) -> None:
+    """Upstream entitlement service times out with no warm cache →
+    EntitlementServiceError (cacheable=True but cold cache) → 503."""
+    app, fetcher = app_with_resolver
+    fetcher.side_effect = entitlement_client.EntitlementServiceError(
+        "transport error: ReadTimeout"
+    )
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with _patch_validator_returning(
+            {"sub": "u-timeout", "iat": 1, "exp": 9999999999}, "u-timeout"
+        ):
+            resp = await client.get("/v1/whoami", headers=_bearer_headers())
+
+    assert resp.status_code == 503
