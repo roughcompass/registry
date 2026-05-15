@@ -271,31 +271,15 @@ class WorkspaceOperationDenied(WorkspaceAuthError):
 # ---------------------------------------------------------------------------
 
 
-async def _load_effective_roles(
-    session: AsyncSession,
-    actor_id: uuid.UUID,
-    tenant_id: uuid.UUID,
-) -> frozenset[str]:
-    """Return the set of role names the actor holds in the given tenant.
+def _effective_roles(ctx: TenantContext) -> frozenset[str]:
+    """Return the set of role names the actor holds in the current tenant.
 
-    Executes one indexed lookup on the composite primary key of actor_roles.
-    Returns an empty frozenset when the actor has no roles in this tenant.
-    No caching — roles are queried at request time so revocation takes effect
-    immediately without a cache flush.
+    Reads from the entitlement-resolved ``TenantContext`` that the
+    middleware built; no DB round-trip. Revocation takes effect on the
+    next JWT (the entitlement service is consulted per token); within
+    a request, the role set is fixed.
     """
-    result = await session.execute(
-        text(
-            """
-            SELECT r.name
-            FROM actor_roles ar
-            JOIN roles r ON r.role_id = ar.role_id
-            WHERE ar.actor_id = :actor_id
-              AND ar.tenant_id = :tenant_id
-            """
-        ),
-        {"actor_id": actor_id, "tenant_id": tenant_id},
-    )
-    return frozenset(row.name for row in result)
+    return frozenset(ctx.roles)
 
 
 def _can_perceive_workspace(
@@ -306,7 +290,7 @@ def _can_perceive_workspace(
 ) -> bool:
     """Return True if the actor can perceive (read) the workspace.
 
-    Pure function — no I/O. Called after _load_effective_roles so the
+    Pure function — no I/O. Called after _effective_roles(ctx) so the
     role set is already available.
 
     Decision sequence (all conditions must pass in order):
@@ -562,7 +546,7 @@ class WorkspaceService:
             # Load roles before any validation so a no-role actor is rejected
             # before owner_kind is even evaluated — avoiding information leakage
             # about which owner_kind values are valid for a given role.
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
             if owner_kind == "actor":
                 if "producer" not in effective_roles:
                     raise WorkspaceOperationDenied("Only producers may create actor-owned workspaces.")
@@ -700,7 +684,7 @@ class WorkspaceService:
             if ws_row is None:
                 raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
             if not _can_perceive_workspace(effective_roles, ctx.actor_id, ctx.tenant_id, ws_row):
                 raise WorkspaceNotFound(f"Workspace {workspace_id} not found.")
 
@@ -753,31 +737,34 @@ class WorkspaceService:
         if cursor is not None:
             cursor_id = _decode_cursor(cursor)
 
+        # The actor's role set is fixed for this request — read from the
+        # entitlement-resolved TenantContext, not from a DB join. Short-
+        # circuit when the caller has no roles: nothing is visible.
+        roles = _effective_roles(ctx)
+        if not roles:
+            return [], None
+        is_auditor = "auditor" in roles
+        has_pc = bool(roles & {"producer", "consumer"})
+
         params: dict[str, Any] = {
             "actor_id": ctx.actor_id,
             "tenant_id": ctx.tenant_id,
             "limit": _DEFAULT_PAGE_SIZE + 1,
+            "is_auditor": is_auditor,
+            "has_pc": has_pc,
         }
 
-        # Role-based visibility predicate pushed into SQL.
-        # Two branches correspond to the two perceivability rules:
+        # Visibility predicate uses Python-computed booleans instead of
+        # EXISTS joins against actor_roles (the table is gone). Two
+        # branches mirror the previous SQL:
         #   tenant-owned: any role holder can see it
         #   actor-owned: auditor sees all; owner sees their own if producer/consumer
-        _role_exists = (
-            "SELECT 1 FROM actor_roles ar "
-            "JOIN roles r ON r.role_id = ar.role_id "
-            "WHERE ar.actor_id = :actor_id AND ar.tenant_id = :tenant_id"
-        )
-        visibility_predicate = f"""(
-            (w.owner_kind = 'tenant'
-             AND EXISTS ({_role_exists}))
+        visibility_predicate = """(
+            (w.owner_kind = 'tenant')
             OR
             (w.owner_kind = 'actor' AND (
-                EXISTS ({_role_exists} AND r.name = 'auditor')
-                OR (
-                    w.owner_actor_id = :actor_id
-                    AND EXISTS ({_role_exists} AND r.name IN ('producer', 'consumer'))
-                )
+                :is_auditor
+                OR (w.owner_actor_id = :actor_id AND :has_pc)
             ))
         )"""
 
@@ -884,7 +871,7 @@ class WorkspaceService:
         # An already-archived workspace must still be un-archivable by the right role
         # holder, so the gate must be archive-state-independent.
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
         _assert_can_archive_workspace(effective_roles, ctx.actor_id, existing)
 
         now = self._clock.now()
@@ -1002,7 +989,7 @@ class WorkspaceService:
             # Build a minimal WorkspaceRef so the helper can evaluate owner_kind
             # and owner_actor_id. archived_at is included because the helper
             # signature accepts the full ref shape.
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
             _ws_ref = WorkspaceRef(
                 workspace_id=ws_row.workspace_id,
                 tenant_id=ws_row.tenant_id,
@@ -1111,7 +1098,7 @@ class WorkspaceService:
         # the write gate before any mutation proceeds.
         ws = await self.get_workspace(ctx, workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
         assert_can_create_entry(ctx, ws, effective_roles)
 
         # Step 2 — validate kind.
@@ -1295,7 +1282,7 @@ class WorkspaceService:
         # Access check via the entry's workspace: perceivability first, then write gate.
         ws = await self.get_workspace(ctx, entry_row.workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
         assert_can_update_entry(ctx, ws, effective_roles)
 
         # PII scan on body_md (when provided). Three-outcome dispatch:
@@ -1459,7 +1446,7 @@ class WorkspaceService:
         # Access check via the entry's workspace: perceivability first, then write gate.
         ws = await self.get_workspace(ctx, entry_row.workspace_id)
         async with self._session_factory() as session, session.begin():
-            effective_roles = await _load_effective_roles(session, ctx.actor_id, ctx.tenant_id)
+            effective_roles = _effective_roles(ctx)
         _assert_can_write_entries(effective_roles, ctx.actor_id, ws)
 
         async with self._session_factory() as session, session.begin():
@@ -1655,36 +1642,37 @@ class WorkspaceService:
         if cursor is not None:
             cursor_id = _decode_entry_cursor(cursor)
 
+        # Caller's role set is fixed for this request — read from the
+        # entitlement-resolved TenantContext, not via DB join. Empty
+        # role set → no workspaces are visible → return empty result.
+        roles = _effective_roles(ctx)
+        if not roles:
+            return SearchResult(items=[], next_cursor=None, total_count=None)
+        is_auditor = "auditor" in roles
+        has_pc = bool(roles & {"producer", "consumer"})
+
         params: dict[str, Any] = {
             "actor_id": ctx.actor_id,
             "tenant_id": ctx.tenant_id,
             "limit": _DEFAULT_PAGE_SIZE + 1,
+            "is_auditor": is_auditor,
+            "has_pc": has_pc,
         }
 
-        # Visibility CTE: entries in workspaces the actor can perceive.
-        # The EXISTS subqueries push the role check into SQL so the DB index
-        # handles the predicate — no Python-layer post-filter needed.
-        _role_exists = (
-            "SELECT 1 FROM actor_roles ar "
-            "JOIN roles r ON r.role_id = ar.role_id "
-            "WHERE ar.actor_id = :actor_id AND ar.tenant_id = :tenant_id"
-        )
-        visibility_cte = f"""
+        # Visibility CTE — predicate uses Python-computed booleans
+        # instead of EXISTS-joins against actor_roles (the table is gone).
+        visibility_cte = """
             visible_workspaces AS (
                 SELECT w.workspace_id
                 FROM workspaces w
                 WHERE w.tenant_id = :tenant_id
                   AND w.t_invalidated_at IS NULL
                   AND (
-                      (w.owner_kind = 'tenant'
-                       AND EXISTS ({_role_exists}))
+                      (w.owner_kind = 'tenant')
                       OR
                       (w.owner_kind = 'actor' AND (
-                          EXISTS ({_role_exists} AND r.name = 'auditor')
-                          OR (
-                              w.owner_actor_id = :actor_id
-                              AND EXISTS ({_role_exists} AND r.name IN ('producer', 'consumer'))
-                          )
+                          :is_auditor
+                          OR (w.owner_actor_id = :actor_id AND :has_pc)
                       ))
                   )
             )

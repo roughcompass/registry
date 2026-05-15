@@ -42,7 +42,11 @@ def _ctx(
     actor: uuid.UUID = _ACTOR_A,
     roles: list[str] | None = None,
 ) -> TenantContext:
-    return TenantContext(tenant_id=tenant, actor_id=actor, roles=roles or ["producer"])
+    # Distinguish "not provided" (None → default producer) from "explicitly empty"
+    # (roles=[] → caller is asserting a no-role actor); `roles or [...]` would coerce
+    # the empty list to the producer default and break no-role assertions.
+    effective_roles = ["producer"] if roles is None else roles
+    return TenantContext(tenant_id=tenant, actor_id=actor, roles=effective_roles)
 
 
 def _audit_writer() -> MagicMock:
@@ -237,7 +241,7 @@ async def test_create_workspace_succeeds_actor_owner() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_succeeds_tenant_owner() -> None:
     """create_workspace with owner_kind='tenant' sets owner_actor_id=None."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["admin"])
     svc = _make_service(actor_roles=["admin"])
 
     ref = await svc.create_workspace(ctx, name="Team WS", owner_kind="tenant")
@@ -301,7 +305,7 @@ async def test_create_workspace_producer_denied_for_tenant_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_admin_denied_for_actor_kind() -> None:
     """Admin without producer may not create actor-owned workspaces."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["admin"])
     svc = _make_service(actor_roles=["admin"])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -311,7 +315,7 @@ async def test_create_workspace_admin_denied_for_actor_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_no_role_denied() -> None:
     """Actors with no roles are denied before owner_kind is evaluated."""
-    ctx = _ctx()
+    ctx = _ctx(roles=[])
     svc = _make_service(actor_roles=[])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -321,7 +325,7 @@ async def test_create_workspace_no_role_denied() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_admin_and_producer_may_create_both_kinds() -> None:
     """Multi-role actors (admin + producer) may create workspaces of either kind."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["admin", "producer"])
     svc = _make_service(actor_roles=["admin", "producer"])
 
     ref_actor = await svc.create_workspace(ctx, name="Actor WS", owner_kind="actor")
@@ -358,13 +362,13 @@ async def test_get_workspace_returns_workspace_for_owner() -> None:
 @pytest.mark.asyncio
 async def test_get_workspace_raises_404_for_no_roles() -> None:
     """get_workspace raises when the actor has no roles in their tenant."""
-    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_B)
+    ctx = _ctx(tenant=_TENANT_A, actor=_ACTOR_B, roles=[])
     ws_row = _make_workspace_row(
         tenant_id=_TENANT_A,
         owner_kind="tenant",
         owner_actor_id=None,
     )
-    # actor_roles=[] → _load_effective_roles returns frozenset() → not perceivable
+    # ctx.roles=[] → _effective_roles returns frozenset() → not perceivable
     svc = _make_service(workspace_row=ws_row, actor_roles=[])
     with pytest.raises(WorkspaceNotFound):
         await svc.get_workspace(ctx, _WORKSPACE_ID)
@@ -905,7 +909,7 @@ async def test_list_workspaces_cursor_is_base64_string() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_tenant_owner_actor_id_is_none() -> None:
     """create_workspace with owner_kind='tenant' returns owner_actor_id=None."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["admin"])
     svc = _make_service(actor_roles=["admin"])
 
     ref = await svc.create_workspace(ctx, name="Team WS", owner_kind="tenant")
@@ -1506,7 +1510,9 @@ async def test_list_workspaces_consumer_sees_tenant_ws_when_db_returns_it() -> N
 
     assert len(refs) == 1
     assert refs[0].owner_kind == "tenant"
-    assert any("actor_roles" in sql for sql in sql_log), "SQL must contain actor_roles predicate"
+    # Role evaluation now happens in Python via ctx.roles, then bound as :is_auditor /
+    # :has_pc into the visibility predicate — no longer a join against actor_roles.
+    assert any(":is_auditor" in sql and ":has_pc" in sql for sql in sql_log)
 
 
 @pytest.mark.asyncio
@@ -1520,7 +1526,7 @@ async def test_list_workspaces_consumer_sees_own_actor_ws_when_db_returns_it() -
     refs, _ = await svc.list_workspaces(ctx)
 
     assert len(refs) == 1
-    assert any("actor_roles" in sql for sql in sql_log)
+    assert any(":is_auditor" in sql and ":has_pc" in sql for sql in sql_log)
 
 
 @pytest.mark.asyncio
@@ -1605,7 +1611,7 @@ async def test_list_workspaces_auditor_sees_tenant_ws() -> None:
     refs, _ = await svc.list_workspaces(ctx)
 
     assert len(refs) == 1
-    assert any("actor_roles" in sql for sql in sql_log)
+    assert any(":is_auditor" in sql and ":has_pc" in sql for sql in sql_log)
 
 
 @pytest.mark.asyncio
@@ -1873,7 +1879,7 @@ async def test_search_workspaces_no_role_actor_ws_returns_empty() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_consumer_denied_for_actor_kind() -> None:
     """Consumer may not create actor-owned workspaces; only producers may."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["consumer"])
     svc = _make_service(actor_roles=["consumer"])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -1883,7 +1889,7 @@ async def test_create_workspace_consumer_denied_for_actor_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_consumer_denied_for_tenant_kind() -> None:
     """Consumer may not create tenant-owned workspaces; admin role is required."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["consumer"])
     svc = _make_service(actor_roles=["consumer"])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -1893,7 +1899,7 @@ async def test_create_workspace_consumer_denied_for_tenant_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_auditor_denied_for_actor_kind() -> None:
     """Auditor may not create actor-owned workspaces (auditor is read-only)."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["auditor"])
     svc = _make_service(actor_roles=["auditor"])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -1903,7 +1909,7 @@ async def test_create_workspace_auditor_denied_for_actor_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_auditor_denied_for_tenant_kind() -> None:
     """Auditor may not create tenant-owned workspaces (auditor is read-only)."""
-    ctx = _ctx()
+    ctx = _ctx(roles=["auditor"])
     svc = _make_service(actor_roles=["auditor"])
 
     with pytest.raises(WorkspaceOperationDenied):
@@ -1913,7 +1919,7 @@ async def test_create_workspace_auditor_denied_for_tenant_kind() -> None:
 @pytest.mark.asyncio
 async def test_create_workspace_no_role_denied_for_tenant_kind() -> None:
     """No-role actor may not create tenant-owned workspaces."""
-    ctx = _ctx()
+    ctx = _ctx(roles=[])
     svc = _make_service(actor_roles=[])
 
     with pytest.raises(WorkspaceOperationDenied):
