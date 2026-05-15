@@ -8,7 +8,7 @@ Covers the six required scenarios:
 5. Multiple grants, X-SEAL-ID alias header → matching grant selected.
 6. Multiple grants, unrecognised header value → 403 tenant_not_authorized.
 
-All tests call `_select_rsam_tenant` directly with a fabricated Request-like
+All tests call `_select_entitlement_tenant` directly with a fabricated Request-like
 object and a `ResolvedIdentity`.  No DB, no live HTTP server — pure unit tests.
 """
 
@@ -20,7 +20,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from registry.api.middleware.tenant import _select_rsam_tenant
+from registry.api.middleware.tenant import _select_entitlement_tenant
 from registry.auth.resolver import AuditIdentity, ResolvedIdentity, TenantGrant
 from registry.config import Settings
 
@@ -40,7 +40,7 @@ def _make_settings(**overrides) -> Settings:
         pgbouncer_url="postgresql+asyncpg://x/y",
         scheduler_jobstore_url="postgresql+asyncpg://x/y",
         auth_mode="rsam",
-        auth_claim_source_url="https://rsam.example.com",
+        auth_claim_source_url="https://entitlement.example.com",
         auth_tenant_id_header="X-Tenant-ID",
         auth_seal_id_header_alias="X-SEAL-ID",
     )
@@ -84,7 +84,7 @@ def test_zero_grants_returns_403_no_tenant_grants():
     identity = _make_identity([])
 
     with pytest.raises(HTTPException) as exc_info:
-        _select_rsam_tenant(request, identity)
+        _select_entitlement_tenant(request, identity)
 
     assert exc_info.value.status_code == 403
     detail = exc_info.value.detail
@@ -100,7 +100,7 @@ def test_single_grant_no_header_auto_selects():
     grant = _make_grant(_SEAL_A, _UUID_A, role="producer")
     identity = _make_identity([grant])
 
-    ctx = _select_rsam_tenant(request, identity)
+    ctx = _select_entitlement_tenant(request, identity)
 
     assert ctx.tenant_id == _UUID_A
     assert "producer" in ctx.roles
@@ -119,7 +119,7 @@ def test_multiple_grants_no_header_returns_400_with_seal_ids():
     identity = _make_identity(grants)
 
     with pytest.raises(HTTPException) as exc_info:
-        _select_rsam_tenant(request, identity)
+        _select_entitlement_tenant(request, identity)
 
     assert exc_info.value.status_code == 400
     detail = exc_info.value.detail
@@ -141,7 +141,7 @@ def test_multiple_grants_primary_header_selects_correct_grant():
     ]
     identity = _make_identity(grants)
 
-    ctx = _select_rsam_tenant(request, identity)
+    ctx = _select_entitlement_tenant(request, identity)
 
     assert ctx.tenant_id == _UUID_A
     assert "admin" in ctx.roles
@@ -159,7 +159,7 @@ def test_multiple_grants_alias_header_selects_correct_grant():
     ]
     identity = _make_identity(grants)
 
-    ctx = _select_rsam_tenant(request, identity)
+    ctx = _select_entitlement_tenant(request, identity)
 
     assert ctx.tenant_id == _UUID_B
     assert "auditor" in ctx.roles
@@ -178,7 +178,7 @@ def test_multiple_grants_unknown_header_value_returns_403():
     identity = _make_identity(grants)
 
     with pytest.raises(HTTPException) as exc_info:
-        _select_rsam_tenant(request, identity)
+        _select_entitlement_tenant(request, identity)
 
     assert exc_info.value.status_code == 403
     detail = exc_info.value.detail
@@ -198,7 +198,7 @@ def test_primary_header_wins_over_alias():
     ]
     identity = _make_identity(grants)
 
-    ctx = _select_rsam_tenant(request, identity)
+    ctx = _select_entitlement_tenant(request, identity)
 
     # Primary header (_SEAL_A) should win
     assert ctx.tenant_id == _UUID_A
@@ -219,7 +219,7 @@ def test_alias_disabled_alias_header_ignored():
 
     # With alias disabled, sending only X-SEAL-ID is equivalent to no header → 400
     with pytest.raises(HTTPException) as exc_info:
-        _select_rsam_tenant(request, identity)
+        _select_entitlement_tenant(request, identity)
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["error"] == "tenant_context_required"

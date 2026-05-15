@@ -48,8 +48,8 @@ from registry.auth.resolver import (
     ResolvedIdentity,
     TenantGrant,
 )
-from registry.auth.rsam import grammar
-from registry.auth.rsam.tenant_store import upsert_rsam_actor, upsert_rsam_tenant
+from registry.auth.entitlements import parser
+from registry.auth.entitlements.actor_store import upsert_entitlement_actor, upsert_entitlement_tenant
 from registry.config import Settings
 
 _log = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ _MIN_TTL_SECONDS = 30
 async def _default_stub(subject: str) -> list[str]:
     raise NotImplementedError(
         "RSAM fetch_authorities is not yet wired — inject a callable to enable "
-        "this code path. See the auth/rsam/claim_source module docstring for details."
+        "this code path. See the auth/entitlements/resolver module docstring for details."
     )
 
 
@@ -82,7 +82,7 @@ async def _default_stub(subject: str) -> list[str]:
 
 
 @dataclass
-class _GrantCacheEntry:
+class _EntitlementCacheEntry:
     """One cached slot for a subject's resolved grants.
 
     `grants` and `audit_identity` are stored together so a stale-serve can
@@ -106,7 +106,7 @@ class _GrantCacheEntry:
 # Resolver implementation
 
 
-class RsamClaimSource(ClaimResolverBase):
+class EntitlementResolver(ClaimResolverBase):
     """ClaimResolverBase implementation for IDA+RSAM deployments.
 
     IDA tokens authenticate the caller (iss/aud/exp/sig checks run in the OIDC
@@ -120,7 +120,7 @@ class RsamClaimSource(ClaimResolverBase):
         Service settings. `auth_mode` is checked in `is_in_scope`; cache
         TTL and stale-on-failure settings are read from the same object.
     session_factory:
-        Callable that returns an `AsyncSession`. Used by `upsert_rsam_tenant`
+        Callable that returns an `AsyncSession`. Used by `upsert_entitlement_tenant`
         to materialise JIT tenant rows. Each SEAL in the authority list gets
         its own session call so a failure on one SEAL does not roll back others.
     fetch_authorities:
@@ -145,8 +145,8 @@ class RsamClaimSource(ClaimResolverBase):
         self._stale_ceiling_seconds: int = settings.auth_stale_ceiling_seconds
         self._serve_stale: bool = settings.auth_serve_stale_on_failure
 
-        # Per-process grant cache. Key: JWT `sub`. Value: _GrantCacheEntry.
-        self._cache: dict[str, _GrantCacheEntry] = {}
+        # Per-process grant cache. Key: JWT `sub`. Value: _EntitlementCacheEntry.
+        self._cache: dict[str, _EntitlementCacheEntry] = {}
         # Protects structural mutations to self._cache (insertion of new entries).
         # Once an entry exists, per-entry entry.lock serialises refreshes for that subject.
         self._cache_load_lock: asyncio.Lock = asyncio.Lock()
@@ -175,7 +175,7 @@ class RsamClaimSource(ClaimResolverBase):
         6. On fetch failure:
            - stale-on-failure disabled → propagate exception (fail-closed).
            - stale-on-failure enabled + entry within ceiling → emit
-             `auth.stale_cache.served` audit event and return cached identity.
+             `auth.entitlement_stale_cache_served` audit event and return cached identity.
            - stale-on-failure enabled but no entry or ceiling exceeded → raise
              HTTP 503 (service unavailable, retry after TTL).
         """
@@ -194,7 +194,7 @@ class RsamClaimSource(ClaimResolverBase):
         # Step 3: acquire dict-structure lock to ensure the per-subject entry exists.
         async with self._cache_load_lock:
             if subject not in self._cache:
-                self._cache[subject] = _GrantCacheEntry(
+                self._cache[subject] = _EntitlementCacheEntry(
                     grants=[],
                     audit_identity=AuditIdentity(sub=subject, email=None, preferred_username=subject),
                     cached_at=0.0,  # age=0 means never populated; TTL check will fail.
@@ -233,7 +233,7 @@ class RsamClaimSource(ClaimResolverBase):
     async def _handle_fetch_failure(
         self,
         subject: str,
-        entry: _GrantCacheEntry,
+        entry: _EntitlementCacheEntry,
         exc: Exception,
     ) -> ResolvedIdentity:
         """Apply the stale-on-failure policy when `fetch_authorities` raises.
@@ -243,7 +243,7 @@ class RsamClaimSource(ClaimResolverBase):
         propagates the original exception when stale-on-failure is disabled).
 
         When a valid stale entry is available and the operator has opted in,
-        emits `auth.stale_cache.served` and returns the cached identity.
+        emits `auth.entitlement_stale_cache_served` and returns the cached identity.
         """
         if not self._serve_stale:
             raise exc
@@ -289,23 +289,23 @@ class RsamClaimSource(ClaimResolverBase):
         _latency_ms = int((time.monotonic() - _t0) * 1000)
 
         # Parse, discard non-matching strings
-        parsed = [grammar.parse_authority(a) for a in raw_authorities]
+        parsed = [parser.parse_authority(a) for a in raw_authorities]
         valid = [p for p in parsed if p is not None]
 
         # Group by seal_id, collect roles per SEAL
         roles_by_seal: dict[str, list[str]] = defaultdict(list)
         for authority in valid:
-            role = grammar.verb_to_role(authority.verb)
+            role = parser.verb_to_role(authority.verb)
             roles_by_seal[authority.seal_id].append(role)
 
         # Upsert tenant, upsert actor (one per tenant), build grants
         tenant_grants: list[TenantGrant] = []
         for seal_id, roles in roles_by_seal.items():
-            best_role = grammar.highest_role(roles)
+            best_role = parser.highest_role(roles)
             async with self._session_factory() as session, session.begin():
-                tenant_uuid = await upsert_rsam_tenant(session, seal_id)
+                tenant_uuid = await upsert_entitlement_tenant(session, seal_id)
                 # Actor row is guaranteed for downstream AuditIdentity SELECT.
-                await upsert_rsam_actor(session, tenant_uuid, subject)
+                await upsert_entitlement_actor(session, tenant_uuid, subject)
             tenant_grants.append(
                 TenantGrant(
                     tenant_id=tenant_uuid,
@@ -328,7 +328,7 @@ class RsamClaimSource(ClaimResolverBase):
         # are not meaningful for a cross-tenant auth event; structured logging is
         # the appropriate observability surface here.
         _log.info(
-            "auth.claim_source.invoked subject=%s source=rsam latency_ms=%d authority_count=%d",
+            "auth.claim_source.invoked subject=%s source=entitlement latency_ms=%d authority_count=%d",
             subject,
             _latency_ms,
             len(raw_authorities),
@@ -342,7 +342,7 @@ class RsamClaimSource(ClaimResolverBase):
         tenant_id: uuid.UUID | None,
         stale_age: float,
     ) -> None:
-        """Write the `auth.stale_cache.served` audit row.
+        """Write the `auth.entitlement_stale_cache_served` audit row.
 
         Payload keys:
           - tenant_id: first grant's tenant UUID as a string, or null when the
@@ -364,7 +364,7 @@ class RsamClaimSource(ClaimResolverBase):
                         "(audit_id, tenant_id, actor_id, action, target_type, "
                         " target_id, before_jsonb, after_jsonb, ts, request_id, error_code) "
                         "VALUES "
-                        "(:audit_id, NULL, NULL, 'auth.stale_cache.served', NULL, "
+                        "(:audit_id, NULL, NULL, 'auth.entitlement_stale_cache_served', NULL, "
                         " NULL, NULL, CAST(:after_jsonb AS jsonb), :ts, NULL, NULL)"
                     ),
                     {
@@ -379,7 +379,7 @@ class RsamClaimSource(ClaimResolverBase):
                 )
                 await _audit_session.commit()
         except Exception:  # noqa: BLE001
-            _log.exception("Failed to emit auth.stale_cache.served audit event for subject=%s", subject)
+            _log.exception("Failed to emit auth.entitlement_stale_cache_served audit event for subject=%s", subject)
 
     async def _build_audit_identity(self, subject: str, tenant_id: uuid.UUID) -> AuditIdentity:
         """Fetch the actor row for (tenant_id, oidc_subject=subject) and build the
@@ -413,4 +413,4 @@ class RsamClaimSource(ClaimResolverBase):
         )
 
 
-__all__ = ["RsamClaimSource", "_default_stub"]
+__all__ = ["EntitlementResolver", "_default_stub"]

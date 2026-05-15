@@ -1,7 +1,7 @@
-"""Unit tests for RsamClaimSource — 15 scenarios.
+"""Unit tests for EntitlementResolver — 15 scenarios.
 
 All scenarios inject `fetch_authorities` at construction time (lambda or
-AsyncMock). The database session and `upsert_rsam_tenant` are mocked so no
+AsyncMock). The database session and `upsert_entitlement_tenant` are mocked so no
 DB is required. Tests do not patch module-level names at collection time.
 """
 
@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from registry.auth.rsam.claim_source import RsamClaimSource
+from registry.auth.entitlements.resolver import EntitlementResolver
 from registry.config import Settings
 
 # ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ def _settings(auth_mode: str = "rsam") -> Settings:
         pgbouncer_url="postgresql+asyncpg://test/test",
         scheduler_jobstore_url="postgresql+asyncpg://test/test",
         auth_mode=auth_mode,
-        auth_claim_source_url="https://rsam.example.com" if auth_mode == "rsam" else None,
+        auth_claim_source_url="https://entitlement.example.com" if auth_mode == "rsam" else None,
     )
 
 
@@ -41,7 +41,7 @@ def _make_session_factory(
       `async with factory() as session, session.begin():`   (upsert loop)
       `async with factory() as session: session.execute(...)`  (AuditIdentity SELECT)
 
-    `upsert_rsam_tenant` and `upsert_rsam_actor` are patched at call-site in each
+    `upsert_entitlement_tenant` and `upsert_entitlement_actor` are patched at call-site in each
     test. `session.execute` returns a result whose `.first()` yields
     `(actor_display_name, actor_email)` so the AuditIdentity SELECT after the loop
     sees a non-empty row by default.
@@ -84,13 +84,13 @@ async def test_zero_authorities_returns_empty_grants() -> None:
     """Zero RSAM authorities → ResolvedIdentity with no tenant grants."""
     settings = _settings()
     factory = _make_session_factory()
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=[]),
     )
 
-    with patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock()) as mock_upsert:
+    with patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock()) as mock_upsert:
         result = await source.resolve(_claims())
 
     assert result.user_id == "F731821"
@@ -109,7 +109,7 @@ async def test_single_seal_owner_produces_admin_grant() -> None:
     factory = _make_session_factory()
     tenant_uuid = uuid.uuid4()
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -117,11 +117,11 @@ async def test_single_seal_owner_produces_admin_grant() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -150,7 +150,7 @@ async def test_multi_seal_highest_role_per_seal() -> None:
     def _side_effect(session: object, seal_id: str) -> uuid.UUID:
         return uuid_112025 if seal_id == "112025" else uuid_34612
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(
@@ -164,11 +164,11 @@ async def test_multi_seal_highest_role_per_seal() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(side_effect=_side_effect),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -198,7 +198,7 @@ async def test_invalid_authority_silently_dropped() -> None:
     factory = _make_session_factory()
     tenant_uuid = uuid.uuid4()
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(
@@ -211,11 +211,11 @@ async def test_invalid_authority_silently_dropped() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -232,7 +232,7 @@ async def test_invalid_authority_silently_dropped() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rsam_5xx_fail_closed_propagates_exception() -> None:
+async def test_entitlement_5xx_fail_closed_propagates_exception() -> None:
     """When fetch_authorities raises, the exception propagates — never swallowed."""
     settings = _settings()
     factory = _make_session_factory()
@@ -240,7 +240,7 @@ async def test_rsam_5xx_fail_closed_propagates_exception() -> None:
     async def _failing_fetch(subject: str) -> list[str]:
         raise RuntimeError("simulated RSAM 503")
 
-    source = RsamClaimSource(settings, factory, fetch_authorities=_failing_fetch)
+    source = EntitlementResolver(settings, factory, fetch_authorities=_failing_fetch)
 
     with pytest.raises(RuntimeError, match="simulated RSAM 503"):
         await source.resolve(_claims())
@@ -251,7 +251,7 @@ async def test_rsam_5xx_fail_closed_propagates_exception() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rsam_5xx_stale_serve_setting_does_not_suppress_exception() -> None:
+async def test_entitlement_5xx_stale_serve_setting_does_not_suppress_exception() -> None:
     """With auth_serve_stale_on_failure=True but an empty cache, the resolver
     fails-closed — raising HTTP 503 rather than silently returning empty grants.
 
@@ -267,7 +267,7 @@ async def test_rsam_5xx_stale_serve_setting_does_not_suppress_exception() -> Non
         pgbouncer_url=settings.pgbouncer_url,
         scheduler_jobstore_url=settings.scheduler_jobstore_url,
         auth_mode="rsam",
-        auth_claim_source_url="https://rsam.example.com",
+        auth_claim_source_url="https://entitlement.example.com",
         auth_serve_stale_on_failure=True,
     )
     factory = _make_session_factory()
@@ -275,7 +275,7 @@ async def test_rsam_5xx_stale_serve_setting_does_not_suppress_exception() -> Non
     async def _failing_fetch(subject: str) -> list[str]:
         raise RuntimeError("simulated RSAM 503 with stale-serve enabled")
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings_with_stale,
         factory,
         fetch_authorities=_failing_fetch,
@@ -299,7 +299,7 @@ async def test_audit_identity_email_is_none() -> None:
     factory = _make_session_factory()
     tenant_uuid = uuid.uuid4()
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -307,11 +307,11 @@ async def test_audit_identity_email_is_none() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -333,7 +333,7 @@ async def test_audit_identity_preferred_username_falls_back_to_subject() -> None
     tenant_uuid = uuid.uuid4()
     subject = "F731821"
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -341,11 +341,11 @@ async def test_audit_identity_preferred_username_falls_back_to_subject() -> None
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -362,12 +362,12 @@ async def test_audit_identity_preferred_username_falls_back_to_subject() -> None
 
 @pytest.mark.asyncio
 async def test_first_time_user_creates_tenant_and_actor() -> None:
-    """First login: upsert_rsam_tenant and upsert_rsam_actor both called exactly once."""
+    """First login: upsert_entitlement_tenant and upsert_entitlement_actor both called exactly once."""
     settings = _settings()
     factory = _make_session_factory(actor_display_name=None, actor_email=None)
     tenant_uuid = uuid.uuid4()
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -375,11 +375,11 @@ async def test_first_time_user_creates_tenant_and_actor() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ) as mock_tenant,
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ) as mock_actor,
     ):
@@ -402,7 +402,7 @@ async def test_first_time_user_creates_tenant_and_actor() -> None:
 
 @pytest.mark.asyncio
 async def test_multi_seal_creates_actor_per_tenant() -> None:
-    """Two SEALs → upsert_rsam_actor called twice (once per tenant)."""
+    """Two SEALs → upsert_entitlement_actor called twice (once per tenant)."""
     settings = _settings()
     factory = _make_session_factory()
 
@@ -412,7 +412,7 @@ async def test_multi_seal_creates_actor_per_tenant() -> None:
     def _tenant_se(session: object, seal_id: str) -> uuid.UUID:
         return uuid_a if seal_id == "112025" else uuid_b
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(
@@ -425,11 +425,11 @@ async def test_multi_seal_creates_actor_per_tenant() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(side_effect=_tenant_se),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ) as mock_actor,
     ):
@@ -453,7 +453,7 @@ async def test_audit_identity_populated_from_actor_row() -> None:
     )
     tenant_uuid = uuid.uuid4()
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -461,11 +461,11 @@ async def test_audit_identity_populated_from_actor_row() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -491,7 +491,7 @@ async def test_missing_actor_row_raises_runtime_error() -> None:
     session.execute.return_value.first = MagicMock(return_value=None)
 
     tenant_uuid = uuid.uuid4()
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=["112025_DP_CHANNEL_Owner"]),
@@ -499,11 +499,11 @@ async def test_missing_actor_row_raises_runtime_error() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
     ):
@@ -553,7 +553,7 @@ async def test_audit_claim_source_invoked_emitted_with_payload() -> None:
     subject = "F731821"
     raw_authorities = ["112025_DP_CHANNEL_Owner", "34612_DP_MODULE_RU"]
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AsyncMock(return_value=raw_authorities),
@@ -561,14 +561,14 @@ async def test_audit_claim_source_invoked_emitted_with_payload() -> None:
 
     with (
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_tenant",
+            "registry.auth.entitlements.resolver.upsert_entitlement_tenant",
             AsyncMock(return_value=tenant_uuid),
         ),
         patch(
-            "registry.auth.rsam.claim_source.upsert_rsam_actor",
+            "registry.auth.entitlements.resolver.upsert_entitlement_actor",
             AsyncMock(),
         ),
-        patch("registry.auth.rsam.claim_source._log") as mock_log,
+        patch("registry.auth.entitlements.resolver._log") as mock_log,
     ):
         await source.resolve(_claims(subject=subject))
 
@@ -587,9 +587,9 @@ async def test_audit_claim_source_invoked_emitted_with_payload() -> None:
 
 @pytest.mark.asyncio
 async def test_audit_tenant_jit_created_payload_complete() -> None:
-    """tenant.jit_created payload includes provider='jit' and source='rsam'.
+    """tenant.jit_created payload includes provider='jit' and source='entitlement'.
 
-    The event is emitted inside upsert_rsam_tenant (tenant_store.py). This
+    The event is emitted inside upsert_entitlement_tenant (tenant_store.py). This
     test calls resolve() with a brand-new SEAL and inspects the SQL params
     passed to the session mock to confirm all four required keys are present.
     """
@@ -597,8 +597,8 @@ async def test_audit_tenant_jit_created_payload_complete() -> None:
     tenant_uuid = uuid.uuid4()
     seal_id = "112025"
 
-    # Build a session factory and capture the session used by upsert_rsam_tenant.
-    # We need the REAL upsert_rsam_tenant to run so we can inspect its audit write,
+    # Build a session factory and capture the session used by upsert_entitlement_tenant.
+    # We need the REAL upsert_entitlement_tenant to run so we can inspect its audit write,
     # so we do NOT patch it. Instead we make the session mock satisfy both the
     # INSERT RETURNING and the audit INSERT calls.
     from unittest.mock import AsyncMock as AM
@@ -633,10 +633,10 @@ async def test_audit_tenant_jit_created_payload_complete() -> None:
     session = AM()
     session.execute = AM(
         side_effect=[
-            insert_result,  # upsert_rsam_tenant: INSERT ... RETURNING
-            audit_result,  # upsert_rsam_tenant: INSERT INTO audit_log (tenant.jit_created)
-            actor_no_row,  # upsert_rsam_actor: INSERT ... RETURNING (DO NOTHING)
-            actor_select_result,  # upsert_rsam_actor: SELECT to find existing actor
+            insert_result,  # upsert_entitlement_tenant: INSERT ... RETURNING
+            audit_result,  # upsert_entitlement_tenant: INSERT INTO audit_log (tenant.jit_created)
+            actor_no_row,  # upsert_entitlement_actor: INSERT ... RETURNING (DO NOTHING)
+            actor_select_result,  # upsert_entitlement_actor: SELECT to find existing actor
             actor_select_result,  # _build_audit_identity SELECT
             claim_audit_result,  # auth.claim_source.invoked audit INSERT
         ]
@@ -651,7 +651,7 @@ async def test_audit_tenant_jit_created_payload_complete() -> None:
     outer_cm.__aexit__ = AM(return_value=False)
     factory = MM(return_value=outer_cm)
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AM(return_value=[f"{seal_id}_DP_CHANNEL_Owner"]),
@@ -666,14 +666,14 @@ async def test_audit_tenant_jit_created_payload_complete() -> None:
     assert after["tenant_id"] == str(tenant_uuid)
     assert after["external_tenant_id"] == seal_id
     assert after["provider"] == "jit"
-    assert after["source"] == "rsam"
+    assert after["source"] == "entitlement"
 
 
 @pytest.mark.asyncio
 async def test_audit_actor_jit_created_payload_complete() -> None:
-    """actor.jit_created payload includes oidc_subject and source='rsam'.
+    """actor.jit_created payload includes oidc_subject and source='entitlement'.
 
-    Calls resolve() with a brand-new user so upsert_rsam_actor takes the
+    Calls resolve() with a brand-new user so upsert_entitlement_actor takes the
     INSERT path, and inspects the resulting audit_log INSERT params.
     """
     settings = _settings()
@@ -718,9 +718,9 @@ async def test_audit_actor_jit_created_payload_complete() -> None:
     session = AM()
     session.execute = AM(
         side_effect=[
-            tenant_insert_result,  # upsert_rsam_tenant INSERT RETURNING
+            tenant_insert_result,  # upsert_entitlement_tenant INSERT RETURNING
             tenant_audit_result,  # tenant.jit_created audit INSERT
-            actor_insert_result,  # upsert_rsam_actor INSERT RETURNING
+            actor_insert_result,  # upsert_entitlement_actor INSERT RETURNING
             actor_audit_result,  # actor.jit_created audit INSERT
             audit_identity_result,  # _build_audit_identity SELECT
             claim_audit_result,  # auth.claim_source.invoked audit INSERT
@@ -736,7 +736,7 @@ async def test_audit_actor_jit_created_payload_complete() -> None:
     outer_cm.__aexit__ = AM(return_value=False)
     factory = MM(return_value=outer_cm)
 
-    source = RsamClaimSource(
+    source = EntitlementResolver(
         settings,
         factory,
         fetch_authorities=AM(return_value=[f"{seal_id}_DP_CHANNEL_Owner"]),
@@ -751,4 +751,4 @@ async def test_audit_actor_jit_created_payload_complete() -> None:
     assert after["actor_id"] == str(actor_uuid)
     assert after["tenant_id"] == str(tenant_uuid)
     assert after["oidc_subject"] == subject
-    assert after["source"] == "rsam"
+    assert after["source"] == "entitlement"

@@ -1,8 +1,8 @@
-"""Unit tests for the RSAM grant cache in RsamClaimSource — 6 scenarios.
+"""Unit tests for the RSAM grant cache in EntitlementResolver — 6 scenarios.
 
 All tests inject `fetch_authorities` at construction time (AsyncMock or lambda).
 The session factory is mocked; no DB is required. Time is controlled by
-monkeypatching `time.monotonic` in `registry.auth.rsam.claim_source`.
+monkeypatching `time.monotonic` in `registry.auth.entitlements.resolver`.
 
 Monotonic call map (per resolve() invocation):
   Cold fill (cache miss + success):
@@ -33,7 +33,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from registry.auth.rsam.claim_source import RsamClaimSource
+from registry.auth.entitlements.resolver import EntitlementResolver
 from registry.config import Settings
 
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ def _settings(
         pgbouncer_url="postgresql+asyncpg://test/test",
         scheduler_jobstore_url="postgresql+asyncpg://test/test",
         auth_mode="rsam",
-        auth_claim_source_url="https://rsam.example.com",
+        auth_claim_source_url="https://entitlement.example.com",
         auth_claim_cache_ttl_seconds=ttl,
         auth_stale_ceiling_seconds=stale_ceiling,
         auth_serve_stale_on_failure=serve_stale,
@@ -93,10 +93,10 @@ def _make_source(
     stale_ceiling: int = 86400,
     serve_stale: bool = False,
     session_factory: MagicMock | None = None,
-) -> RsamClaimSource:
+) -> EntitlementResolver:
     if session_factory is None:
         session_factory = _make_session_factory()
-    return RsamClaimSource(
+    return EntitlementResolver(
         _settings(ttl=ttl, stale_ceiling=stale_ceiling, serve_stale=serve_stale),
         session_factory,
         fetch_authorities=fetch_authorities,
@@ -140,9 +140,9 @@ async def test_ttl_hit_single_fetch() -> None:
     mono_seq = _COLD_FILL_MONO + _CACHE_HIT_MONO
 
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
-        patch("registry.auth.rsam.claim_source.time.monotonic", side_effect=mono_seq),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.time.monotonic", side_effect=mono_seq),
     ):
         source = _make_source(fetch)
         result1 = await source.resolve(_claims())
@@ -165,9 +165,9 @@ async def test_ttl_expiry_triggers_refetch() -> None:
     mono_seq = _COLD_FILL_MONO + _TTL_EXPIRED_SECOND_MONO
 
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
-        patch("registry.auth.rsam.claim_source.time.monotonic", side_effect=mono_seq),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.time.monotonic", side_effect=mono_seq),
     ):
         source = _make_source(fetch, ttl=300)
         await source.resolve(_claims())
@@ -195,8 +195,8 @@ async def test_single_flight_concurrent_misses() -> None:
     # No monotonic patching: real time is fine for a concurrency test since we are
     # testing call count, not TTL arithmetic.
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
     ):
         source = _make_source(AsyncMock(side_effect=slow_fetch))
         results = await asyncio.gather(
@@ -216,7 +216,7 @@ async def test_single_flight_concurrent_misses() -> None:
 @pytest.mark.asyncio
 async def test_stale_serve_fires_when_enabled() -> None:
     """After a successful resolve(), if fetch_authorities raises and stale-on-failure
-    is enabled, the cached result is returned and auth.stale_cache.served is emitted.
+    is enabled, the cached result is returned and auth.entitlement_stale_cache_served is emitted.
     """
     fetch = AsyncMock(return_value=[AUTHORITY])
     session_factory = _make_session_factory()
@@ -235,7 +235,7 @@ async def test_stale_serve_fires_when_enabled() -> None:
         if params and "after_jsonb" in params:
             after = params["after_jsonb"]
             if "stale_age_seconds" in after and "subject" not in after:
-                audit_actions.append("auth.stale_cache.served")
+                audit_actions.append("auth.entitlement_stale_cache_served")
         return await original_execute(stmt, params, **kw)
 
     shared_session.execute = capturing_execute
@@ -243,9 +243,9 @@ async def test_stale_serve_fires_when_enabled() -> None:
     mono_seq = _COLD_FILL_MONO + _STALE_SERVE_MONO
 
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
-        patch("registry.auth.rsam.claim_source.time.monotonic", side_effect=mono_seq),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.time.monotonic", side_effect=mono_seq),
     ):
         source = _make_source(
             fetch,
@@ -266,7 +266,7 @@ async def test_stale_serve_fires_when_enabled() -> None:
         result2 = await source.resolve(_claims())
 
     assert result2.tenant_grants == result1.tenant_grants
-    assert "auth.stale_cache.served" in audit_actions
+    assert "auth.entitlement_stale_cache_served" in audit_actions
 
 
 # ---------------------------------------------------------------------------
@@ -287,7 +287,7 @@ async def test_stale_serve_disabled_propagates_exception() -> None:
         if params and "after_jsonb" in params:
             after = params["after_jsonb"]
             if "stale_age_seconds" in after and "subject" not in after:
-                audit_actions.append("auth.stale_cache.served")
+                audit_actions.append("auth.entitlement_stale_cache_served")
         return await original_execute(stmt, params, **kw)
 
     shared_session.execute = capturing_execute
@@ -295,9 +295,9 @@ async def test_stale_serve_disabled_propagates_exception() -> None:
     mono_seq = _COLD_FILL_MONO + _STALE_DISABLED_MONO
 
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
-        patch("registry.auth.rsam.claim_source.time.monotonic", side_effect=mono_seq),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.time.monotonic", side_effect=mono_seq),
     ):
         source = _make_source(
             fetch,
@@ -314,7 +314,7 @@ async def test_stale_serve_disabled_propagates_exception() -> None:
         with pytest.raises(RuntimeError, match="upstream down"):
             await source.resolve(_claims())
 
-    assert "auth.stale_cache.served" not in audit_actions
+    assert "auth.entitlement_stale_cache_served" not in audit_actions
 
 
 # ---------------------------------------------------------------------------
@@ -335,9 +335,9 @@ async def test_stale_ceiling_enforced() -> None:
     mono_seq = _COLD_FILL_MONO + _ceiling_stale_mono
 
     with (
-        patch("registry.auth.rsam.claim_source.upsert_rsam_tenant", AsyncMock(return_value=TENANT_UUID)),
-        patch("registry.auth.rsam.claim_source.upsert_rsam_actor", AsyncMock()),
-        patch("registry.auth.rsam.claim_source.time.monotonic", side_effect=mono_seq),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_tenant", AsyncMock(return_value=TENANT_UUID)),
+        patch("registry.auth.entitlements.resolver.upsert_entitlement_actor", AsyncMock()),
+        patch("registry.auth.entitlements.resolver.time.monotonic", side_effect=mono_seq),
     ):
         source = _make_source(fetch, ttl=300, stale_ceiling=3600, serve_stale=True)
 

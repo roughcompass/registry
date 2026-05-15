@@ -186,7 +186,7 @@ class TestMig0015Upgrade:
         for allowed in ("'manual'", "'jit'", "'system'"):
             assert allowed in stmt, f"CHECK constraint must include {allowed}"
 
-    def test_provider_check_constraint_does_not_include_rsam(self) -> None:
+    def test_provider_check_constraint_does_not_include_legacy_external_source(self) -> None:
         """The specific upstream source name must not appear in the schema enum."""
         combined = "\n".join(_capture_upgrade())
         assert "rsam" not in combined.lower()

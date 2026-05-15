@@ -149,10 +149,10 @@ def build_resolver(
     """
     # Import here to avoid circular imports: claim_source imports from this
     # module, so top-level import would create a cycle.
-    from registry.auth.rsam.claim_source import RsamClaimSource  # noqa: PLC0415
+    from registry.auth.entitlements.resolver import EntitlementResolver  # noqa: PLC0415
 
     registered: list[ClaimResolverBase] = [
-        RsamClaimSource(settings=settings, session_factory=session_factory),
+        EntitlementResolver(settings=settings, session_factory=session_factory),
     ]
 
     dummy_claims: dict[str, Any] = {}

@@ -7,14 +7,14 @@ specific path from resolved claims → JIT tenant materialisation → TenantCont
 construction → entity write success, and on the visibility chokepoint that
 prevents cross-tenant data access.
 
-The `fetch_authorities` callable is injected directly on the RsamClaimSource
+The `fetch_authorities` callable is injected directly on the EntitlementResolver
 instance (constructor parameter) so no module-level patching is required.
 
 To keep the test deterministic we bypass the OIDC JWT validation stage by
 overriding the `get_tenant_context` FastAPI dependency with a thin shim that
 calls the RSAM resolver directly. This is the correct test-mode bypass: the
 OIDC validator is covered separately; what we are testing here is that the
-resolver factory dispatches to RsamClaimSource, that JIT materialisation runs
+resolver factory dispatches to EntitlementResolver, that JIT materialisation runs
 correctly, that TenantContext is built from the resolver's output, and that
 entity writes succeed in the materialised scope.
 
@@ -44,7 +44,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from registry.api.middleware.tenant import get_tenant_context
-from registry.auth.rsam.claim_source import RsamClaimSource
+from registry.auth.entitlements.resolver import EntitlementResolver
 from registry.config import Settings
 from registry.main import create_app
 from registry.storage.pg import create_engine as _create_engine
@@ -61,7 +61,7 @@ _NOW = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 # Settings factory for RSAM mode
 
 
-def _rsam_settings(pg_url: str) -> Settings:
+def _entitlement_settings(pg_url: str) -> Settings:
     """Build Settings with auth_mode='rsam'.
 
     auth_claim_source_url is required by Settings when auth_mode != 'oidc'.
@@ -75,7 +75,7 @@ def _rsam_settings(pg_url: str) -> Settings:
         scheduler_use_memory_jobstore=True,
         embedding_model="stub",
         auth_mode="rsam",
-        auth_claim_source_url="http://stub-rsam-api.test",  # never called in tests
+        auth_claim_source_url="http://stub-entitlement-api.test",  # never called in tests
         rate_limit_enabled=False,
     )
 
@@ -128,7 +128,7 @@ async def _fetch_tenant_by_seal(pg_url: str, seal_id: str) -> uuid.UUID | None:
 # ---------------------------------------------------------------------------
 # Dependency-override helper
 #
-# `_make_rsam_get_tenant_context` builds a FastAPI dependency that bypasses
+# `_make_entitlement_get_tenant_context` builds a FastAPI dependency that bypasses
 # OIDC JWT validation and instead calls the RSAM resolver directly. The
 # dependency reads the X-RSAM-Subject test header as the subject, then calls
 # resolver.resolve() to materialise the JIT tenant and return a TenantContext.
@@ -141,8 +141,8 @@ async def _fetch_tenant_by_seal(pg_url: str, seal_id: str) -> uuid.UUID | None:
 # resolver guarantees the actor row exists at this point.
 
 
-def _make_rsam_get_tenant_context(
-    resolver: RsamClaimSource,
+def _make_entitlement_get_tenant_context(
+    resolver: EntitlementResolver,
 ):
     """Return a FastAPI dependency that routes directly to the RSAM resolver.
 
@@ -152,13 +152,13 @@ def _make_rsam_get_tenant_context(
 
     Resolves the sentinel actor_id (UUID(int=0)) to the real actor UUID by
     querying actors WHERE (tenant_id, oidc_subject) — the JIT upsert in
-    upsert_rsam_actor guarantees this row exists before the write path fires.
+    upsert_entitlement_actor guarantees this row exists before the write path fires.
     """
     from sqlalchemy import text as _text  # noqa: PLC0415
 
-    from registry.api.middleware.tenant import _select_rsam_tenant  # noqa: PLC0415
+    from registry.api.middleware.tenant import _select_entitlement_tenant  # noqa: PLC0415
 
-    async def _rsam_get_tenant_context(request: Request) -> TenantContext:
+    async def _entitlement_get_tenant_context(request: Request) -> TenantContext:
         subject = request.headers.get("X-RSAM-Subject")
         if not subject:
             raise HTTPException(
@@ -166,7 +166,7 @@ def _make_rsam_get_tenant_context(
                 detail="missing X-RSAM-Subject test header",
             )
         resolved = await resolver.resolve({"sub": subject})
-        ctx = _select_rsam_tenant(request, resolved)
+        ctx = _select_entitlement_tenant(request, resolved)
 
         # Resolve the sentinel actor_id to the real JIT actor UUID.
         # The sentinel (UUID(int=0)) is a placeholder; entity writes require
@@ -186,7 +186,7 @@ def _make_rsam_get_tenant_context(
             )
         return ctx
 
-    return _rsam_get_tenant_context
+    return _entitlement_get_tenant_context
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +194,11 @@ def _make_rsam_get_tenant_context(
 
 
 @pytest.mark.asyncio
-async def test_rsam_full_write_path(pg_container: str) -> None:
+async def test_entitlement_full_write_path(pg_container: str) -> None:
     """RSAM resolver → JIT tenant → TenantContext → POST /v1/capabilities → 201.
 
     Verifies:
-    - build_resolver factory dispatches to RsamClaimSource when auth_mode='rsam'.
+    - build_resolver factory dispatches to EntitlementResolver when auth_mode='rsam'.
     - JIT tenant and actor are materialised from the SEAL authority.
     - Entity write against the JIT tenant's context succeeds.
     - fetch_authorities is called exactly once with the correct subject.
@@ -209,19 +209,19 @@ async def test_rsam_full_write_path(pg_container: str) -> None:
     subject = "F731821"
     authority_string = f"{seal_id}_DP_CHANNEL_Owner"
 
-    settings = _rsam_settings(pg_container)
+    settings = _entitlement_settings(pg_container)
     engine = _create_engine(settings)
     session_factory = get_session_factory(engine)
 
     fetch_stub = AsyncMock(return_value=[authority_string])
-    resolver = RsamClaimSource(
+    resolver = EntitlementResolver(
         settings=settings,
         session_factory=session_factory,
         fetch_authorities=fetch_stub,
     )
 
     app = create_app(settings)
-    app.dependency_overrides[get_tenant_context] = _make_rsam_get_tenant_context(resolver)
+    app.dependency_overrides[get_tenant_context] = _make_entitlement_get_tenant_context(resolver)
 
     try:
         # Seed vocabulary after JIT tenant is created by the first request.
@@ -229,9 +229,9 @@ async def test_rsam_full_write_path(pg_container: str) -> None:
         # happens during the request. We must seed vocab before the write call.
         # Strategy: make a preflight resolve call to materialise the tenant first.
         async with session_factory() as session, session.begin():
-            from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+            from registry.auth.entitlements.actor_store import upsert_entitlement_tenant  # noqa: PLC0415
 
-            tenant_id = await upsert_rsam_tenant(session, seal_id)
+            tenant_id = await upsert_entitlement_tenant(session, seal_id)
 
         await _seed_vocabulary(pg_container, tenant_id=tenant_id)
 
@@ -239,7 +239,7 @@ async def test_rsam_full_write_path(pg_container: str) -> None:
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post(
                 "/v1/capabilities",
-                json={"name": "rsam-authed-capability"},
+                json={"name": "entitlement-authed-capability"},
                 headers={"X-RSAM-Subject": subject},
             )
 
@@ -277,30 +277,30 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
     subject_a = f"U{secrets.token_hex(4)}"
     subject_b = f"U{secrets.token_hex(4)}"
 
-    settings = _rsam_settings(pg_container)
+    settings = _entitlement_settings(pg_container)
     engine = _create_engine(settings)
     session_factory = get_session_factory(engine)
 
     # Pre-materialise both tenants so we can seed vocabulary.
-    from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+    from registry.auth.entitlements.actor_store import upsert_entitlement_tenant  # noqa: PLC0415
 
     async with session_factory() as session, session.begin():
-        tenant_a = await upsert_rsam_tenant(session, seal_a)
+        tenant_a = await upsert_entitlement_tenant(session, seal_a)
     async with session_factory() as session, session.begin():
-        tenant_b = await upsert_rsam_tenant(session, seal_b)
+        tenant_b = await upsert_entitlement_tenant(session, seal_b)
 
     await _seed_vocabulary(pg_container, tenant_id=tenant_a)
     await _seed_vocabulary(pg_container, tenant_id=tenant_b)
 
     # --- Tenant A creates an entity ---
     fetch_a = AsyncMock(return_value=[f"{seal_a}_DP_CHANNEL_Owner"])
-    resolver_a = RsamClaimSource(
+    resolver_a = EntitlementResolver(
         settings=settings,
         session_factory=session_factory,
         fetch_authorities=fetch_a,
     )
     app_a = create_app(settings)
-    app_a.dependency_overrides[get_tenant_context] = _make_rsam_get_tenant_context(resolver_a)
+    app_a.dependency_overrides[get_tenant_context] = _make_entitlement_get_tenant_context(resolver_a)
 
     try:
         entity_name = f"cap-{secrets.token_hex(4)}"
@@ -321,13 +321,13 @@ async def test_cross_tenant_visibility_intact(pg_container: str) -> None:
 
     # --- Tenant B tries to read the entity ---
     fetch_b = AsyncMock(return_value=[f"{seal_b}_DP_CHANNEL_Owner"])
-    resolver_b = RsamClaimSource(
+    resolver_b = EntitlementResolver(
         settings=settings,
         session_factory=session_factory,
         fetch_authorities=fetch_b,
     )
     app_b = create_app(settings)
-    app_b.dependency_overrides[get_tenant_context] = _make_rsam_get_tenant_context(resolver_b)
+    app_b.dependency_overrides[get_tenant_context] = _make_entitlement_get_tenant_context(resolver_b)
 
     try:
         transport_b = httpx.ASGITransport(app=app_b)
@@ -368,23 +368,23 @@ async def test_multi_grant_header_selection(pg_container: str) -> None:
         f"{seal_b}_DP_CHANNEL_Manager",
     ]
 
-    settings = _rsam_settings(pg_container)
+    settings = _entitlement_settings(pg_container)
     engine = _create_engine(settings)
     session_factory = get_session_factory(engine)
 
     # Pre-materialise both JIT tenants.
-    from registry.auth.rsam.tenant_store import upsert_rsam_tenant  # noqa: PLC0415
+    from registry.auth.entitlements.actor_store import upsert_entitlement_tenant  # noqa: PLC0415
 
     async with session_factory() as session, session.begin():
-        tenant_a = await upsert_rsam_tenant(session, seal_a)
+        tenant_a = await upsert_entitlement_tenant(session, seal_a)
     async with session_factory() as session, session.begin():
-        await upsert_rsam_tenant(session, seal_b)
+        await upsert_entitlement_tenant(session, seal_b)
 
     await _seed_vocabulary(pg_container, tenant_id=tenant_a)
 
     # Each request uses a fresh resolver to avoid cache hiding the second call.
-    def _fresh_resolver() -> RsamClaimSource:
-        return RsamClaimSource(
+    def _fresh_resolver() -> EntitlementResolver:
+        return EntitlementResolver(
             settings=settings,
             session_factory=session_factory,
             fetch_authorities=AsyncMock(return_value=authorities),
@@ -393,7 +393,7 @@ async def test_multi_grant_header_selection(pg_container: str) -> None:
     # --- Without header: multiple grants → 400 ---
     resolver_1 = _fresh_resolver()
     app_1 = create_app(settings)
-    app_1.dependency_overrides[get_tenant_context] = _make_rsam_get_tenant_context(resolver_1)
+    app_1.dependency_overrides[get_tenant_context] = _make_entitlement_get_tenant_context(resolver_1)
     try:
         transport_1 = httpx.ASGITransport(app=app_1)
         async with httpx.AsyncClient(transport=transport_1, base_url="http://test") as client:
@@ -415,7 +415,7 @@ async def test_multi_grant_header_selection(pg_container: str) -> None:
     # --- With correct header: must route to seal_a's tenant (200) ---
     resolver_2 = _fresh_resolver()
     app_2 = create_app(settings)
-    app_2.dependency_overrides[get_tenant_context] = _make_rsam_get_tenant_context(resolver_2)
+    app_2.dependency_overrides[get_tenant_context] = _make_entitlement_get_tenant_context(resolver_2)
     try:
         transport_2 = httpx.ASGITransport(app=app_2)
         async with httpx.AsyncClient(transport=transport_2, base_url="http://test") as client:

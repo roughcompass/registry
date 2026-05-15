@@ -1,4 +1,4 @@
-"""Parses RSAM authority strings into ParsedAuthority.
+"""Parses RSAM authority strings into ParsedEntitlement.
 
 SEAL ID is the registry's tenant_external_id; verb maps to the registry role
 vocabulary (admin | producer | auditor | viewer).
@@ -100,7 +100,7 @@ _ROLE_WEIGHT: dict[str, int] = {role: len(ROLE_PRECEDENCE) - i for i, role in en
 
 
 @dataclass(frozen=True)
-class ParsedAuthority:
+class ParsedEntitlement:
     """Decomposed RSAM authority string."""
 
     seal_id: str  # 4–6 decimal digits; maps to tenant_external_id
@@ -129,8 +129,8 @@ def _shape_label(authority: str) -> str:
 # Public API
 
 
-def parse_authority(authority: str) -> ParsedAuthority | None:
-    """Return ParsedAuthority on match; None on non-match. Never raises.
+def parse_authority(authority: str) -> ParsedEntitlement | None:
+    """Return ParsedEntitlement on match; None on non-match. Never raises.
 
     On non-match, increments one of two Prometheus counters:
     - auth_authority_parse_skipped_total: authority did not start with digits,
@@ -143,11 +143,11 @@ def parse_authority(authority: str) -> ParsedAuthority | None:
     if m is None:
         shape = _shape_label(authority)
         if authority and _DIGIT_PREFIX_RE.match(authority):
-            _PARSE_FAILED.labels(source="rsam", shape=shape).inc()
+            _PARSE_FAILED.labels(source="entitlement", shape=shape).inc()
         else:
-            _PARSE_SKIPPED.labels(source="rsam", shape=shape).inc()
+            _PARSE_SKIPPED.labels(source="entitlement", shape=shape).inc()
         return None
-    return ParsedAuthority(
+    return ParsedEntitlement(
         seal_id=m.group("seal_id"),
         resource=m.group("resource"),
         verb=m.group("verb"),
@@ -155,8 +155,8 @@ def parse_authority(authority: str) -> ParsedAuthority | None:
 
 
 # Shorter alias matching tasks.md naming.
-def parse(authority: str) -> ParsedAuthority | None:
-    """Return ParsedAuthority on match; None on non-match. Never raises."""
+def parse(authority: str) -> ParsedEntitlement | None:
+    """Return ParsedEntitlement on match; None on non-match. Never raises."""
     return parse_authority(authority)
 
 

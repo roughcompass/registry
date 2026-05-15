@@ -46,11 +46,11 @@ class TestSettingsDefaults:
 
 
 class TestAuthModeValidation:
-    def test_rsam_without_claim_source_url_raises(self):
+    def test_external_claim_source_mode_without_url_raises(self):
         with pytest.raises(ValueError, match="AUTH_CLAIM_SOURCE_URL"):
             Settings(**_base_kwargs(), auth_mode="rsam", auth_claim_source_url=None)
 
-    def test_rsam_with_claim_source_url_accepted(self):
+    def test_external_claim_source_mode_with_url_accepted(self):
         s = Settings(
             **_base_kwargs(),
             auth_mode="rsam",

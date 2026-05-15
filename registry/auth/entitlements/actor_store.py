@@ -23,14 +23,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 _log = logging.getLogger(__name__)
 
 
-async def upsert_rsam_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
+async def upsert_entitlement_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
     """JIT-materialize a registry tenant for an RSAM SEAL ID.
 
     On first sight, INSERT a tenants row with provider='jit',
     external_tenant_id=seal_id, slug=seal_id,
     display_name='SEAL <seal_id>', is_active=True. Emit a
     `tenant.jit_created` audit event with payload
-    {tenant_id, external_tenant_id, provider='jit', source='rsam'}.
+    {tenant_id, external_tenant_id, provider='jit', source='entitlement'}.
 
     On re-sight (DO NOTHING path), no audit event is emitted.
     Returns the catalog-internal tenant_id UUID from RETURNING or a
@@ -89,13 +89,13 @@ async def upsert_rsam_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
                     f'{{"tenant_id": "{tenant_id}", '
                     f'"external_tenant_id": "{seal_id}", '
                     f'"provider": "jit", '
-                    f'"source": "rsam"}}'
+                    f'"source": "entitlement"}}'
                 ),
                 "ts": now,
             },
         )
         _log.info(
-            "rsam_tenant_jit_created",
+            "entitlement_tenant_jit_created",
             extra={"tenant_id": str(tenant_id), "seal_id": seal_id},
         )
         return tenant_id
@@ -107,12 +107,12 @@ async def upsert_rsam_tenant(session: AsyncSession, seal_id: str) -> uuid.UUID:
     )
     existing_row = existing.fetchone()
     if existing_row is None:
-        msg = f"upsert_rsam_tenant: DO NOTHING conflict but no row found for seal_id={seal_id!r}"
+        msg = f"upsert_entitlement_tenant: DO NOTHING conflict but no row found for seal_id={seal_id!r}"
         raise RuntimeError(msg)
     return existing_row[0]  # type: ignore[no-any-return]
 
 
-async def upsert_rsam_actor(
+async def upsert_entitlement_actor(
     session: AsyncSession,
     tenant_id: uuid.UUID,
     oidc_subject: str,
@@ -175,15 +175,15 @@ async def upsert_rsam_actor(
                     f'{{"actor_id": "{actor_id}", '
                     f'"tenant_id": "{tenant_id}", '
                     f'"oidc_subject": "{oidc_subject}", '
-                    f'"source": "rsam"}}'
+                    f'"source": "entitlement"}}'
                 ),
                 "ts": now,
             },
         )
         _log.info(
-            "rsam_actor_jit_created",
+            "entitlement_actor_jit_created",
             extra={"actor_id": str(actor_id), "tenant_id": str(tenant_id)},
         )
 
 
-__all__ = ["upsert_rsam_tenant", "upsert_rsam_actor"]
+__all__ = ["upsert_entitlement_tenant", "upsert_entitlement_actor"]

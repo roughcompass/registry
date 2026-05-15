@@ -1,4 +1,4 @@
-"""Unit tests for registry.auth.rsam.tenant_store.upsert_rsam_tenant.
+"""Unit tests for registry.auth.entitlements.actor_store.upsert_entitlement_tenant.
 
 Covers two paths:
   - First-sight SEAL: INSERT succeeds (RETURNING yields a row), audit event
@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from registry.auth.rsam.tenant_store import upsert_rsam_tenant
+from registry.auth.entitlements.actor_store import upsert_entitlement_tenant
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,7 +75,7 @@ async def test_first_sight_seal_returns_new_uuid_and_emits_audit() -> None:
     tenant_id = uuid.uuid4()
     session = _session_first_sight(tenant_id)
 
-    returned = await upsert_rsam_tenant(session, "12345")
+    returned = await upsert_entitlement_tenant(session, "12345")
 
     assert returned == tenant_id
 
@@ -91,7 +91,7 @@ async def test_first_sight_seal_returns_new_uuid_and_emits_audit() -> None:
     assert str(tenant_id) in after
     assert "12345" in after
     assert '"provider": "jit"' in after
-    assert '"source": "rsam"' in after
+    assert '"source": "entitlement"' in after
 
 
 @pytest.mark.asyncio
@@ -100,7 +100,7 @@ async def test_re_sight_seal_returns_existing_uuid_no_audit() -> None:
     existing_id = uuid.uuid4()
     session = _session_re_sight(existing_id)
 
-    returned = await upsert_rsam_tenant(session, "12345")
+    returned = await upsert_entitlement_tenant(session, "12345")
 
     assert returned == existing_id
 
@@ -119,11 +119,11 @@ async def test_first_sight_audit_payload_contains_all_required_keys() -> None:
     tenant_id = uuid.uuid4()
     session = _session_first_sight(tenant_id)
 
-    await upsert_rsam_tenant(session, "99999")
+    await upsert_entitlement_tenant(session, "99999")
 
     params = session.execute.call_args_list[1][0][1]
     after = params["after_jsonb"]
     assert '"provider": "jit"' in after
-    assert '"source": "rsam"' in after
+    assert '"source": "entitlement"' in after
     assert '"external_tenant_id": "99999"' in after
     assert str(tenant_id) in after

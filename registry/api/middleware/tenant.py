@@ -85,7 +85,7 @@ async def get_db_session(request: Request) -> AsyncGenerator[AsyncSession, None]
 # RSAM tenant-selector logic
 
 
-def _select_rsam_tenant(request: Request, resolved_identity: Any) -> TenantContext:
+def _select_entitlement_tenant(request: Request, resolved_identity: Any) -> TenantContext:
     """Apply the per-request tenant-selector rules to a ``ResolvedIdentity``.
 
     Returns a fully-populated ``TenantContext`` on success, or raises
@@ -209,13 +209,13 @@ async def get_tenant_context(
                     try:
                         resolved = await resolver.resolve({"sub": subject})
                     except Exception as exc:
-                        _log.warning("rsam_resolve_failed: %s", type(exc).__name__)
+                        _log.warning("entitlement_resolve_failed: %s", type(exc).__name__)
                         raise HTTPException(
                             status_code=status.HTTP_502_BAD_GATEWAY,
                             detail="claim source unavailable",
                         ) from exc
 
-                    return _select_rsam_tenant(request, resolved)
+                    return _select_entitlement_tenant(request, resolved)
 
                 # Non-RSAM OIDC path: sentinel is the real TenantContext.
                 return sentinel
