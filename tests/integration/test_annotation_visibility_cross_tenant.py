@@ -35,9 +35,9 @@ from __future__ import annotations
 
 import datetime
 import os
-import secrets
 import time
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -45,10 +45,15 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import VISIBILITY_PRIVATE, VISIBILITY_PUBLIC
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
+
+type _AppClient = tuple[EntitlementAuthHarness, AsyncClient]
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
@@ -56,55 +61,6 @@ _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 # ---------------------------------------------------------------------------
 # Seed helpers
 # ---------------------------------------------------------------------------
-
-
-async def _seed_tenant_with_token(
-    pg_url: str,
-    *,
-    slug: str,
-    roles: list[str] | None = None,
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert (tenant, actor, api_token). Returns (tenant_id, actor_id, raw_token)."""
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    role_list = roles or ["producer", "consumer", "admin"]
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": role_list,
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
 
 
 async def _seed_capability(
@@ -158,8 +114,6 @@ async def _seed_annotation_rows(
     """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    # Use distinct sub-second t_ingested_at values (microsecond offsets) so
-    # the keyset cursor ordering is deterministic across the full result set.
     base_ts = _NOW
     try:
         async with factory() as session, session.begin():
@@ -200,28 +154,35 @@ async def _seed_annotation_rows(
 
 
 # ---------------------------------------------------------------------------
+# Harness helpers
+# ---------------------------------------------------------------------------
+
+
+async def _make_persona(
+    harness: EntitlementAuthHarness, client: AsyncClient, slug: str, roles: list[str]
+) -> tuple[TenantPersona, uuid.UUID, uuid.UUID]:
+    """Add a persona, JIT-materialise via whoami, return (persona, tenant_id, actor_id)."""
+    persona = harness.add_persona(slug, roles=roles)
+    harness.configure_fetcher_for(persona)
+    with patch_validator_for_actor(persona):
+        resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+        assert resp.status_code == 200, resp.text
+    body = resp.json()
+    return persona, uuid.UUID(body["tenant_id"]), uuid.UUID(body["actor_id"])
+
+
+# ---------------------------------------------------------------------------
 # App fixture
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
+async def app_client(pg_container: str) -> AsyncIterator[_AppClient]:
     """FastAPI app + AsyncClient wired to the live testcontainers Postgres."""
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    # raise_app_exceptions=False lets the global Exception handler convert
-    # unmapped service-layer exceptions (e.g. PermissionError, NotFoundError
-    # propagating from the visibility chokepoint) into HTTP responses instead
-    # of bubbling them out of the test client.
-    transport = ASGITransport(app=app, raise_app_exceptions=False)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app, raise_app_exceptions=False)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield harness, client
 
 
 # ---------------------------------------------------------------------------
@@ -230,25 +191,24 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_client) -> None:
+async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_client: _AppClient) -> None:
     """Normative three-tenant annotation flow.
 
     Setup: three tenants — A (provider/owner), B (consumer/author), C (third party).
     Tenant A owns a public capability. Tenant B submits an annotation. Then:
 
-    1. Tenant B POST → 201, AnnotationResponse shape is correct (no warnings,
-       no encrypted_unrecoverable field since both are AN-phase non-goals).
+    1. Tenant B POST → 201, AnnotationResponse shape is correct.
     2. Tenant A GET → 200, provider path returns Tenant B's annotation in items.
     3. Tenant B GET → 200, author path returns only their own annotation.
     4. Tenant C GET → 200 with {items: [], next_cursor: null} — NOT 403.
     5. Tenant C's response body must not contain Tenant B's annotation_id.
     """
-    client = app_client
+    harness, client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-a-{suffix}")
-    b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-b-{suffix}")
-    _c_tid, _c_actor, c_token = await _seed_tenant_with_token(pg_container, slug=f"ann-vis-c-{suffix}")
+    persona_a, a_tid, _a_actor = await _make_persona(harness, client, f"ann-vis-a-{suffix}", ["producer", "admin"])
+    persona_b, b_tid, _b_actor = await _make_persona(harness, client, f"ann-vis-b-{suffix}", ["consumer"])
+    persona_c, _c_tid, _c_actor = await _make_persona(harness, client, f"ann-vis-c-{suffix}", ["consumer"])
 
     cap_id = await _seed_capability(
         pg_container,
@@ -258,61 +218,68 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
     )
 
     # Step 1: Tenant B submits annotation → 201.
-    post_resp = await client.post(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {b_token}"},
-        json={"body": "This API lacks rate-limit headers.", "category": "feedback"},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        post_resp = await client.post(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            json={"body": "This API lacks rate-limit headers.", "category": "feedback"},
+        )
     assert post_resp.status_code == 201, post_resp.text
     post_body = post_resp.json()
 
-    # AnnotationResponse shape: required fields present, no ENC-phase fields.
     assert "annotation_id" in post_body
     assert "capability_id" in post_body
     assert post_body["capability_id"] == str(cap_id)
     assert post_body["author_tenant_id"] == str(b_tid)
     assert post_body["status"] == "open"
     assert post_body["category"] == "feedback"
-    assert "encrypted_unrecoverable" not in post_body  # AN-phase non-goal
-    assert "warnings" not in post_body  # no PII in plain feedback text
+    assert "encrypted_unrecoverable" not in post_body
+    assert "warnings" not in post_body
 
     annotation_id = post_body["annotation_id"]
 
     # Step 2: Tenant A (provider) GET → sees Tenant B's annotation.
-    a_resp = await client.get(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {a_token}"},
-    )
+    harness.configure_fetcher_for(persona_a)
+    with patch_validator_for_actor(persona_a):
+        a_resp = await client.get(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_a.slug),
+        )
     assert a_resp.status_code == 200, a_resp.text
     a_body = a_resp.json()
     assert "items" in a_body
     assert "next_cursor" in a_body
     a_item_ids = [item["annotation_id"] for item in a_body["items"]]
     assert annotation_id in a_item_ids, (
-        f"Provider (Tenant A) should see Tenant B's annotation {annotation_id}; " f"got items: {a_item_ids}"
+        f"Provider (Tenant A) should see Tenant B's annotation {annotation_id}; "
+        f"got items: {a_item_ids}"
     )
 
     # Step 3: Tenant B (author) GET → sees only their own annotation.
-    b_resp = await client.get(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {b_token}"},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        b_resp = await client.get(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
     assert b_resp.status_code == 200, b_resp.text
     b_body = b_resp.json()
     b_item_ids = [item["annotation_id"] for item in b_body["items"]]
     assert annotation_id in b_item_ids, f"Author (Tenant B) should see their own annotation; got: {b_item_ids}"
-    # Author path must not expose annotations from other tenants (no others here,
-    # but each item must belong to Tenant B).
     for item in b_body["items"]:
         assert item["author_tenant_id"] == str(b_tid), f"Author path returned an item not authored by Tenant B: {item}"
 
     # Step 4: Tenant C GET → 200 with empty list (not 403).
-    c_resp = await client.get(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {c_token}"},
-    )
+    harness.configure_fetcher_for(persona_c)
+    with patch_validator_for_actor(persona_c):
+        c_resp = await client.get(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_c.slug),
+        )
     assert c_resp.status_code == 200, (
-        f"Third-tenant GET must return 200, not {c_resp.status_code}. " f"Response: {c_resp.text}"
+        f"Third-tenant GET must return 200, not {c_resp.status_code}. "
+        f"Response: {c_resp.text}"
     )
     c_body = c_resp.json()
     assert c_body["items"] == [], f"Tenant C (third party) must see empty items list; got: {c_body['items']}"
@@ -328,19 +295,14 @@ async def test_annotation_cross_tenant_visibility_flow(pg_container: str, app_cl
 
 
 @pytest.mark.asyncio
-async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_client) -> None:
-    """Belt-and-suspenders: verify Tenant C truly has no path to Tenant B's annotation.
-
-    In addition to the HTTP-level check above, this test queries the DB directly
-    with Tenant C's filter predicate to confirm the row is genuinely excluded by
-    the author_tenant_id filter that the service applies on the non-provider path.
-    """
-    client = app_client
+async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_client: _AppClient) -> None:
+    """Belt-and-suspenders: verify Tenant C truly has no path to Tenant B's annotation."""
+    harness, client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-a-{suffix}")
-    b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-b-{suffix}")
-    c_tid, _c_actor, _c_token = await _seed_tenant_with_token(pg_container, slug=f"ann-db-c-{suffix}")
+    persona_a, a_tid, _a_actor = await _make_persona(harness, client, f"ann-db-a-{suffix}", ["producer", "admin"])
+    persona_b, b_tid, _b_actor = await _make_persona(harness, client, f"ann-db-b-{suffix}", ["consumer"])
+    persona_c, c_tid, _c_actor = await _make_persona(harness, client, f"ann-db-c-{suffix}", ["consumer"])
 
     cap_id = await _seed_capability(
         pg_container,
@@ -349,17 +311,17 @@ async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_
         visibility=VISIBILITY_PUBLIC,
     )
 
-    # Tenant B submits an annotation via the API.
-    post_resp = await client.post(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {b_token}"},
-        json={"body": "Seen only by B and A.", "category": "bug"},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        post_resp = await client.post(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            json={"body": "Seen only by B and A.", "category": "bug"},
+        )
     assert post_resp.status_code == 201, post_resp.text
     annotation_id = uuid.UUID(post_resp.json()["annotation_id"])
 
     # Direct DB query: simulate what the author path does for Tenant C.
-    # author_tenant_id filter must exclude Tenant B's annotation.
     engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -392,23 +354,15 @@ async def test_third_tenant_cannot_see_annotation_via_db(pg_container: str, app_
 @pytest.mark.asyncio
 async def test_list_annotations_returns_404_for_private_capability_from_unrelated_tenant(
     pg_container: str,
-    app_client,
+    app_client: _AppClient,
 ) -> None:
-    """An unrelated tenant probing a private capability must not get 200 + empty list.
-
-    Before the visibility chokepoint was wired into ``list_annotations``, a
-    caller could distinguish ``private capability exists`` from ``capability
-    does not exist`` by the 200 (empty items) vs 404 response gap. After the
-    fix, ``assert_visible`` raises before any DB query — the response is no
-    longer 200 with an empty list.
-    """
-    client = app_client
+    """An unrelated tenant probing a private capability must not get 200 + empty list."""
+    harness, client = app_client
     suffix = uuid.uuid4().hex[:8]
 
-    a_tid, _a_actor, _a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-priv-a-{suffix}")
-    _b_tid, _b_actor, b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-priv-b-{suffix}")
+    persona_a, a_tid, _a_actor = await _make_persona(harness, client, f"ann-priv-a-{suffix}", ["producer", "admin"])
+    persona_b, _b_tid, _b_actor = await _make_persona(harness, client, f"ann-priv-b-{suffix}", ["consumer"])
 
-    # Tenant A creates a PRIVATE capability — Tenant B has no visibility.
     cap_id = await _seed_capability(
         pg_container,
         tenant_id=a_tid,
@@ -416,17 +370,16 @@ async def test_list_annotations_returns_404_for_private_capability_from_unrelate
         visibility=VISIBILITY_PRIVATE,
     )
 
-    resp = await client.get(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {b_token}"},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.get(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
 
-    # The fix's principle: an unauthorized list must not return a 200 envelope
-    # that distinguishes "exists" from "doesn't". Any of 403 / 404 / 500 is an
-    # acceptable replacement for the leak; the assertion below rejects only the
-    # vulnerable shape.
     assert resp.status_code != 200, (
-        f"private-capability list leaked existence as 200 from unrelated tenant; " f"response={resp.text}"
+        f"private-capability list leaked existence as 200 from unrelated tenant; "
+        f"response={resp.text}"
     )
 
 
@@ -436,23 +389,14 @@ async def test_list_annotations_returns_404_for_private_capability_from_unrelate
 
 
 @pytest.mark.asyncio
-async def test_list_annotations_p95_latency(pg_container: str, app_client) -> None:
-    """Provider GET p95 latency must be below 200 ms at 1,000 seeded annotations.
-
-    Annotations are seeded via direct SQL INSERT (not via POST) to avoid paying
-    the HTTP overhead of 1,000 round-trips. Ten GET requests are timed using
-    time.perf_counter; p95 is computed as sorted(times)[ceil(n*0.95)-1].
-
-    Set SKIP_LATENCY_TESTS=1 to record timing but defer the assertion, allowing
-    resource-constrained CI environments to validate the test structure without
-    failing on flaky timing.
-    """
-    client = app_client
+async def test_list_annotations_p95_latency(pg_container: str, app_client: _AppClient) -> None:
+    """Provider GET p95 latency must be below 200 ms at 1,000 seeded annotations."""
+    harness, client = app_client
     suffix = uuid.uuid4().hex[:8]
     skip_assertion = os.environ.get("SKIP_LATENCY_TESTS", "").strip() == "1"
 
-    a_tid, a_actor, a_token = await _seed_tenant_with_token(pg_container, slug=f"ann-lat-a-{suffix}")
-    b_tid, b_actor, _b_token = await _seed_tenant_with_token(pg_container, slug=f"ann-lat-b-{suffix}")
+    persona_a, a_tid, a_actor = await _make_persona(harness, client, f"ann-lat-a-{suffix}", ["producer", "admin"])
+    persona_b, b_tid, b_actor = await _make_persona(harness, client, f"ann-lat-b-{suffix}", ["consumer"])
 
     cap_id = await _seed_capability(
         pg_container,
@@ -461,7 +405,6 @@ async def test_list_annotations_p95_latency(pg_container: str, app_client) -> No
         visibility=VISIBILITY_PUBLIC,
     )
 
-    # Bulk-seed 1,000 annotations via direct SQL.
     await _seed_annotation_rows(
         pg_container,
         capability_id=cap_id,
@@ -471,28 +414,31 @@ async def test_list_annotations_p95_latency(pg_container: str, app_client) -> No
         count=1000,
     )
 
-    # Warm-up: one un-timed request to prime connection pool + query plan cache.
-    warmup = await client.get(
-        f"/v1/capabilities/{cap_id}/annotations",
-        headers={"Authorization": f"Bearer {a_token}"},
-    )
+    # Warm-up.
+    harness.configure_fetcher_for(persona_a)
+    with patch_validator_for_actor(persona_a):
+        warmup = await client.get(
+            f"/v1/capabilities/{cap_id}/annotations",
+            headers=bearer_headers(tenant_slug=persona_a.slug),
+        )
     assert warmup.status_code == 200, warmup.text
 
-    # Timed loop: 10 requests, measure wall-clock duration per request.
+    # Timed loop: 10 requests.
     times: list[float] = []
     for _ in range(10):
-        t0 = time.perf_counter()
-        resp = await client.get(
-            f"/v1/capabilities/{cap_id}/annotations",
-            headers={"Authorization": f"Bearer {a_token}"},
-        )
-        elapsed = time.perf_counter() - t0
+        harness.configure_fetcher_for(persona_a)
+        with patch_validator_for_actor(persona_a):
+            t0 = time.perf_counter()
+            resp = await client.get(
+                f"/v1/capabilities/{cap_id}/annotations",
+                headers=bearer_headers(tenant_slug=persona_a.slug),
+            )
+            elapsed = time.perf_counter() - t0
         assert resp.status_code == 200, resp.text
         times.append(elapsed)
 
     n = len(times)
     sorted_times = sorted(times)
-    # 95th percentile index (1-based → 0-based): ceil(n*0.95) - 1.
     p95_index = max(0, int(n * 0.95) - 1)
     p95 = sorted_times[p95_index]
 
