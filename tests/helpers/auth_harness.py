@@ -190,17 +190,27 @@ def patch_validator_for_actor(
     """Patch ``validate_oidc_token`` to return ``persona``'s identity
     instead of decoding the Authorization header.
 
-    The middleware module imports the function by name, so we patch on
-    the middleware module — patching at the source module would be a
-    no-op for the imported reference.
+    Two patch sites are needed because the function is referenced two
+    different ways:
+
+    1. ``registry.api.middleware.tenant`` imports the symbol at module
+       load time (``from … import validate_oidc_token``), so the HTTP
+       middleware holds its own bound reference. Patching the source
+       module wouldn't reach this reference.
+    2. ``registry.api.routers.mcp._resolve_tenant`` imports the symbol
+       lazily *inside* the function (to avoid a circular import), so it
+       reads ``registry.api.auth.oidc.validate_oidc_token`` at call
+       time. Patching the middleware module wouldn't reach this site.
+
+    Patching both keeps the harness usable from both transports.
     """
+    from registry.api.auth import oidc as oidc_module
     from registry.api.middleware import tenant as middleware
 
     claims = {"sub": persona.oidc_subject, "iat": iat, "exp": exp}
-    with patch.object(
-        middleware,
-        "validate_oidc_token",
-        AsyncMock(return_value=(claims, persona.oidc_subject)),
+    mock = AsyncMock(return_value=(claims, persona.oidc_subject))
+    with patch.object(middleware, "validate_oidc_token", mock), patch.object(
+        oidc_module, "validate_oidc_token", mock
     ):
         yield
 
