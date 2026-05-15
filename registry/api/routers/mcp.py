@@ -12,14 +12,13 @@ no separate process.
 
 Auth design
 -----------
-FastMCP tool handlers do not run inside FastAPI's Depends machinery.  The
-Bearer token is therefore extracted from the raw ASGI scope that the SSE
-transport passes to the ``handle_sse`` closure.  The scope is threaded
-into each tool call via a per-request token holder that is written by the
-SSE handler before delegating to the MCP server.  This re-uses
-``registry.api.auth.tokens.validate_token`` directly and is semantically
-identical to the REST middleware — the same hash, the same DB check, the
-same ``TenantContext`` shape.
+FastMCP tool handlers do not run inside FastAPI's Depends machinery. The
+Bearer token would normally be extracted from the raw ASGI scope and
+threaded into each tool call via a per-request token holder. The
+entitlement-auth rewrite removed the legacy bearer validator, so the
+MCP path is currently stubbed (see ``_resolve_tenant`` below). A
+follow-up will rewire MCP through the entitlement-resolved auth
+pipeline.
 
 Transport
 ---------
@@ -1183,10 +1182,11 @@ def create_mcp_app(server: FastMCP) -> ASGIApp:
         POST /mcp/messages/  — client→server JSON-RPC messages
 
     Auth: the Bearer token is extracted from the SSE request headers and
-    stored in a ContextVar before handing off to the MCP server.  Each tool
-    call reads the ContextVar and validates it via ``tokens.validate_token``.
-    FastAPI Depends is not available inside FastMCP tool handlers, so this
-    ContextVar shim is the equivalent of the REST middleware.
+    stored in a ContextVar before handing off to the MCP server. Each
+    tool call would normally read the ContextVar and resolve it through
+    the entitlement-resolved auth path. The legacy bearer validator was
+    removed; MCP authentication is currently stubbed pending a follow-up
+    rewire.
     """
     sse_transport = SseServerTransport("/messages/")
 

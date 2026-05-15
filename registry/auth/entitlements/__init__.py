@@ -1,1 +1,1 @@
-"""RSAM authority parsing sub-package."""
+"""Entitlement-service-resolved authorization sub-package."""

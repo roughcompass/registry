@@ -1,7 +1,7 @@
 """Re-export shim for the admin router split.
 
 The admin surface was split into focused per-domain modules:
-  admin_tokens.py    — token mint/revoke
+  admin_pii.py       — PII patterns + field policies
   admin_sync.py      — sync-source CRUD + sync-run history
   admin_vocab.py     — vocabulary + capability-type schemas
   admin_audit.py     — audit log query

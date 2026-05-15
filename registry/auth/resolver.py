@@ -29,7 +29,7 @@ class AuditIdentity:
     """Caller identity recorded in every audit log entry.
 
     `email` is optional: deployments backed by identity providers that do not
-    surface email addresses (e.g. RSAM-only auth modes) record `None` explicitly
+    surface email addresses (e.g. entitlement-service-only deployments) record `None` explicitly
     so the gap is visible in the audit log rather than silently filled.
 
     `preferred_username` always falls back to `sub` when the identity provider
@@ -47,7 +47,7 @@ class TenantGrant:
 
     `tenant_id` is the catalog-internal UUID (the row in the `tenants` table).
     `tenant_external_id` is the stable external identifier used by the
-    originating identity system (e.g. the SEAL ID for RSAM deployments).
+    originating identity system (e.g. the LDAP slug for entitlement-resolved deployments).
     `catalog_role` is one of the roles enumerated in `role_mappings`
     (admin | producer | auditor | viewer).
     """

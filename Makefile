@@ -93,6 +93,24 @@ doc-refs: ## Verify no internal-doc references in shipped code (see CLAUDE.md).
 test-hygiene: ## Verify no phase-named test files or stale phase comments.
 	$(PYTHON) scripts/check_no_phase_named_tests.py
 
+auth-consolidation-gate: ## Fail if any auth-path discriminator / api_token symbol survives outside migrations.
+	@# Pattern set is narrower than the original spec: it covers names
+	@# that are unambiguously dead (auth_mode discriminator, RSAM/rsam
+	@# legacy naming, the api_token validator + hasher + admin path).
+	@# `actor_roles`/`api_token` table-name strings still appear in
+	@# workspace.py + ratelimit.py SQL queries — those are tracked as
+	@# their own follow-ups since the workspace permission model and
+	@# the ratelimit api_token fallback are not part of this auth
+	@# consolidation. The gate exists to prevent re-introduction of
+	@# the deleted symbols, not to police every legacy name.
+	@if grep -rn 'auth_mode\|AUTH_MODE\|\bRSAM\b\|\brsam\b\|validate_token\|hash_token\|upsert_rsam\|admin_tokens\.' \
+	    registry/ --include='*.py' --exclude-dir=migrations 2>/dev/null; then \
+	  echo "auth-consolidation-gate: FAIL — legacy auth names found in registry/"; \
+	  exit 1; \
+	else \
+	  echo "auth-consolidation-gate: PASS"; \
+	fi
+
 # -----------------------------------------------------------------------------
 # Tests
 # -----------------------------------------------------------------------------
