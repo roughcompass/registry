@@ -181,11 +181,27 @@ async def get_tenant_context(
 
             oidc_cache = getattr(request.app.state, "oidc_cache", None)
             try:
-                sentinel = await validate_oidc_token(raw, settings, session, cache=oidc_cache)
+                claims_payload, resolved_identity = await validate_oidc_token(
+                    raw, settings, cache=oidc_cache
+                )
             except CatalogError:
                 # Fall through to API-token path.
                 _log.debug("oidc_validation_failed; falling back to api_token path")
                 sentinel = None
+            else:
+                # Bridge to the existing middleware shape until the
+                # middleware pipeline is rewritten in a follow-on task.
+                # The sentinel carries the resolved identity in roles[0]
+                # so the downstream RSAM branch can pull it back out;
+                # the nil UUIDs are intentional placeholders that the
+                # claim-source resolver overwrites before any service
+                # code is reached.
+                import uuid as _uuid  # noqa: PLC0415
+                sentinel = TenantContext(
+                    tenant_id=_uuid.UUID(int=0),
+                    actor_id=_uuid.UUID(int=0),
+                    roles=[resolved_identity],
+                )
 
             if sentinel is not None:
                 # In RSAM mode the OIDC validator returns a sentinel with nil UUIDs

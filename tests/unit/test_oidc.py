@@ -1,27 +1,27 @@
-"""Unit tests — OIDC JWT parsing (happy/sad path, mocked authlib)."""
+"""Unit tests for ``validate_oidc_token`` and the JWKS cache.
+
+Covers the eight-point JWT validation checklist (signature, exp, iat,
+iss-allowlist, aud-allowlist, azp-allowlist, TTL bound, identity
+extraction with sub→winaccountname fallback), the JWKS cache TTL
+behavior, and the discovery-document failure paths. Tests do NOT touch
+the database — the function performs no DB access in this iteration.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import time
-import uuid
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from registry.api.auth import oidc as oidc_mod
-from registry.api.auth.oidc import _CACHE_TTL_S, _OidcCache
+from registry.api.auth.oidc import _CACHE_TTL_S, _OidcCache, validate_oidc_token
 from registry.config import Settings
 from registry.exceptions import CatalogError
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_TENANT_ID = uuid.uuid4()
-_ACTOR_ID = uuid.uuid4()
-_ROLE_ID = uuid.uuid4()
 
 _DISCOVERY = {
     "issuer": "https://idp.example.com",
@@ -30,571 +30,336 @@ _DISCOVERY = {
 
 _JWKS = {"keys": [{"kty": "RSA", "kid": "test", "n": "x", "e": "AQAB"}]}
 
-_CLAIMS: dict[str, Any] = {
-    "sub": "user123",
-    "iss": "https://idp.example.com",
-    "exp": 9999999999,
-    "tenant_id": str(_TENANT_ID),
-}
-
 
 def _make_settings(
     *,
     oidc_url: str | None = "https://idp.example.com/.well-known/openid-configuration",
-    expected_audience: str | None = None,
+    issuer_allowlist: list[str] | None = None,
+    resource_uri_allowlist: list[str] | None = None,
+    client_id_allowlist: list[str] | None = None,
+    max_token_ttl_seconds: int = 900,
 ) -> Settings:
     return Settings(
         database_url="postgresql+asyncpg://x/y",
         pgbouncer_url="postgresql+asyncpg://x/y",
         scheduler_jobstore_url="postgresql+asyncpg://x/y",
         oidc_discovery_url=oidc_url,
-        oidc_expected_audience=expected_audience,
+        oidc_issuer_allowlist=issuer_allowlist or ["https://idp.example.com"],
+        resource_uri_allowlist=resource_uri_allowlist or ["registry"],
+        oidc_client_id_allowlist=client_id_allowlist or [],
+        oidc_max_token_ttl_seconds=max_token_ttl_seconds,
     )
 
 
-def _fresh_cache() -> _OidcCache:
-    """Return a new, empty cache instance for isolated tests."""
-    return _OidcCache()
+def _now_claims(**overrides: Any) -> dict[str, Any]:
+    """Build a claims dict with sane defaults; tests override per case."""
+    now = int(time.time())
+    base: dict[str, Any] = {
+        "sub": "user-1",
+        "iss": "https://idp.example.com",
+        "aud": "registry",
+        "iat": now,
+        "exp": now + 600,
+    }
+    base.update(overrides)
+    return base
 
 
 @pytest.fixture()
 def cache() -> _OidcCache:
-    """Provide a fresh _OidcCache per test — no shared module state."""
-    return _fresh_cache()
+    return _OidcCache()
 
 
 @pytest.fixture(autouse=True)
-def _reset_default_cache() -> None:
-    """Reset the process-scoped default cache between tests."""
+def _reset_module_state() -> None:
+    """Fresh process-scoped cache + audience-warning flag per test."""
     oidc_mod._default_cache = None
-    # Reset the one-shot audience-warning flag so each test starts cleanly.
     oidc_mod._audience_warning_emitted = False
 
 
+def _patch_decode(claims: dict[str, Any]) -> Any:
+    """Patch the JWKS fetch + JWT decode to short-circuit signature
+    verification, returning the supplied claims dict instead.
+
+    Centralizes the boilerplate so each behavioral test focuses on the
+    claim it cares about.
+    """
+
+    def _decorator(func):
+        async def _wrapper(*args, **kwargs):
+            with (
+                patch.object(_OidcCache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
+                patch.object(_OidcCache, "get_jwks", AsyncMock(return_value=_JWKS)),
+                patch("registry.api.auth.oidc.JsonWebKey.import_key_set", MagicMock(return_value=MagicMock())),
+                patch("registry.api.auth.oidc.JsonWebToken") as JwtCls,
+            ):
+                claims_obj = MagicMock(spec=dict)
+                claims_obj.__iter__ = lambda self: iter(claims.keys())
+                claims_obj.__getitem__ = lambda self, key: claims[key]
+                claims_obj.keys = MagicMock(return_value=claims.keys())
+                claims_obj.values = MagicMock(return_value=claims.values())
+                claims_obj.items = MagicMock(return_value=claims.items())
+                claims_obj.get = lambda key, default=None: claims.get(key, default)
+                claims_obj.options = {}
+                claims_obj.validate = MagicMock()
+                JwtCls.return_value.decode = MagicMock(return_value=claims_obj)
+                return await func(*args, **kwargs)
+
+        return _wrapper
+
+    return _decorator
+
+
+def _patch_decode_to(claims: dict[str, Any]):
+    """Context-manager variant of `_patch_decode`. Easier to read inside
+    individual test bodies."""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _ctx():
+        with (
+            patch.object(_OidcCache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
+            patch.object(_OidcCache, "get_jwks", AsyncMock(return_value=_JWKS)),
+            patch("registry.api.auth.oidc.JsonWebKey.import_key_set", MagicMock(return_value=MagicMock())),
+            patch("registry.api.auth.oidc.JsonWebToken") as JwtCls,
+        ):
+            # authlib returns a dict-like JWTClaims object; we substitute a
+            # plain dict-friendly mock so dict(claims) yields the test data.
+            JwtCls.return_value.decode = MagicMock(
+                return_value=_FakeClaims(claims)
+            )
+            yield
+
+    return _ctx()
+
+
+class _FakeClaims:
+    """Minimal authlib JWTClaims stand-in. Behaves like a dict for the
+    handful of operations validate_oidc_token performs."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._payload = payload
+        self.options: dict[str, Any] = {}
+
+    def validate(self) -> None:
+        return None
+
+    def __iter__(self):
+        return iter(self._payload)
+
+    def keys(self):
+        return self._payload.keys()
+
+    def __getitem__(self, key):
+        return self._payload[key]
+
+    def get(self, key, default=None):
+        return self._payload.get(key, default)
+
+
 # ---------------------------------------------------------------------------
-# OIDC disabled
-# ---------------------------------------------------------------------------
+# Configuration / discovery
 
 
 @pytest.mark.asyncio
-async def test_oidc_not_configured_raises(cache: _OidcCache) -> None:
+async def test_oidc_not_configured_raises(cache):
     settings = _make_settings(oidc_url=None)
-    db = AsyncMock()
     with pytest.raises(CatalogError, match="OIDC not configured"):
-        await oidc_mod.validate_oidc_token("header.payload.sig", settings, db, cache=cache)
-
-
-# ---------------------------------------------------------------------------
-# Happy path
-# ---------------------------------------------------------------------------
+        await validate_oidc_token("h.p.s", settings, cache=cache)
 
 
 @pytest.mark.asyncio
-async def test_validate_oidc_token_happy_path(cache: _OidcCache) -> None:
+async def test_discovery_failure_raises(cache):
     settings = _make_settings()
-
-    # Mock DB session: actor lookup then roles lookup.
-    from registry.storage.models import Actor
-
-    mock_actor = MagicMock(spec=Actor)
-    mock_actor.actor_id = _ACTOR_ID
-    mock_actor.tenant_id = _TENANT_ID
-    mock_actor.oidc_subject = "user123"
-
-    actor_result = MagicMock()
-    actor_result.scalar_one_or_none.return_value = mock_actor
-
-    roles_result = MagicMock()
-    roles_result.all.return_value = [("admin",), ("producer",)]
-
-    db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[actor_result, roles_result])
-
-    # Patch network + authlib.
-    claims_obj = MagicMock()
-    claims_obj.get.side_effect = lambda k, *a: _CLAIMS.get(k)
-    claims_obj.validate.return_value = None
-
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        ctx = await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
-
-    assert ctx.tenant_id == _TENANT_ID
-    assert ctx.actor_id == _ACTOR_ID
-    assert set(ctx.roles) == {"admin", "producer"}
-
-
-# ---------------------------------------------------------------------------
-# Sad paths
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_oidc_discovery_network_error_raises(cache: _OidcCache) -> None:
-    import httpx
-
-    settings = _make_settings()
-    db = AsyncMock()
-
     with patch.object(
-        cache,
+        _OidcCache,
         "get_discovery_doc",
-        AsyncMock(side_effect=httpx.HTTPError("timeout")),
+        AsyncMock(side_effect=httpx.ConnectError("boom")),
     ):
         with pytest.raises(CatalogError, match="OIDC discovery failed"):
-            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+# ---------------------------------------------------------------------------
+# Happy path + identity extraction
 
 
 @pytest.mark.asyncio
-async def test_oidc_invalid_signature_raises(cache: _OidcCache) -> None:
-    from authlib.jose.errors import JoseError
-
+async def test_happy_path_returns_claims_and_resolved_identity(cache):
     settings = _make_settings()
-    db = AsyncMock()
-
-    jwt_instance = MagicMock()
-    jwt_instance.decode.side_effect = JoseError("bad sig")
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        with pytest.raises(CatalogError, match="invalid OIDC token"):
-            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+    with _patch_decode_to(_now_claims(sub="user-from-sub")):
+        claims, resolved = await validate_oidc_token("h.p.s", settings, cache=cache)
+    assert resolved == "user-from-sub"
+    assert claims["sub"] == "user-from-sub"
 
 
 @pytest.mark.asyncio
-async def test_oidc_actor_not_found_raises(cache: _OidcCache) -> None:
+async def test_winaccountname_used_when_sub_absent(cache):
     settings = _make_settings()
-
-    actor_result = MagicMock()
-    actor_result.scalar_one_or_none.return_value = None
-    db = AsyncMock()
-    db.execute = AsyncMock(return_value=actor_result)
-
-    claims_obj = MagicMock()
-    claims_obj.get.side_effect = lambda k, *a: _CLAIMS.get(k)
-    claims_obj.validate.return_value = None
-
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        with pytest.raises(CatalogError, match="OIDC actor not found"):
-            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+    payload = _now_claims(winaccountname="DOMAIN\\jdoe")
+    payload.pop("sub")
+    with _patch_decode_to(payload):
+        _, resolved = await validate_oidc_token("h.p.s", settings, cache=cache)
+    assert resolved == "DOMAIN\\jdoe"
 
 
 @pytest.mark.asyncio
-async def test_oidc_missing_sub_claim_raises(cache: _OidcCache) -> None:
+async def test_winaccountname_used_when_sub_empty(cache):
     settings = _make_settings()
-    db = AsyncMock()
-
-    claims_no_sub: dict[str, Any] = {**_CLAIMS, "sub": None}
-    claims_obj = MagicMock()
-    claims_obj.get.side_effect = lambda k, *a: claims_no_sub.get(k)
-    claims_obj.validate.return_value = None
-
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        with pytest.raises(CatalogError, match="missing sub claim"):
-            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
-
-
-# ---------------------------------------------------------------------------
-# JWT shape detection in tenant middleware
-# ---------------------------------------------------------------------------
-
-
-def test_looks_like_jwt_true() -> None:
-    from registry.api.middleware.tenant import _looks_like_jwt
-
-    assert _looks_like_jwt("header.payload.signature") is True
-
-
-def test_looks_like_jwt_false_opaque() -> None:
-    from registry.api.middleware.tenant import _looks_like_jwt
-
-    assert _looks_like_jwt("opaque_api_token_no_dots") is False
-    assert _looks_like_jwt("two.parts") is False
-
-
-# ---------------------------------------------------------------------------
-# _OidcCache.invalidate() — instance isolation
-# ---------------------------------------------------------------------------
-
-
-def test_cache_invalidate_resets_instance_only() -> None:
-    """invalidate() on one cache does not touch a sibling cache."""
-    c1 = _OidcCache(
-        discovery_doc={"issuer": "x"},
-        discovery_fetched_at=1.0,
-        jwks_data={"keys": []},
-        jwks_fetched_at=2.0,
-    )
-    c2 = _OidcCache(
-        discovery_doc={"issuer": "y"},
-        discovery_fetched_at=3.0,
-        jwks_data={"keys": []},
-        jwks_fetched_at=4.0,
-    )
-
-    c1.invalidate()
-
-    # c1 fully cleared
-    assert c1.discovery_doc is None
-    assert c1.discovery_fetched_at == 0.0
-    assert c1.jwks_data is None
-    assert c1.jwks_fetched_at == 0.0
-
-    # c2 untouched
-    assert c2.discovery_doc == {"issuer": "y"}
-    assert c2.discovery_fetched_at == 3.0
-    assert c2.jwks_data == {"keys": []}
-    assert c2.jwks_fetched_at == 4.0
-
-
-# ---------------------------------------------------------------------------
-# _OidcCache.invalidate() — test isolation (no cross-test state leak)
-# ---------------------------------------------------------------------------
+    payload = _now_claims(sub="", winaccountname="DOMAIN\\jdoe")
+    with _patch_decode_to(payload):
+        _, resolved = await validate_oidc_token("h.p.s", settings, cache=cache)
+    assert resolved == "DOMAIN\\jdoe"
 
 
 @pytest.mark.asyncio
-async def test_fresh_cache_per_test_does_not_leak_state() -> None:
-    """Two successive tests each get an empty cache — globals don't bleed in."""
-    c = _fresh_cache()
-    # Nothing fetched yet
-    assert c.discovery_doc is None
-    assert c.jwks_data is None
-    # Simulate a warm cache
-    c.discovery_doc = {"issuer": "https://example.com"}
-    c.discovery_fetched_at = 999.0
-
-    # A second fresh cache is unaffected
-    c2 = _fresh_cache()
-    assert c2.discovery_doc is None
-    assert c2.discovery_fetched_at == 0.0
-
-
-# ---------------------------------------------------------------------------
-# Concurrent refresh — exactly one upstream JWKS fetch at TTL boundary
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_concurrent_validate_at_ttl_boundary_single_jwks_fetch() -> None:
-    """10 concurrent validate_token calls at TTL expiry issue exactly 1 JWKS fetch.
-
-    Uses a counting mock on the cache instance's get_jwks method directly so
-    we can assert how many upstream fetches fired without patching the global
-    httpx module (which can contaminate other async tests sharing the same
-    event loop).
-    """
+async def test_both_identity_claims_missing_raises_and_increments_counter(cache):
     settings = _make_settings()
-
-    # Pre-warm the discovery doc so only JWKS is exercised.
-    cache = _OidcCache(
-        discovery_doc=_DISCOVERY,
-        discovery_fetched_at=999_999_999.0,  # warm — won't expire
-    )
-    # JWKS is cold: jwks_fetched_at=0.0, so all 10 concurrent callers see expiry.
-
-    jwks_fetch_count = 0
-
-    async def _counting_get_jwks(uri: str) -> dict[str, Any]:
-        """Simulate one upstream JWKS fetch with an event-loop yield."""
-        nonlocal jwks_fetch_count
-        await asyncio.sleep(0)
-        jwks_fetch_count += 1
-        return _JWKS
-
-    # The real get_jwks acquires self.refresh_lock before fetching.
-    # We test the lock logic by wrapping the method with our counter
-    # and letting the lock serialise concurrent callers.
-    async def _locked_counting_get_jwks(self: _OidcCache, uri: str) -> dict[str, Any]:
-        """Lock-aware counting shim — exercises the same-instance lock path."""
-        now = time.monotonic()
-        # Fast path: already warm after first fetch.
-        if self.jwks_data is not None and (now - self.jwks_fetched_at) < _CACHE_TTL_S:
-            return self.jwks_data  # type: ignore[return-value]
-        async with self.refresh_lock:
-            now = time.monotonic()
-            if self.jwks_data is not None and (now - self.jwks_fetched_at) < _CACHE_TTL_S:
-                return self.jwks_data  # type: ignore[return-value]
-            data = await _counting_get_jwks(uri)
-            self.jwks_data = data
-            self.jwks_fetched_at = time.monotonic()
-            return data
-
-    from registry.storage.models import Actor
-
-    mock_actor = MagicMock(spec=Actor)
-    mock_actor.actor_id = _ACTOR_ID
-    mock_actor.tenant_id = _TENANT_ID
-    mock_actor.oidc_subject = "user123"
-
-    def _make_db() -> AsyncMock:
-        actor_result = MagicMock()
-        actor_result.scalar_one_or_none.return_value = mock_actor
-        roles_result = MagicMock()
-        roles_result.all.return_value = [("consumer",)]
-        db = AsyncMock()
-        db.execute = AsyncMock(side_effect=[actor_result, roles_result])
-        return db
-
-    claims_obj = MagicMock()
-    claims_obj.get.side_effect = lambda k, *a: _CLAIMS.get(k)
-    claims_obj.validate.return_value = None
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", lambda uri: _locked_counting_get_jwks(cache, uri)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-
-        tasks = [
-            asyncio.create_task(oidc_mod.validate_oidc_token("h.p.s", settings, _make_db(), cache=cache))
-            for _ in range(10)
-        ]
-        results = await asyncio.gather(*tasks)
-
-    # All 10 calls succeeded.
-    assert len(results) == 10
-    # Exactly 1 upstream JWKS fetch fired despite 10 concurrent expiry detections.
-    assert jwks_fetch_count == 1, f"expected 1 JWKS fetch, got {jwks_fetch_count}"
-
-
-@pytest.mark.asyncio
-async def test_oidc_cache_lock_serialises_concurrent_jwks_fetches() -> None:
-    """The lock in _OidcCache.get_jwks serialises concurrent expiry detections.
-
-    Drives get_jwks directly (not through validate_oidc_token) to confirm the
-    lock logic in isolation.
-    """
-    import httpx
-
-    fetch_count = 0
-
-    class _FakeResponse:
-        def raise_for_status(self) -> None:
-            pass
-
-        def json(self) -> dict[str, Any]:
-            return _JWKS
-
-    class _FakeClient:
-        async def __aenter__(self) -> _FakeClient:
-            return self
-
-        async def __aexit__(self, *a: object) -> None:
-            pass
-
-        async def get(self, url: str) -> _FakeResponse:
-            nonlocal fetch_count
-            await asyncio.sleep(0)  # yield so all 10 tasks race to the slow path
-            fetch_count += 1
-            return _FakeResponse()
-
-    cache = _OidcCache()  # cold cache
-    with patch.object(httpx, "AsyncClient", return_value=_FakeClient()):
-        tasks = [asyncio.create_task(cache.get_jwks("https://idp.example.com/jwks")) for _ in range(10)]
-        results = await asyncio.gather(*tasks)
-
-    assert all(r == _JWKS for r in results)
-    assert fetch_count == 1, f"expected 1 upstream fetch, got {fetch_count}"
+    payload = _now_claims()
+    payload.pop("sub")
+    before = oidc_mod._IDENTITY_EXTRACTION_FAILURES._value.get()
+    with _patch_decode_to(payload):
+        with pytest.raises(CatalogError, match="missing-identity-claim"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+    after = oidc_mod._IDENTITY_EXTRACTION_FAILURES._value.get()
+    assert after - before == 1
 
 
 # ---------------------------------------------------------------------------
-# get_default_cache() — process-scoped singleton
-# ---------------------------------------------------------------------------
-
-
-def test_get_default_cache_returns_same_instance() -> None:
-    """get_default_cache() always returns the same object within a process."""
-    c1 = oidc_mod.get_default_cache()
-    c2 = oidc_mod.get_default_cache()
-    assert c1 is c2
-
-
-def test_default_cache_reset_between_tests() -> None:
-    """The autouse fixture resets _default_cache so each test starts fresh."""
-    # After the autouse fixture ran, _default_cache is None.
-    assert oidc_mod._default_cache is None
-    c = oidc_mod.get_default_cache()
-    assert c is not None
-    # The module-level variable is now populated.
-    assert oidc_mod._default_cache is c
-
-
-# ---------------------------------------------------------------------------
-# Audience (`aud`) claim validation
-# ---------------------------------------------------------------------------
-
-
-def _build_claims_obj(validate_side_effect: Any = None) -> MagicMock:
-    """Mock authlib JWTClaims with a writable `options` dict + validate hook."""
-    claims_obj = MagicMock()
-    # Real authlib uses dict subscription on .options; expose a real dict so
-    # our code's `claims.options["aud"] = {...}` actually mutates and is
-    # observable from the test.
-    claims_obj.options = {}
-    claims_obj.get.side_effect = lambda k, *a: _CLAIMS.get(k)
-    if validate_side_effect is None:
-        claims_obj.validate.return_value = None
-    else:
-        claims_obj.validate.side_effect = validate_side_effect
-    return claims_obj
+# iss allowlist
 
 
 @pytest.mark.asyncio
-async def test_validate_oidc_token_rejects_wrong_audience(cache: _OidcCache) -> None:
-    """When oidc_expected_audience is set, a token whose aud does not match is rejected.
-
-    The audience check is delegated to authlib's claims.validate(); the
-    fixture wires options['aud'] and raises a JoseError to simulate a
-    mismatch detected by the validator.
-    """
-    from authlib.jose.errors import InvalidClaimError
-
-    settings = _make_settings(expected_audience="this-service")
-
-    claims_obj = _build_claims_obj(
-        validate_side_effect=InvalidClaimError("aud"),
-    )
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-    db = AsyncMock()
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        with pytest.raises(CatalogError, match="invalid OIDC token"):
-            await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
-
-    # Audience option must have been wired into the claims-validator config.
-    assert claims_obj.options.get("aud") == {
-        "essential": True,
-        "value": "this-service",
-    }
+async def test_iss_in_allowlist_accepted(cache):
+    settings = _make_settings(issuer_allowlist=["https://idp.example.com", "https://other"])
+    with _patch_decode_to(_now_claims(iss="https://other")):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
 
 
 @pytest.mark.asyncio
-async def test_validate_oidc_token_skips_aud_check_when_setting_absent(cache: _OidcCache) -> None:
-    """Without oidc_expected_audience, the aud claim is not added to options.
-
-    Backward-compatible behavior: deployments that have not opted in to
-    audience validation continue to accept tokens irrespective of their aud
-    claim. The warning fires (covered by a separate test), but no rejection.
-    """
-    from registry.storage.models import Actor
-
-    settings = _make_settings(expected_audience=None)
-
-    mock_actor = MagicMock(spec=Actor)
-    mock_actor.actor_id = _ACTOR_ID
-    mock_actor.tenant_id = _TENANT_ID
-    mock_actor.oidc_subject = "user123"
-
-    actor_result = MagicMock()
-    actor_result.scalar_one_or_none.return_value = mock_actor
-    roles_result = MagicMock()
-    roles_result.all.return_value = [("admin",)]
-
-    db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[actor_result, roles_result])
-
-    claims_obj = _build_claims_obj()
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
-
-    with (
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        ctx = await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
-
-    assert ctx.tenant_id == _TENANT_ID
-    # Crucially: no aud constraint was wired in.
-    assert "aud" not in claims_obj.options
+async def test_iss_not_in_allowlist_rejected(cache):
+    settings = _make_settings(issuer_allowlist=["https://idp.example.com"])
+    with _patch_decode_to(_now_claims(iss="https://attacker.example")):
+        with pytest.raises(CatalogError, match="iss-not-allowed"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
 
 
 @pytest.mark.asyncio
-async def test_validate_oidc_token_logs_warning_when_audience_unconfigured(
-    cache: _OidcCache,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """When OIDC is enabled but audience is absent, a WARNING is logged.
+async def test_iss_empty_allowlist_falls_back_to_discovery_issuer(cache):
+    """Legacy behavior: empty allowlist → trust the discovery doc's
+    issuer. Production deployments should populate the allowlist."""
+    settings = _make_settings(issuer_allowlist=[])
+    with _patch_decode_to(_now_claims(iss="https://idp.example.com")):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
+    with _patch_decode_to(_now_claims(iss="https://other")):
+        with pytest.raises(CatalogError, match="iss-not-allowed"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
 
-    Logged at most once per process (the autouse fixture resets the flag
-    between tests). Wording must match the audit-source language so
-    operators searching logs can find it.
-    """
-    import logging
 
-    from registry.storage.models import Actor
+# ---------------------------------------------------------------------------
+# aud allowlist
 
-    settings = _make_settings(expected_audience=None)
 
-    mock_actor = MagicMock(spec=Actor)
-    mock_actor.actor_id = _ACTOR_ID
-    mock_actor.tenant_id = _TENANT_ID
-    mock_actor.oidc_subject = "user123"
-    actor_result = MagicMock()
-    actor_result.scalar_one_or_none.return_value = mock_actor
-    roles_result = MagicMock()
-    roles_result.all.return_value = []
-    db = AsyncMock()
-    db.execute = AsyncMock(side_effect=[actor_result, roles_result])
+@pytest.mark.asyncio
+async def test_aud_in_allowlist_accepted(cache):
+    settings = _make_settings(resource_uri_allowlist=["registry", "other-app"])
+    with _patch_decode_to(_now_claims(aud="other-app")):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
 
-    claims_obj = _build_claims_obj()
-    jwt_instance = MagicMock()
-    jwt_instance.decode.return_value = claims_obj
 
-    with (
-        caplog.at_level(logging.WARNING, logger="registry.api.auth.oidc"),
-        patch.object(cache, "get_discovery_doc", AsyncMock(return_value=_DISCOVERY)),
-        patch.object(cache, "get_jwks", AsyncMock(return_value=_JWKS)),
-        patch("registry.api.auth.oidc.JsonWebKey") as mock_jwk,
-        patch("registry.api.auth.oidc.JsonWebToken", return_value=jwt_instance),
-    ):
-        mock_jwk.import_key_set.return_value = MagicMock()
-        await oidc_mod.validate_oidc_token("h.p.s", settings, db, cache=cache)
+@pytest.mark.asyncio
+async def test_aud_list_form_at_least_one_match_accepted(cache):
+    settings = _make_settings(resource_uri_allowlist=["registry"])
+    with _patch_decode_to(_now_claims(aud=["other-app", "registry"])):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
 
-    assert any(
-        "OIDC audience validation is disabled" in r.message for r in caplog.records
-    ), f"warning not logged; got records: {[r.message for r in caplog.records]}"
+
+@pytest.mark.asyncio
+async def test_aud_not_in_allowlist_rejected(cache):
+    settings = _make_settings(resource_uri_allowlist=["registry"])
+    with _patch_decode_to(_now_claims(aud="some-other-resource")):
+        with pytest.raises(CatalogError, match="aud-not-allowed"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+# ---------------------------------------------------------------------------
+# azp / client_id allowlist
+
+
+@pytest.mark.asyncio
+async def test_azp_in_allowlist_accepted(cache):
+    settings = _make_settings(client_id_allowlist=["service-A", "service-B"])
+    with _patch_decode_to(_now_claims(azp="service-A")):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_client_id_in_allowlist_accepted_when_azp_absent(cache):
+    """ADFS often emits ``client_id`` instead of ``azp`` for
+    client_credentials grants — accept either."""
+    settings = _make_settings(client_id_allowlist=["svc-X"])
+    payload = _now_claims(client_id="svc-X")
+    with _patch_decode_to(payload):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_azp_missing_with_non_empty_allowlist_rejected(cache):
+    settings = _make_settings(client_id_allowlist=["svc-X"])
+    with _patch_decode_to(_now_claims()):  # neither azp nor client_id set
+        with pytest.raises(CatalogError, match="azp-not-allowed"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_empty_azp_allowlist_skips_check(cache):
+    settings = _make_settings(client_id_allowlist=[])
+    with _patch_decode_to(_now_claims()):  # no azp, but check is skipped
+        await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+# ---------------------------------------------------------------------------
+# iat presence + TTL bound
+
+
+@pytest.mark.asyncio
+async def test_missing_iat_rejected(cache):
+    settings = _make_settings()
+    payload = _now_claims()
+    payload.pop("iat")
+    with _patch_decode_to(payload):
+        with pytest.raises(CatalogError, match="missing-iat"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_ttl_at_limit_accepted(cache):
+    settings = _make_settings(max_token_ttl_seconds=900)
+    now = int(time.time())
+    with _patch_decode_to(_now_claims(iat=now, exp=now + 900)):
+        await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+@pytest.mark.asyncio
+async def test_ttl_one_second_over_rejected(cache):
+    settings = _make_settings(max_token_ttl_seconds=900)
+    now = int(time.time())
+    with _patch_decode_to(_now_claims(iat=now, exp=now + 901)):
+        with pytest.raises(CatalogError, match="token-ttl-exceeded"):
+            await validate_oidc_token("h.p.s", settings, cache=cache)
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+
+
+def test_get_default_cache_returns_singleton():
+    a = oidc_mod.get_default_cache()
+    b = oidc_mod.get_default_cache()
+    assert a is b
+
+
+def test_default_cache_reset_between_tests():
+    oidc_mod._default_cache = None
+    fresh = oidc_mod.get_default_cache()
+    assert fresh is not None

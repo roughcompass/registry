@@ -5,13 +5,14 @@ Public entry point:
     async def validate_oidc_token(
         raw_token: str,
         settings: Settings,
-        db_session: AsyncSession,
         cache: _OidcCache | None = None,
-    ) -> TenantContext
+    ) -> tuple[dict[str, Any], str]
 
-Raises ``CatalogError`` on every failure so the caller sees a uniform
-error type and can map it to 401/403 as appropriate.  The token value is
-never logged.
+Returns ``(claims_payload, resolved_identity)``. The caller is
+responsible for everything after JWT validation: tenant scope, actor
+lookup, role resolution. Raises ``CatalogError`` on every failure so
+the caller sees a uniform error type and can map it to 401/403 as
+appropriate. The token value is never logged.
 
 Discovery doc and JWKS are held in an ``_OidcCache`` instance with a TTL
 of ``_CACHE_TTL_S`` seconds (default 300).  The cache is refreshed lazily
@@ -38,15 +39,22 @@ from typing import Any
 import httpx
 from authlib.jose import JsonWebKey, JsonWebToken  # type: ignore[import-untyped]
 from authlib.jose.errors import JoseError  # type: ignore[import-untyped]
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
+from prometheus_client import Counter
 
 from registry.config import Settings
 from registry.exceptions import CatalogError
-from registry.storage.models import Actor, ActorRole, Role
-from registry.types import TenantContext
 
 _log = logging.getLogger(__name__)
+
+
+# Counter for identity-extraction failures — alerts on tokens that pass
+# signature validation but lack both `sub` and `winaccountname` (an IDP
+# misconfiguration that would otherwise produce 401s without a clear
+# diagnostic signal).
+_IDENTITY_EXTRACTION_FAILURES = Counter(
+    "registry_identity_extraction_failures_total",
+    "JWTs that passed signature validation but lacked both 'sub' and 'winaccountname' claims.",
+)
 
 # ---------------------------------------------------------------------------
 # Cache TTL (seconds)
@@ -200,26 +208,35 @@ def _warn_audience_unconfigured_once() -> None:
 async def validate_oidc_token(
     raw_token: str,
     settings: Settings,
-    db_session: AsyncSession,
     cache: _OidcCache | None = None,
-) -> TenantContext:
-    """Parse and validate *raw_token* as an OIDC JWT; return a ``TenantContext``.
+) -> tuple[dict[str, Any], str]:
+    """Parse and validate ``raw_token`` as an OIDC JWT.
 
-    Steps:
-    1. Raise ``CatalogError`` if OIDC is not configured.
-    2. Fetch discovery doc → JWKS URI → key set (cached in *cache* with TTL).
-    3. Decode + verify JWT signature and claims (``exp``, ``iss``).
-    4. Extract ``sub`` claim → query ``actors WHERE oidc_subject = :sub``
-       (tenant-scoped by the ``tenant_id`` embedded in the token's ``aud``
-       or a custom ``tenant_id`` claim; falls back to iss-based lookup).
-    5. Load roles from ``actor_roles`` → return ``TenantContext``.
+    Returns ``(claims_payload, resolved_identity)``. The caller is
+    responsible for everything after JWT validation: tenant scope,
+    actor lookup, role resolution. This function performs only the
+    eight-point checklist defined in the auth ADR:
 
-    The *cache* parameter accepts the instance attached to ``app.state.oidc_cache``
-    in FastAPI deployments.  When ``None``, ``get_default_cache()`` is used so
-    the function remains callable from non-HTTP contexts without any wiring.
+    1. Signature: signed by a key in the JWKS published at
+       ``settings.oidc_discovery_url``.
+    2. ``exp``: not expired (authlib's ``claims.validate()`` enforces).
+    3. ``iat``: present.
+    4. ``iss``: in ``settings.oidc_issuer_allowlist``.
+    5. ``aud``: at least one element in ``settings.resource_uri_allowlist``
+       (tokens carry the resource URI as audience under ADFS-style flows).
+    6. ``azp`` / ``client_id``: in ``settings.oidc_client_id_allowlist``
+       when that allowlist is non-empty (an empty allowlist skips this
+       check entirely — the operator opted out of service-token gating).
+    7. TTL bound: ``exp - iat`` ≤ ``settings.oidc_max_token_ttl_seconds``.
+    8. Identity extraction: ``sub`` if present and non-empty; else
+       ``winaccountname`` (Windows-AD fallback). Both absent raises.
 
-    Raises ``CatalogError`` on every failure (signature failure, expired
-    token, actor not found, etc.).  The plaintext token is never logged.
+    The ``cache`` parameter accepts the instance attached to
+    ``app.state.oidc_cache``. When ``None``, ``get_default_cache()`` is
+    used — useful from non-HTTP contexts and tests.
+
+    Raises ``CatalogError`` on every failure path. The plaintext token
+    is never logged.
     """
     if settings.oidc_discovery_url is None:
         raise CatalogError("OIDC not configured")
@@ -236,90 +253,93 @@ async def validate_oidc_token(
         _log.warning("oidc_discovery_failed: %s", type(exc).__name__)
         raise CatalogError("OIDC discovery failed") from exc
 
-    # --- Decode + verify JWT ------------------------------------------------
+    # --- Decode + verify signature + standard claims ------------------------
     try:
         key_set = JsonWebKey.import_key_set(jwks_raw)
         jwt = JsonWebToken(["RS256", "ES256", "RS384", "ES384", "RS512"])
         claims = jwt.decode(raw_token, key_set)
-        claims.options = {
-            "iss": {"essential": True, "value": issuer},
-            "exp": {"essential": True},
-        }
-        if settings.oidc_expected_audience:
-            claims.options["aud"] = {
-                "essential": True,
-                "value": settings.oidc_expected_audience,
-            }
-        else:
-            _warn_audience_unconfigured_once()
+        # Authlib's claims.validate() enforces exp + iss-essential.
+        # iss VALUE matching is enforced separately below against the
+        # allowlist (which supersedes the discovery document's single
+        # issuer).
+        claims.options = {"exp": {"essential": True}}
         claims.validate()
     except JoseError as exc:
         raise CatalogError(f"invalid OIDC token: {exc}") from exc
     except Exception as exc:
         raise CatalogError("OIDC token processing error") from exc
 
-    subject: str | None = claims.get("sub")
-    if not subject:
-        raise CatalogError("OIDC token missing sub claim")
+    # Convert to a plain dict so the rest of the function does not depend
+    # on authlib's claims object behavior.
+    claims_payload: dict[str, Any] = dict(claims)
 
-    # ``tenant_id`` comes from a custom claim if present; otherwise we require
-    # it in the token so we can scope the DB lookup correctly.
-    # When the service runs in RSAM auth mode, IDA tokens carry no tenant claim —
-    # tenant scope is resolved by the downstream claim-source resolver instead of
-    # the token. Skip the tenant-claim check and actor DB lookup in that mode so
-    # IDA tokens are not rejected here; the resolver factory takes over grant
-    # resolution after this function returns.
-    tenant_id_str: str | None = claims.get("tenant_id") or claims.get("tid")
-    if not tenant_id_str:
-        if settings.auth_mode != "rsam":
-            raise CatalogError("OIDC token missing tenant_id/tid claim")
-        # RSAM mode: JWT signature + sub are valid; grant resolution happens in
-        # the claim-source resolver. Return a sentinel context that carries the
-        # verified subject. The nil UUIDs are intentional — this TenantContext
-        # is only ever consumed by the resolver factory, which replaces it with
-        # the fully-resolved identity before any service code is reached.
-        import uuid  # noqa: PLC0415
+    # --- ADR §1 step 4: iss allowlist --------------------------------------
+    iss = claims_payload.get("iss")
+    issuer_allowlist = settings.oidc_issuer_allowlist or []
+    if not issuer_allowlist:
+        # Empty allowlist falls back to the discovery document's issuer
+        # (legacy behavior). Operators should populate the allowlist in
+        # production deployments — this fallback exists so existing
+        # single-issuer deployments do not require a config change at
+        # the same time as the auth-consolidation ship.
+        if iss != issuer:
+            raise CatalogError("iss-not-allowed")
+    elif iss not in issuer_allowlist:
+        raise CatalogError("iss-not-allowed")
 
-        return TenantContext(
-            tenant_id=uuid.UUID(int=0),
-            actor_id=uuid.UUID(int=0),
-            roles=[subject],
-        )
+    # --- ADR §1 step 5: aud allowlist --------------------------------------
+    aud_claim = claims_payload.get("aud")
+    aud_list: list[str]
+    if aud_claim is None:
+        aud_list = []
+    elif isinstance(aud_claim, str):
+        aud_list = [aud_claim]
+    elif isinstance(aud_claim, list):
+        aud_list = [str(a) for a in aud_claim]
+    else:
+        raise CatalogError("aud-not-allowed")
 
-    import uuid  # noqa: PLC0415
+    resource_allowlist = settings.resource_uri_allowlist or []
+    if resource_allowlist:
+        if not any(a in resource_allowlist for a in aud_list):
+            raise CatalogError("aud-not-allowed")
+    elif settings.oidc_expected_audience:
+        # Legacy fallback: single expected audience configured the old way.
+        if settings.oidc_expected_audience not in aud_list:
+            raise CatalogError("aud-not-allowed")
+    else:
+        _warn_audience_unconfigured_once()
 
-    try:
-        tenant_id = uuid.UUID(tenant_id_str)
-    except ValueError as exc:
-        raise CatalogError("OIDC token tenant_id is not a valid UUID") from exc
+    # --- ADR §1 step 6: azp / client_id allowlist --------------------------
+    client_allowlist = settings.oidc_client_id_allowlist or []
+    if client_allowlist:
+        # Accept either azp (RFC 8176 / 7519) or client_id (commonly emitted
+        # by ADFS for client_credentials grants).
+        client_principal = claims_payload.get("azp") or claims_payload.get("client_id")
+        if client_principal is None or client_principal not in client_allowlist:
+            raise CatalogError("azp-not-allowed")
+    # Empty allowlist → check skipped intentionally (operator-controlled).
 
-    # --- Resolve actor -------------------------------------------------------
-    result = await db_session.execute(
-        select(Actor).where(
-            Actor.tenant_id == tenant_id,
-            Actor.oidc_subject == subject,
-        )
-    )
-    actor: Actor | None = result.scalar_one_or_none()
-    if actor is None:
-        raise CatalogError("OIDC actor not found")
+    # --- ADR §1 steps 3 + 7: iat presence and TTL bound ---------------------
+    iat_claim = claims_payload.get("iat")
+    if iat_claim is None:
+        raise CatalogError("missing-iat")
+    exp_claim = claims_payload.get("exp")
+    if exp_claim is not None and (
+        int(exp_claim) - int(iat_claim) > settings.oidc_max_token_ttl_seconds
+    ):
+        raise CatalogError("token-ttl-exceeded")
 
-    # --- Resolve roles -------------------------------------------------------
-    roles_result = await db_session.execute(
-        select(Role.name)
-        .join(ActorRole, ActorRole.role_id == Role.role_id)
-        .where(
-            ActorRole.tenant_id == tenant_id,
-            ActorRole.actor_id == actor.actor_id,
-        )
-    )
-    role_names: list[str] = [row[0] for row in roles_result.all()]
+    # --- ADR §1 step 8: identity extraction --------------------------------
+    sub = claims_payload.get("sub")
+    if sub:
+        return claims_payload, str(sub)
+    win = claims_payload.get("winaccountname")
+    if win:
+        return claims_payload, str(win)
 
-    return TenantContext(
-        tenant_id=tenant_id,
-        actor_id=actor.actor_id,
-        roles=role_names,
-    )
+    _IDENTITY_EXTRACTION_FAILURES.inc()
+    raise CatalogError("missing-identity-claim")
 
 
 __all__ = ["_OidcCache", "get_default_cache", "validate_oidc_token"]
