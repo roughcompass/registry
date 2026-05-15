@@ -53,6 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from registry.auth.entitlements import client as entitlement_client
 from registry.auth.entitlements import parser as entitlement_parser
 from registry.auth.entitlements.actor_store import (
+    DisabledTenantError,
     upsert_entitlement_actor,
     upsert_entitlement_tenant,
 )
@@ -334,12 +335,32 @@ class EntitlementResolver(ClaimResolverBase):
         for entry in parsed:
             roles_by_slug[entry.tenant_slug].append(entry.role)
 
+        # Display name comes from the IDP's `name` claim when present;
+        # falls back to the resolved identity. Same value drives both the
+        # actor row's display_name and the AuditIdentity preferred_username.
+        display_name = claims.get("name") or resolved_identity
+
         tenant_grants: list[TenantGrant] = []
         for tenant_slug, roles in roles_by_slug.items():
             best_role = self._highest_role(roles)
-            async with self._session_factory() as session, session.begin():
-                tenant_uuid = await upsert_entitlement_tenant(session, tenant_slug)
-                await upsert_entitlement_actor(session, tenant_uuid, resolved_identity)
+            try:
+                async with self._session_factory() as session, session.begin():
+                    tenant_uuid = await upsert_entitlement_tenant(session, tenant_slug)
+                    await upsert_entitlement_actor(
+                        session, tenant_uuid, resolved_identity, display_name
+                    )
+            except DisabledTenantError:
+                # Operator has disabled this tenant — drop the tuple, log,
+                # and continue with the rest of the entitlement set. The
+                # entitlement service may legitimately grant access to
+                # slugs the operator has explicitly offboarded; that is
+                # the operator's authoritative override.
+                _log.warning(
+                    "entitlement_dropped_disabled_tenant slug=%s subject=%s",
+                    tenant_slug,
+                    resolved_identity,
+                )
+                continue
             tenant_grants.append(
                 TenantGrant(
                     tenant_id=tenant_uuid,
@@ -348,14 +369,14 @@ class EntitlementResolver(ClaimResolverBase):
                 )
             )
 
-        if tenant_grants:
-            audit_identity = await self._build_audit_identity(
-                resolved_identity, tenant_grants[0].tenant_id
-            )
-        else:
-            audit_identity = AuditIdentity(
-                sub=resolved_identity, email=None, preferred_username=resolved_identity
-            )
+        # AuditIdentity is built directly from the claim-derived values —
+        # no follow-up SELECT needed. Email is not surfaced by ADFS-style
+        # identity tokens; the actors table no longer carries it either.
+        audit_identity = AuditIdentity(
+            sub=resolved_identity,
+            email=None,
+            preferred_username=display_name,
+        )
 
         _log.info(
             "auth.entitlement.resolved subject=%s latency_ms=%d "
@@ -457,35 +478,6 @@ class EntitlementResolver(ClaimResolverBase):
                 "Failed to emit auth.entitlement_stale_cache_served audit for subject=%s",
                 subject,
             )
-
-    async def _build_audit_identity(
-        self, subject: str, tenant_id: uuid.UUID
-    ) -> AuditIdentity:
-        """Look up the just-upserted actor row and assemble its AuditIdentity.
-
-        The actor row is guaranteed to exist because the JIT upsert in
-        ``_fetch_and_resolve`` created it. A miss here is a programming
-        error rather than a runtime case to handle.
-        """
-        async with self._session_factory() as session:
-            row = await session.execute(
-                text(
-                    "SELECT display_name, email FROM actors "
-                    "WHERE tenant_id = :tenant_id AND oidc_subject = :oidc_subject"
-                ),
-                {"tenant_id": tenant_id, "oidc_subject": subject},
-            )
-            actor = row.first()
-        if actor is None:
-            raise RuntimeError(
-                "actor row missing after JIT upsert — programming error"
-            )
-        display_name, email = actor
-        return AuditIdentity(
-            sub=subject,
-            email=email,
-            preferred_username=display_name or subject,
-        )
 
 
 __all__ = [
