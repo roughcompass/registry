@@ -73,6 +73,11 @@ filterwarnings = [
     # (`session.add` is sync; AsyncMock pretends it might be async).
     "ignore:coroutine .*_execute_mock_call.* was never awaited:RuntimeWarning",
 ]
+markers = [
+    "compose: requires the dev compose stack (mock-oauth2-server + mock-entitlement-service + postgres) to be up; gated on COMPOSE_STACK_UP env var",
+    "perf: long-running performance test; excluded from default test runs",
+    "slow: slow test; excluded from default unit-test run",
+]
 
 [tool.ruff]
 line-length = 120
