@@ -25,8 +25,8 @@ HTTP response bodies of an outsider tenant.
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -34,61 +34,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import (
     VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
     VISIBILITY_TENANT_SHARED,
 )
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
-
-
-async def _seed_tenant_with_token(
-    pg_url: str, *, slug: str, roles: list[str] | None = None
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    role_list = roles or ["producer", "consumer", "admin"]
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": role_list,
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
 
 
 async def _seed_capability(
@@ -172,143 +130,6 @@ async def _flip_visibility(
         await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
-
-
-# ---------------------------------------------------------------------------
-# S1 — private capability is invisible to other tenants
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_private_capability_invisible_to_other_tenants_via_get(pg_container: str, app_client) -> None:
-    client = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="iso-s1-a")
-    _, _, b_token = await _seed_tenant_with_token(pg_container, slug="iso-s1-b")
-    cap_id = await _seed_capability(
-        pg_container,
-        tenant_id=a_tid,
-        name="secret-payment-api",
-        visibility=VISIBILITY_PRIVATE,
-    )
-    headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.get(f"/v1/capabilities/{cap_id}", headers=headers)
-    # Either 404 (tenant isolation maps to not-found) or 403 — both are correct
-    # outcomes; the body must NOT leak the capability's name or owner tenant.
-    assert resp.status_code in (403, 404), resp.text
-    assert "secret-payment-api" not in resp.text
-    assert str(a_tid) not in resp.text
-
-
-@pytest.mark.asyncio
-async def test_private_capability_invisible_in_consumer_projection(pg_container: str, app_client) -> None:
-    client = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="iso-s1p-a")
-    _, _, b_token = await _seed_tenant_with_token(pg_container, slug="iso-s1p-b")
-    cap_id = await _seed_capability(
-        pg_container,
-        tenant_id=a_tid,
-        name="secret-cap",
-        visibility=VISIBILITY_PRIVATE,
-    )
-    headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.get("/v1/graph/consumer", headers=headers)
-    assert resp.status_code == 200
-    body = resp.json()
-    node_ids = {n["entity_id"] for n in body["nodes"]}
-    assert str(cap_id) not in node_ids
-
-
-# ---------------------------------------------------------------------------
-# S2 — tenant-shared with ACL=[B] visible to B but not C
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_tenant_shared_visible_only_to_acl_members(pg_container: str, app_client) -> None:
-    client = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="iso-s2-a")
-    b_tid, _, b_token = await _seed_tenant_with_token(pg_container, slug="iso-s2-b")
-    _, _, c_token = await _seed_tenant_with_token(pg_container, slug="iso-s2-c")
-    cap_id = await _seed_capability(
-        pg_container,
-        tenant_id=a_tid,
-        name="shared-cap",
-        visibility=VISIBILITY_PRIVATE,
-    )
-    await _flip_visibility(
-        pg_container,
-        entity_id=cap_id,
-        tenant_id=a_tid,
-        visibility=VISIBILITY_TENANT_SHARED,
-        shared_with_tenants=[b_tid],
-    )
-
-    # Tenant B can adopt → visibility chokepoint approves.
-    resp_b = await client.post(
-        f"/v1/capabilities/{cap_id}/adoptions",
-        headers={"Authorization": f"Bearer {b_token}"},
-        json={},
-    )
-    assert resp_b.status_code == 201, resp_b.text
-
-    # Tenant C cannot — outside the ACL.
-    resp_c = await client.post(
-        f"/v1/capabilities/{cap_id}/adoptions",
-        headers={"Authorization": f"Bearer {c_token}"},
-        json={},
-    )
-    assert resp_c.status_code in (403, 404), resp_c.text
-
-
-# ---------------------------------------------------------------------------
-# S3 — public capability visible to all tenants
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_public_capability_visible_to_all(pg_container: str, app_client) -> None:
-    client = app_client
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="iso-s3-a")
-    _, _, b_token = await _seed_tenant_with_token(pg_container, slug="iso-s3-b")
-    _, _, c_token = await _seed_tenant_with_token(pg_container, slug="iso-s3-c")
-    cap_id = await _seed_capability(
-        pg_container,
-        tenant_id=a_tid,
-        name="public-cap",
-        visibility=VISIBILITY_PUBLIC,
-    )
-
-    # Both B and C can adopt a public capability (the visibility precheck
-    # passes); the adoption row should land for each.
-    for token in (b_token, c_token):
-        resp = await client.post(
-            f"/v1/capabilities/{cap_id}/adoptions",
-            headers={"Authorization": f"Bearer {token}"},
-            json={},
-        )
-        assert resp.status_code == 201, resp.text
-
-
-# ---------------------------------------------------------------------------
-# S4 — unadopted cross-tenant depends_on edge is rejected
-# (T04 covered this at unit level; this test verifies via the catalog
-#  service from inside the live app context.)
-# ---------------------------------------------------------------------------
-
-
 async def _seed_edge_rel_vocab(pg_url: str, tenant_id: uuid.UUID, value: str) -> None:
     """Insert a tenant-scoped edge_rel vocabulary value."""
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
@@ -328,13 +149,218 @@ async def _seed_edge_rel_vocab(pg_url: str, tenant_id: uuid.UUID, value: str) ->
         await engine.dispose()
 
 
+async def _make_persona(
+    harness: EntitlementAuthHarness,
+    client: AsyncClient,
+    slug: str,
+    roles: list[str],
+) -> tuple[TenantPersona, uuid.UUID]:
+    """Register a persona in the harness, JIT-materialise via whoami, return (persona, tenant_id)."""
+    persona = harness.add_persona(slug, roles=roles)
+    harness.configure_fetcher_for(persona)
+    with patch_validator_for_actor(persona):
+        resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+        assert resp.status_code == 200, resp.text
+    return persona, uuid.UUID(resp.json()["tenant_id"])
+
+
+@pytest_asyncio.fixture
+async def app_client(pg_container: str) -> AsyncIterator[tuple[AsyncClient, EntitlementAuthHarness]]:
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, harness
+
+
+# ---------------------------------------------------------------------------
+# S1 — private capability is invisible to other tenants
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_unadopted_cross_tenant_depends_on_edge_is_rejected(pg_container: str, app_client) -> None:
+async def test_private_capability_invisible_to_other_tenants_via_get(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+
+    _persona_a, a_tid = await _make_persona(
+        harness, client, f"iso-s1-a-{uuid.uuid4().hex[:6]}", ["producer", "admin"]
+    )
+    persona_b, _b_tid = await _make_persona(
+        harness, client, f"iso-s1-b-{uuid.uuid4().hex[:6]}", ["consumer"]
+    )
+
+    cap_id = await _seed_capability(
+        pg_container,
+        tenant_id=a_tid,
+        name="secret-payment-api",
+        visibility=VISIBILITY_PRIVATE,
+    )
+
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.get(
+            f"/v1/capabilities/{cap_id}",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
+    # Either 404 (tenant isolation maps to not-found) or 403 — both are correct
+    # outcomes; the body must NOT leak the capability's name or owner tenant.
+    assert resp.status_code in (403, 404), resp.text
+    assert "secret-payment-api" not in resp.text
+    assert str(a_tid) not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_private_capability_invisible_in_consumer_projection(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+
+    _persona_a, a_tid = await _make_persona(
+        harness, client, f"iso-s1p-a-{uuid.uuid4().hex[:6]}", ["producer", "admin"]
+    )
+    persona_b, _b_tid = await _make_persona(
+        harness, client, f"iso-s1p-b-{uuid.uuid4().hex[:6]}", ["consumer"]
+    )
+
+    cap_id = await _seed_capability(
+        pg_container,
+        tenant_id=a_tid,
+        name="secret-cap",
+        visibility=VISIBILITY_PRIVATE,
+    )
+
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.get(
+            "/v1/graph/consumer",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    node_ids = {n["entity_id"] for n in body["nodes"]}
+    assert str(cap_id) not in node_ids
+
+
+# ---------------------------------------------------------------------------
+# S2 — tenant-shared with ACL=[B] visible to B but not C
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tenant_shared_visible_only_to_acl_members(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+
+    _persona_a, a_tid = await _make_persona(
+        harness, client, f"iso-s2-a-{uuid.uuid4().hex[:6]}", ["producer", "admin"]
+    )
+    persona_b, b_tid = await _make_persona(
+        harness, client, f"iso-s2-b-{uuid.uuid4().hex[:6]}", ["producer", "consumer"]
+    )
+    persona_c, _c_tid = await _make_persona(
+        harness, client, f"iso-s2-c-{uuid.uuid4().hex[:6]}", ["producer", "consumer"]
+    )
+
+    cap_id = await _seed_capability(
+        pg_container,
+        tenant_id=a_tid,
+        name="shared-cap",
+        visibility=VISIBILITY_PRIVATE,
+    )
+    await _flip_visibility(
+        pg_container,
+        entity_id=cap_id,
+        tenant_id=a_tid,
+        visibility=VISIBILITY_TENANT_SHARED,
+        shared_with_tenants=[b_tid],
+    )
+
+    # Tenant B can adopt → visibility chokepoint approves.
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp_b = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            json={},
+        )
+    assert resp_b.status_code == 201, resp_b.text
+
+    # Tenant C cannot — outside the ACL.
+    harness.configure_fetcher_for(persona_c)
+    with patch_validator_for_actor(persona_c):
+        resp_c = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=persona_c.slug),
+            json={},
+        )
+    assert resp_c.status_code in (403, 404), resp_c.text
+
+
+# ---------------------------------------------------------------------------
+# S3 — public capability visible to all tenants
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_public_capability_visible_to_all(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+
+    _persona_a, a_tid = await _make_persona(
+        harness, client, f"iso-s3-a-{uuid.uuid4().hex[:6]}", ["producer", "admin"]
+    )
+    persona_b, _b_tid = await _make_persona(
+        harness, client, f"iso-s3-b-{uuid.uuid4().hex[:6]}", ["producer", "consumer"]
+    )
+    persona_c, _c_tid = await _make_persona(
+        harness, client, f"iso-s3-c-{uuid.uuid4().hex[:6]}", ["producer", "consumer"]
+    )
+
+    cap_id = await _seed_capability(
+        pg_container,
+        tenant_id=a_tid,
+        name="public-cap",
+        visibility=VISIBILITY_PUBLIC,
+    )
+
+    # Both B and C can adopt a public capability (the visibility precheck
+    # passes); the adoption row should land for each.
+    for persona in (persona_b, persona_c):
+        harness.configure_fetcher_for(persona)
+        with patch_validator_for_actor(persona):
+            resp = await client.post(
+                f"/v1/capabilities/{cap_id}/adoptions",
+                headers=bearer_headers(tenant_slug=persona.slug),
+                json={},
+            )
+        assert resp.status_code == 201, resp.text
+
+
+# ---------------------------------------------------------------------------
+# S4 — unadopted cross-tenant depends_on edge is rejected
+# (This test verifies via the catalog service from inside the live app context.)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_unadopted_cross_tenant_depends_on_edge_is_rejected(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
     from registry.exceptions import TenantIsolationError
     from registry.types import TenantContext
 
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="iso-s4-a")
-    b_tid, b_actor, _ = await _seed_tenant_with_token(pg_container, slug="iso-s4-b")
+    client, harness = app_client
+
+    _persona_a, a_tid = await _make_persona(
+        harness, client, f"iso-s4-a-{uuid.uuid4().hex[:6]}", ["producer", "admin"]
+    )
+    persona_b, b_tid = await _make_persona(
+        harness, client, f"iso-s4-b-{uuid.uuid4().hex[:6]}", ["producer"]
+    )
+
     await _seed_edge_rel_vocab(pg_container, b_tid, "depends_on")
     provider_cap = await _seed_capability(
         pg_container,
@@ -349,9 +375,8 @@ async def test_unadopted_cross_tenant_depends_on_edge_is_rejected(pg_container: 
         visibility=VISIBILITY_PUBLIC,
     )
 
-    client = app_client
-    catalog_svc = client._transport.app.state.catalog  # type: ignore[union-attr]
-    ctx = TenantContext(tenant_id=b_tid, actor_id=b_actor, roles=["producer"])
+    catalog_svc = harness.app.state.catalog
+    ctx = TenantContext(tenant_id=b_tid, actor_id=persona_b.actor_id, roles=["producer"])
 
     # Without an adoption, depends_on across tenants → PermissionError.
     with pytest.raises((PermissionError, TenantIsolationError)):
