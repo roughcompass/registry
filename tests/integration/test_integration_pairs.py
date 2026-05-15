@@ -11,8 +11,8 @@ Scenarios:
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -20,57 +20,23 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import (
     VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
+)
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
 )
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
 
-async def _seed_tenant(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": ["producer", "consumer", "admin"],
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
+# ---------------------------------------------------------------------------
+# Seed helpers
+# ---------------------------------------------------------------------------
 
 
 async def _seed_entity(
@@ -126,19 +92,51 @@ async def _composes(pg_url: str, tenant_id: uuid.UUID, src: uuid.UUID, dst: uuid
         await engine.dispose()
 
 
-@pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
+async def _get_tenant_id(pg_url: str, slug: str) -> uuid.UUID:
+    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    try:
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+                )
+            ).first()
+            assert row is not None, f"tenant {slug} not found"
+            return uuid.UUID(str(row[0]))
+    finally:
+        await engine.dispose()
+
+
+async def _make_persona(
+    h: EntitlementAuthHarness,
+    pg_url: str,
+    *,
+    slug: str,
+    roles: list[str],
+) -> TenantPersona:
+    """Materialise tenant + actor via /v1/whoami."""
+    persona = h.add_persona(slug, roles=roles)
+    h.configure_fetcher_for(persona)
+    transport = ASGITransport(app=h.app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return persona
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest_asyncio.fixture
+async def app_client(pg_container: str) -> AsyncIterator[tuple[AsyncClient, EntitlementAuthHarness]]:
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, harness
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +145,13 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_pair_lookup_returns_integration_connecting_two_caps(pg_container: str, app_client) -> None:
-    client = app_client
-    tid, _, token = await _seed_tenant(pg_container, "intpairs-h")
+async def test_pair_lookup_returns_integration_connecting_two_caps(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+    slug = f"intpairs-h-{uuid.uuid4().hex[:6]}"
+    persona = await _make_persona(harness, pg_container, slug=slug, roles=["consumer", "producer"])
+    tid = await _get_tenant_id(pg_container, slug)
 
     cap_a = await _seed_entity(pg_container, tenant_id=tid, entity_type="capability", name="cap-a")
     cap_b = await _seed_entity(pg_container, tenant_id=tid, entity_type="capability", name="cap-b")
@@ -163,19 +165,20 @@ async def test_pair_lookup_returns_integration_connecting_two_caps(pg_container:
     try:
         async with factory() as session:
             res = await session.execute(
-                text("SELECT COUNT(*) FROM integration_pairs " "WHERE integration_entity_id = :i"),
+                text("SELECT COUNT(*) FROM integration_pairs WHERE integration_entity_id = :i"),
                 {"i": integration},
             )
             assert (res.scalar() or 0) == 2
     finally:
         await engine.dispose()
 
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = await client.get(
-        "/v1/integrations",
-        headers=headers,
-        params={"connects": str(cap_a), "and": str(cap_b)},
-    )
+    harness.configure_fetcher_for(persona)
+    with patch_validator_for_actor(persona):
+        resp = await client.get(
+            "/v1/integrations",
+            headers=bearer_headers(tenant_slug=persona.slug),
+            params={"connects": str(cap_a), "and": str(cap_b)},
+        )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     items = body["items"] if isinstance(body, dict) else body
@@ -190,10 +193,16 @@ async def test_pair_lookup_returns_integration_connecting_two_caps(pg_container:
 
 
 @pytest.mark.asyncio
-async def test_private_integration_is_invisible_to_other_tenants(pg_container: str, app_client) -> None:
-    client = app_client
-    a_tid, _, _ = await _seed_tenant(pg_container, "intpairs-priv-a")
-    b_tid, _, b_token = await _seed_tenant(pg_container, "intpairs-priv-b")
+async def test_private_integration_is_invisible_to_other_tenants(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
+    client, harness = app_client
+
+    slug_a = f"intpairs-priv-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"intpairs-priv-b-{uuid.uuid4().hex[:6]}"
+    _persona_a = await _make_persona(harness, pg_container, slug=slug_a, roles=["producer"])
+    persona_b = await _make_persona(harness, pg_container, slug=slug_b, roles=["consumer"])
+    a_tid = await _get_tenant_id(pg_container, slug_a)
 
     cap_a = await _seed_entity(pg_container, tenant_id=a_tid, entity_type="capability", name="A")
     cap_b = await _seed_entity(pg_container, tenant_id=a_tid, entity_type="capability", name="B")
@@ -207,12 +216,13 @@ async def test_private_integration_is_invisible_to_other_tenants(pg_container: s
     await _composes(pg_container, a_tid, integration, cap_a)
     await _composes(pg_container, a_tid, integration, cap_b)
 
-    headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.get(
-        "/v1/integrations",
-        headers=headers,
-        params={"connects": str(cap_a), "and": str(cap_b)},
-    )
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.get(
+            "/v1/integrations",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            params={"connects": str(cap_a), "and": str(cap_b)},
+        )
     assert resp.status_code == 200
     body = resp.json()
     items = body["items"] if isinstance(body, dict) else body
