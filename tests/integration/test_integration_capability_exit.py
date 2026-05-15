@@ -14,7 +14,6 @@ test_breaking_change_exit.py (sibling file).
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
 
 import pytest
@@ -22,7 +21,6 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
 from registry.config import Settings
 from registry.exceptions import ValidationError
 from registry.main import create_app
@@ -31,12 +29,16 @@ from registry.types import TenantContext
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
 
-async def _seed_tenant(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
+async def _seed_tenant(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert tenant + actor; return (tenant_id, actor_id).
+
+    No API token is seeded — these tests drive the service layer directly
+    via TenantContext, so no bearer-token auth is required.
+    """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
     try:
         async with factory() as session, session.begin():
             await session.execute(
@@ -50,21 +52,13 @@ async def _seed_tenant(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID, st
             await session.execute(
                 text(
                     "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
+                    "oidc_subject, created_at) VALUES (:aid, :tid, :dn, :sub, :now)"
                 ),
                 {
-                    "tid": tenant_id,
                     "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": ["producer", "consumer", "admin"],
+                    "tid": tenant_id,
+                    "dn": f"actor-{slug}",
+                    "sub": f"test-sub-{actor_id.hex[:8]}",
                     "now": _NOW,
                 },
             )
@@ -86,7 +80,7 @@ async def _seed_tenant(pg_url: str, slug: str) -> tuple[uuid.UUID, uuid.UUID, st
                 )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token
+    return tenant_id, actor_id
 
 
 async def _seed_entity(
@@ -172,7 +166,7 @@ async def perf_app(pg_container: str):  # type: ignore[type-arg]
 @pytest.mark.asyncio
 async def test_integration_promotion_fails_with_zero_qualifying_edges(pg_container: str, perf_app) -> None:
     app = perf_app
-    tid, aid, _ = await _seed_tenant(pg_container, "exit-int-zero")
+    tid, aid = await _seed_tenant(pg_container, "exit-int-zero")
     integration_id = await _seed_entity(
         pg_container,
         tenant_id=tid,
@@ -189,7 +183,7 @@ async def test_integration_promotion_fails_with_zero_qualifying_edges(pg_contain
 @pytest.mark.asyncio
 async def test_integration_promotion_succeeds_with_two_composes_edges(pg_container: str, perf_app) -> None:
     app = perf_app
-    tid, aid, _ = await _seed_tenant(pg_container, "exit-int-two")
+    tid, aid = await _seed_tenant(pg_container, "exit-int-two")
     integration_id = await _seed_entity(
         pg_container,
         tenant_id=tid,
@@ -213,7 +207,7 @@ async def test_integration_promotion_succeeds_with_two_composes_edges(pg_contain
 @pytest.mark.asyncio
 async def test_version_latest_is_rejected_with_actionable_error(pg_container: str, perf_app) -> None:
     app = perf_app
-    tid, aid, _ = await _seed_tenant(pg_container, "exit-semver")
+    tid, aid = await _seed_tenant(pg_container, "exit-semver")
     ctx = TenantContext(tenant_id=tid, actor_id=aid, roles=["producer", "admin"])
     cap_id = await _seed_entity(pg_container, tenant_id=tid, entity_type="capability", name="cap")
 
