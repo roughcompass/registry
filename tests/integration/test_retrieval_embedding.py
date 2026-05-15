@@ -17,17 +17,15 @@ from __future__ import annotations
 import datetime
 import json
 import pathlib
-import secrets
 import uuid
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.api.routers.mcp import _request_token, create_registry_mcp_server
+from registry.api.routers.mcp import create_registry_mcp_server
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.service.catalog import CatalogService
@@ -49,12 +47,10 @@ _SEARCH_QUESTIONS_FILE = _FIXTURES / "search_questions.json"
 # ---------------------------------------------------------------------------
 # Shared seed helper
 #
-# Uses raw SQL for all inserts (text() throughout). This diverges from the
-# ORM-model approach used in test_capability_crud.py's _seed helper — both
-# files seed the same schema, but they were written independently. Unifying
-# them would require either importing ORM models here (coupling) or moving
-# the helper to conftest.py with a more complex signature. The divergence is
-# intentional: keep each file self-contained.
+# Uses raw SQL for all inserts (text() throughout). The actor row requires
+# a non-null oidc_subject after the entitlement-auth migration. No api_token
+# row is written — token auth is handled by the OIDC/entitlement path; tests
+# that call service methods directly construct TenantContext without a token.
 # ---------------------------------------------------------------------------
 
 _VOCAB_ROWS = [
@@ -76,13 +72,18 @@ async def _seed(
     *,
     slug: str,
     roles: list[str],
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Create tenant + actor + api token; return (tenant_id, actor_id, raw_token)."""
+) -> tuple[uuid.UUID, uuid.UUID]:
+    """Create tenant + actor; return (tenant_id, actor_id).
+
+    Roles are carried only in TenantContext (not persisted to a dropped
+    api_tokens table). MCP tests patch _resolve_tenant instead of relying
+    on token lookup.
+    """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw = secrets.token_urlsafe(24)
+    oidc_subject = f"oidc-sub-{slug}-{actor_id.hex[:8]}"
     now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
     try:
         async with factory() as session, session.begin():
@@ -95,24 +96,10 @@ async def _seed(
             )
             await session.execute(
                 text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
+                    "INSERT INTO actors (actor_id, tenant_id, oidc_subject, display_name, created_at) "
+                    "VALUES (:aid, :tid, :sub, :dn, :now)"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"a-{slug}", "now": now},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw),
-                    "roles": roles,
-                    "now": now,
-                },
+                {"aid": actor_id, "tid": tenant_id, "sub": oidc_subject, "dn": f"a-{slug}", "now": now},
             )
             for kind, value in _VOCAB_ROWS:
                 await session.execute(
@@ -124,7 +111,7 @@ async def _seed(
                 )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw
+    return tenant_id, actor_id
 
 
 # ---------------------------------------------------------------------------
@@ -141,8 +128,9 @@ async def _seed(
 async def test_mcp_list_capabilities(pg_container: str, app_settings: Settings) -> None:
     """MCP list_capabilities tool returns a valid JSON response with items/page/page_size.
 
-    Uses call_tool() in-process — no SSE transport needed.  The token is
-    written to _request_token before the call, exactly as the SSE handler does.
+    Uses call_tool() in-process — no SSE transport needed. _resolve_tenant is
+    patched to return a TenantContext built from seeded DB rows so auth
+    infrastructure (OIDC, entitlement service) is not contacted.
     """
     stub_settings = Settings(
         database_url=pg_container,
@@ -169,18 +157,22 @@ async def test_mcp_list_capabilities(pg_container: str, app_settings: Settings) 
         clock=clock,
     )
 
-    # Seed a tenant and inject token into the ContextVar.
-    tid, _aid, raw_token = await _seed(
+    # Seed a tenant + actor and build a TenantContext for the patch.
+    tid, aid = await _seed(
         pg_container,
         slug=f"mcp-list-{uuid.uuid4().hex[:6]}",
         roles=["producer"],
     )
-    token_var_tok = _request_token.set(raw_token)
-    try:
+    ctx = TenantContext(tenant_id=tid, actor_id=aid, roles=["producer"])
+
+    # Patch _resolve_tenant to skip OIDC+entitlement resolution in-process.
+    with patch(
+        "registry.api.routers.mcp._resolve_tenant",
+        AsyncMock(return_value=ctx),
+    ):
         result = await mcp_server.call_tool("list_capabilities", {"page": 1, "page_size": 20})
-    finally:
-        _request_token.reset(token_var_tok)
-        await pg_engine.dispose()
+
+    await pg_engine.dispose()
 
     assert result, "call_tool returned empty result"
     # FastMCP's call_tool returns a (content_blocks, _) tuple. Some MCP
@@ -221,7 +213,7 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
     t2 = datetime.datetime(2026, 3, 1, tzinfo=datetime.UTC)
     fake_clock = FakeClock(t1)
 
-    tid, aid, raw_token = await _seed(
+    tid, aid = await _seed(
         pg_container,
         slug=f"tt-single-{uuid.uuid4().hex[:6]}",
         roles=["producer"],
@@ -263,8 +255,10 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
         clock=fake_clock,
     )
 
-    token_var_tok = _request_token.set(raw_token)
-    try:
+    with patch(
+        "registry.api.routers.mcp._resolve_tenant",
+        AsyncMock(return_value=ctx),
+    ):
         # Query at T1 — should see original body.
         result_t1 = await mcp_server.call_tool(
             "get_capability",
@@ -281,9 +275,8 @@ async def test_time_travel_get_capability(pg_container: str) -> None:
                 "as_of": "2026-03-15T00:00:00+00:00",
             },
         )
-    finally:
-        _request_token.reset(token_var_tok)
-        await pg_engine2.dispose()
+
+    await pg_engine2.dispose()
 
     content_t1 = result_t1[0] if isinstance(result_t1, tuple) else result_t1
     content_t2 = result_t2[0] if isinstance(result_t2, tuple) else result_t2
@@ -327,7 +320,7 @@ async def test_20_time_travel_scenarios(pg_container: str) -> None:
     session_factory = get_session_factory(pg_engine)
 
     # One shared tenant for all scenarios.
-    tid, actor_id, raw_token = await _seed(
+    tid, actor_id = await _seed(
         pg_container,
         slug=f"tt-batch-{uuid.uuid4().hex[:6]}",
         roles=["producer"],
@@ -570,10 +563,10 @@ _EVAL_ENTITIES: list[dict[str, Any]] = [
 
 async def _seed_eval_entities(
     pg_url: str,
-) -> tuple[uuid.UUID, uuid.UUID, str, dict[str, uuid.UUID]]:
+) -> tuple[uuid.UUID, uuid.UUID, dict[str, uuid.UUID]]:
     """Seed an eval-only tenant with all 20 eval entities.
 
-    Returns (tenant_id, actor_id, raw_token, fixture_uuid→actual_entity_uuid mapping).
+    Returns (tenant_id, actor_id, fixture_uuid→actual_entity_uuid mapping).
 
     The fixture UUIDs in search_questions.json are symbolic; this test creates
     actual entities with matching NAMES and records the mapping so recall can
@@ -584,7 +577,7 @@ async def _seed_eval_entities(
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw = secrets.token_urlsafe(24)
+    oidc_subject = f"oidc-sub-eval-recall-{actor_id.hex[:8]}"
     now = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
     try:
@@ -598,24 +591,10 @@ async def _seed_eval_entities(
             )
             await session.execute(
                 text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
+                    "INSERT INTO actors (actor_id, tenant_id, oidc_subject, display_name, created_at) "
+                    "VALUES (:aid, :tid, :sub, :dn, :now)"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "dn": "eval-actor", "now": now},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw),
-                    "roles": ["producer"],
-                    "now": now,
-                },
+                {"aid": actor_id, "tid": tenant_id, "sub": oidc_subject, "dn": "eval-actor", "now": now},
             )
             for kind, value in _VOCAB_ROWS:
                 await session.execute(
@@ -692,7 +671,7 @@ async def _seed_eval_entities(
     finally:
         await engine.dispose()
 
-    return tenant_id, actor_id, raw, fixture_to_entity
+    return tenant_id, actor_id, fixture_to_entity
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +681,7 @@ async def _seed_eval_entities(
 
 @pytest.mark.asyncio
 async def test_recall_at_10(pg_container: str) -> None:
-    """Recall@10 ≥ 70% over 50 search questions.
+    """Recall@10 >= 70% over 50 search questions.
 
     Strategy:
     - Seed 20 entities with bodies matched to the fixture questions.
@@ -710,8 +689,8 @@ async def test_recall_at_10(pg_container: str) -> None:
       zero vectors; lexical arm is the primary recall driver here).
     - For each question, run RetrievalService.search(top_k=10).
     - Recall for a question = 1 if ANY expected entity appears in top-10, else 0.
-    - Overall recall@10 = (questions with ≥1 expected hit) / 50.
-    - Assert ≥ 0.70.
+    - Overall recall@10 = (questions with >=1 expected hit) / 50.
+    - Assert >= 0.70.
     """
     questions = json.loads(_SEARCH_QUESTIONS_FILE.read_text())
     assert len(questions) == 50
@@ -724,7 +703,7 @@ async def test_recall_at_10(pg_container: str) -> None:
     )
 
     # Seed eval tenant.
-    tid, actor_id, raw_token, fixture_to_entity = await _seed_eval_entities(pg_container)
+    tid, actor_id, fixture_to_entity = await _seed_eval_entities(pg_container)
     ctx = TenantContext(tenant_id=tid, actor_id=actor_id, roles=["producer"])
 
     pg_engine = create_engine(stub_settings)
@@ -816,7 +795,7 @@ async def test_outbox_gauge_zero(pg_container: str) -> None:
     pg_engine = create_engine(stub_settings)
     session_factory = get_session_factory(pg_engine)
 
-    tid, actor_id, raw_token = await _seed(
+    tid, actor_id = await _seed(
         pg_container,
         slug=f"outbox-gauge-{uuid.uuid4().hex[:6]}",
         roles=["producer"],

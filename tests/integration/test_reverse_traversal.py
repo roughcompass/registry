@@ -2,7 +2,7 @@
 
 Contract under test
 -----------------------------------------------------------------
-Five-capability chain:  A → B → C → D → E  (edge rel: depends_on)
+Five-capability chain:  A -> B -> C -> D -> E  (edge rel: depends_on)
 
 Forward from A  (get_dependencies): B(1), C(2), D(3), E(4)
 Reverse from E  (get_reverse_traversal): D(1), C(2), B(3), A(4)
@@ -15,14 +15,13 @@ are configured.
 The REST endpoint ``GET /v1/capabilities/{entity_id}/dependents`` must return
 HTTP 200 with a ``TraversalResultResponse`` body that matches the service result.
 
-Visibility: same-tenant tests — all nodes belong to the calling tenant, so all
+Visibility: same-tenant tests -- all nodes belong to the calling tenant, so all
 are returned.
 """
 
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
 
 import pytest
@@ -31,13 +30,16 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
 from registry.config import Settings
 from registry.embedder import StubEmbedder
-from registry.main import create_app
 from registry.service.retrieval import RetrievalService
 from registry.storage.pg import get_session_factory
 from registry.types import FakeClock, TemporalFilter, TenantContext, TraversalResult
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -51,16 +53,17 @@ _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 # ---------------------------------------------------------------------------
 
 
-async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert tenant + actor + producer/consumer API token.
+async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert tenant + actor rows.  Returns (tenant_id, actor_id).
 
-    Returns (tenant_id, actor_id, raw_token).
+    No api_token row is written; service-layer tests build TenantContext
+    directly and REST tests authenticate via the entitlement auth harness.
     """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
+    oidc_subject = f"oidc-sub-{slug}-{actor_id.hex[:8]}"
     try:
         async with factory() as session, session.begin():
             await session.execute(
@@ -72,27 +75,14 @@ async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID,
             )
             await session.execute(
                 text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
+                    "INSERT INTO actors (actor_id, tenant_id, oidc_subject, display_name, created_at) "
+                    "VALUES (:aid, :tid, :sub, :dn, :now)"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, ARRAY['producer','consumer'], :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "now": _NOW,
-                },
+                {"aid": actor_id, "tid": tenant_id, "sub": oidc_subject, "dn": f"actor-{slug}", "now": _NOW},
             )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token
+    return tenant_id, actor_id
 
 
 async def _seed_five_cap_chain(
@@ -100,7 +90,7 @@ async def _seed_five_cap_chain(
     *,
     tenant_id: uuid.UUID,
 ) -> dict[str, uuid.UUID]:
-    """Insert entities A→B→C→D→E and depends_on edges.
+    """Insert entities A->B->C->D->E and depends_on edges.
 
     Returns dict with keys 'A', 'B', 'C', 'D', 'E' mapping to entity_ids,
     and 'AB', 'BC', 'CD', 'DE' mapping to edge_ids.
@@ -131,7 +121,7 @@ async def _seed_five_cap_chain(
                     },
                 )
 
-            # Insert edges: A→B, B→C, C→D, D→E
+            # Insert edges: A->B, B->C, C->D, D->E
             chain = [("A", "B", "AB"), ("B", "C", "BC"), ("C", "D", "CD"), ("D", "E", "DE")]
             for src_label, dst_label, edge_label in chain:
                 await session.execute(
@@ -155,7 +145,7 @@ async def _seed_five_cap_chain(
 
 
 # ---------------------------------------------------------------------------
-# Fixtures
+# Module-scoped fixture: seed the chain data shared by service-layer tests
 # ---------------------------------------------------------------------------
 
 
@@ -163,17 +153,18 @@ async def _seed_five_cap_chain(
 async def chain_setup(pg_container: str):  # type: ignore[type-arg]
     """Seed tenant + 5-cap chain once for the whole module.
 
-    Returns dict with:
-      tenant_id, actor_id, raw_token, ids (entity/edge UUIDs by label).
+    Returns dict with keys tenant_id, actor_id, ids, pg_url.
+    Service-layer tests construct TenantContext directly from these.
     """
-    tenant_id, actor_id, raw_token = await _seed_tenant(pg_container, slug=f"t05-{uuid.uuid4().hex[:8]}")
+    slug = f"t05-{uuid.uuid4().hex[:8]}"
+    tenant_id, actor_id = await _seed_tenant(pg_container, slug=slug)
     chain_ids = await _seed_five_cap_chain(pg_container, tenant_id=tenant_id)
     return {
         "tenant_id": tenant_id,
         "actor_id": actor_id,
-        "raw_token": raw_token,
         "ids": chain_ids,
         "pg_url": pg_container,
+        "slug": slug,
     }
 
 
@@ -204,15 +195,14 @@ def _make_retrieval_service(pg_url: str) -> RetrievalService:
 
 @pytest.mark.asyncio
 async def test_reverse_traversal_from_E_returns_D_C_B_A(chain_setup: dict) -> None:
-    """Reverse traversal from E in A→B→C→D→E must return D, C, B, A as nodes."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    """Reverse traversal from E in A->B->C->D->E must return D, C, B, A as nodes."""
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result: TraversalResult = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -238,14 +228,13 @@ async def test_reverse_traversal_from_E_returns_D_C_B_A(chain_setup: dict) -> No
 @pytest.mark.asyncio
 async def test_reverse_traversal_from_E_node_count(chain_setup: dict) -> None:
     """Reverse from E must return exactly 4 nodes (D, C, B, A)."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -267,14 +256,13 @@ async def test_forward_and_reverse_symmetric_node_sets(chain_setup: dict) -> Non
     Reverse from E returns {D, C, B, A}.
     Union minus the respective roots = {B, C, D}.
     """
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     # Forward from A
     fwd = await svc.get_dependencies(
@@ -309,14 +297,13 @@ async def test_forward_and_reverse_symmetric_node_sets(chain_setup: dict) -> Non
 @pytest.mark.asyncio
 async def test_reverse_traversal_depth_cap(chain_setup: dict) -> None:
     """Depth=1 from E must return only D (1 hop)."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -335,14 +322,13 @@ async def test_reverse_traversal_depth_cap(chain_setup: dict) -> None:
 @pytest.mark.asyncio
 async def test_reverse_traversal_cache_hit_is_false(chain_setup: dict) -> None:
     """cache_hit must be False when the closure cache has not been warmed."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -357,14 +343,13 @@ async def test_reverse_traversal_cache_hit_is_false(chain_setup: dict) -> None:
 @pytest.mark.asyncio
 async def test_reverse_traversal_version_satisfied_stub(chain_setup: dict) -> None:
     """version_satisfied must be all True when no version predicates are configured."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -382,15 +367,14 @@ async def test_reverse_traversal_version_satisfied_stub(chain_setup: dict) -> No
 @pytest.mark.asyncio
 async def test_reverse_traversal_empty_graph(chain_setup: dict) -> None:
     """Leaf with no inbound edges returns empty nodes + no error."""
-    setup = chain_setup
-    svc = _make_retrieval_service(setup["pg_url"])
+    svc = _make_retrieval_service(chain_setup["pg_url"])
     ctx = TenantContext(
-        tenant_id=setup["tenant_id"],
-        actor_id=setup["actor_id"],
+        tenant_id=chain_setup["tenant_id"],
+        actor_id=chain_setup["actor_id"],
         roles=["consumer"],
     )
     # A has no inbound edges in the chain (it depends on nothing upstream)
-    ids = setup["ids"]
+    ids = chain_setup["ids"]
 
     result = await svc.get_reverse_traversal(
         ctx=ctx,
@@ -404,37 +388,45 @@ async def test_reverse_traversal_empty_graph(chain_setup: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
-# REST endpoint tests (HTTP via httpx AsyncClient)
+# REST endpoint tests (HTTP via httpx AsyncClient + auth harness)
+#
+# Each test opens its own harness so the FastAPI lifespan is fresh and the
+# module-scoped chain_setup fixture's engine is not shared with the app.
+# The harness JIT-materialises the tenant from the chain_setup slug, so
+# entity rows seeded above are visible to the authenticated requests.
 # ---------------------------------------------------------------------------
 
 
-@pytest_asyncio.fixture
-async def http_client(chain_setup: dict):  # type: ignore[type-arg]
-    """Spin up the FastAPI app and return an httpx AsyncClient."""
-    pg_url = chain_setup["pg_url"]
-    settings = Settings(
-        database_url=pg_url,
-        pgbouncer_url=pg_url,
-        scheduler_jobstore_url=pg_url,
-        embedding_model="stub",
-        scheduler_use_memory_jobstore=True,
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, chain_setup["raw_token"], chain_setup["ids"]
+async def _make_http_client(pg_url: str, slug: str):  # type: ignore[return]
+    """Yield (harness, persona, AsyncClient) for one REST test."""
+    async with EntitlementAuthHarness(pg_url) as harness:
+        persona = harness.add_persona(slug, roles=["producer", "consumer"])
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Drive JIT materialisation before the test body runs.
+            with patch_validator_for_actor(persona):
+                await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            yield harness, persona, client
 
 
 @pytest.mark.asyncio
-async def test_rest_dependents_endpoint_200(http_client) -> None:
+async def test_rest_dependents_endpoint_200(pg_container: str, chain_setup: dict) -> None:
     """GET /v1/capabilities/{E}/dependents returns 200 with valid TraversalResultResponse."""
-    client, raw_token, ids = http_client
+    slug = chain_setup["slug"]
+    ids = chain_setup["ids"]
 
-    resp = await client.get(
-        f"/v1/capabilities/{ids['E']}/dependents",
-        params={"depth": 5, "edge_types": "depends_on"},
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
+    async with EntitlementAuthHarness(pg_container) as harness:
+        persona = harness.add_persona(slug, roles=["producer", "consumer"])
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                resp = await client.get(
+                    f"/v1/capabilities/{ids['E']}/dependents",
+                    params={"depth": 5, "edge_types": "depends_on"},
+                    headers=bearer_headers(tenant_slug=slug),
+                )
 
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code}: {resp.text}"
     body = resp.json()
@@ -453,15 +445,22 @@ async def test_rest_dependents_endpoint_200(http_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rest_dependents_depth_param(http_client) -> None:
+async def test_rest_dependents_depth_param(pg_container: str, chain_setup: dict) -> None:
     """depth=1 from E via REST returns only D."""
-    client, raw_token, ids = http_client
+    slug = chain_setup["slug"]
+    ids = chain_setup["ids"]
 
-    resp = await client.get(
-        f"/v1/capabilities/{ids['E']}/dependents",
-        params={"depth": 1, "edge_types": "depends_on"},
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
+    async with EntitlementAuthHarness(pg_container) as harness:
+        persona = harness.add_persona(slug, roles=["producer", "consumer"])
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                resp = await client.get(
+                    f"/v1/capabilities/{ids['E']}/dependents",
+                    params={"depth": 1, "edge_types": "depends_on"},
+                    headers=bearer_headers(tenant_slug=slug),
+                )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -472,29 +471,43 @@ async def test_rest_dependents_depth_param(http_client) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rest_dependents_invalid_as_of_returns_422(http_client) -> None:
+async def test_rest_dependents_invalid_as_of_returns_422(pg_container: str, chain_setup: dict) -> None:
     """Naive (timezone-unaware) as_of string returns HTTP 422."""
-    client, raw_token, ids = http_client
+    slug = chain_setup["slug"]
+    ids = chain_setup["ids"]
 
-    resp = await client.get(
-        f"/v1/capabilities/{ids['E']}/dependents",
-        params={"as_of": "2026-01-01T12:00:00"},  # no timezone
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
+    async with EntitlementAuthHarness(pg_container) as harness:
+        persona = harness.add_persona(slug, roles=["producer", "consumer"])
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                resp = await client.get(
+                    f"/v1/capabilities/{ids['E']}/dependents",
+                    params={"as_of": "2026-01-01T12:00:00"},  # no timezone
+                    headers=bearer_headers(tenant_slug=slug),
+                )
 
     assert resp.status_code == 422, f"expected 422 for naive as_of, got {resp.status_code}"
 
 
 @pytest.mark.asyncio
-async def test_rest_dependents_leaf_node_returns_empty_nodes(http_client) -> None:
+async def test_rest_dependents_leaf_node_returns_empty_nodes(pg_container: str, chain_setup: dict) -> None:
     """A has no inbound edges; REST endpoint returns empty nodes list."""
-    client, raw_token, ids = http_client
+    slug = chain_setup["slug"]
+    ids = chain_setup["ids"]
 
-    resp = await client.get(
-        f"/v1/capabilities/{ids['A']}/dependents",
-        params={"depth": 5, "edge_types": "depends_on"},
-        headers={"Authorization": f"Bearer {raw_token}"},
-    )
+    async with EntitlementAuthHarness(pg_container) as harness:
+        persona = harness.add_persona(slug, roles=["producer", "consumer"])
+        harness.configure_fetcher_for(persona)
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            with patch_validator_for_actor(persona):
+                resp = await client.get(
+                    f"/v1/capabilities/{ids['A']}/dependents",
+                    params={"depth": 5, "edge_types": "depends_on"},
+                    headers=bearer_headers(tenant_slug=slug),
+                )
 
     assert resp.status_code == 200, resp.text
     body = resp.json()

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import secrets
 import uuid
 
 import pytest
@@ -32,7 +31,6 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
 from registry.config import Settings
 from registry.embedder import StubEmbedder
 from registry.service.retrieval import RetrievalService
@@ -51,13 +49,17 @@ _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 # ---------------------------------------------------------------------------
 
 
-async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Insert tenant + actor + API token.  Returns (tenant_id, actor_id, raw_token)."""
+async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID]:
+    """Insert tenant + actor.  Returns (tenant_id, actor_id).
+
+    Roles are supplied at request time via the entitlement resolver; no
+    token row is written to the DB.
+    """
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     tenant_id = uuid.uuid4()
     actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
+    oidc_subject = f"oidc-sub-{slug}-{actor_id.hex[:8]}"
     try:
         async with factory() as session, session.begin():
             await session.execute(
@@ -69,27 +71,14 @@ async def _seed_tenant(pg_url: str, *, slug: str) -> tuple[uuid.UUID, uuid.UUID,
             )
             await session.execute(
                 text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
+                    "INSERT INTO actors (actor_id, tenant_id, oidc_subject, display_name, created_at) "
+                    "VALUES (:aid, :tid, :sub, :dn, :now)"
                 ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, ARRAY['producer','consumer'], :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "now": _NOW,
-                },
+                {"aid": actor_id, "tid": tenant_id, "sub": oidc_subject, "dn": f"actor-{slug}", "now": _NOW},
             )
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token
+    return tenant_id, actor_id
 
 
 async def _seed_scenario(
@@ -237,12 +226,11 @@ def _make_service(pg_url: str) -> RetrievalService:
 @pytest_asyncio.fixture(scope="module")
 async def scenario_v14(pg_container: str):  # type: ignore[type-arg]
     """Provider at version 1.4.0; predicate is >=2.0 → unsatisfied."""
-    tenant_id, actor_id, raw_token = await _seed_tenant(pg_container, slug=f"t09-v14-{uuid.uuid4().hex[:8]}")
+    tenant_id, actor_id = await _seed_tenant(pg_container, slug=f"t09-v14-{uuid.uuid4().hex[:8]}")
     ids = await _seed_scenario(pg_container, tenant_id=tenant_id, provider_version="1.4.0")
     return {
         "tenant_id": tenant_id,
         "actor_id": actor_id,
-        "raw_token": raw_token,
         "ids": ids,
         "pg_url": pg_container,
     }
@@ -251,12 +239,11 @@ async def scenario_v14(pg_container: str):  # type: ignore[type-arg]
 @pytest_asyncio.fixture(scope="module")
 async def scenario_v24(pg_container: str):  # type: ignore[type-arg]
     """Provider at version 2.4.0; predicate is >=2.0 → satisfied."""
-    tenant_id, actor_id, raw_token = await _seed_tenant(pg_container, slug=f"t09-v24-{uuid.uuid4().hex[:8]}")
+    tenant_id, actor_id = await _seed_tenant(pg_container, slug=f"t09-v24-{uuid.uuid4().hex[:8]}")
     ids = await _seed_scenario(pg_container, tenant_id=tenant_id, provider_version="2.4.0")
     return {
         "tenant_id": tenant_id,
         "actor_id": actor_id,
-        "raw_token": raw_token,
         "ids": ids,
         "pg_url": pg_container,
     }
