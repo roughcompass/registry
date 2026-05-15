@@ -462,8 +462,10 @@ async def search_workspaces(
 ) -> dict[str, Any]:
     """Search workspace entries visible to the calling actor.
 
-    Returns entries from workspaces the caller owns or holds an active share on.
-    No entry from a workspace the caller cannot access is ever included.
+    Returns entries from workspaces visible to the caller — their
+    actor-owned workspaces plus every tenant-owned workspace in their
+    tenant. No entry from a workspace the caller cannot access is ever
+    included.
 
     Filters are AND-combined:
     - q: full-text search on body_md using the GIN index.
@@ -507,9 +509,10 @@ async def list_workspaces(
 ) -> dict[str, Any]:
     """List workspaces the calling actor can see.
 
-    Returns workspaces where the caller is the owning actor, any member of the
-    owning tenant, or holds an active workspace share. Excludes soft-deleted rows.
-    Excludes archived rows unless include_archived=true.
+    Returns workspaces where the caller is the owning actor (for
+    ``owner_kind='actor'``) or any member of the owning tenant (for
+    ``owner_kind='tenant'``). Excludes soft-deleted rows. Excludes
+    archived rows unless ``include_archived=true``.
 
     Cursor-paginated on workspace_id ascending.
     """
@@ -541,8 +544,10 @@ async def create_entry(
 ) -> dict[str, Any]:
     """Create a new entry in a workspace.
 
-    The caller must own the workspace or hold an active contributor share.
-    The service enforces access via get_workspace before writing.
+    The caller must be the workspace owner (the calling actor for
+    ``owner_kind='actor'`` workspaces; any actor in the owning tenant
+    for ``owner_kind='tenant'``). The service enforces access via
+    ``get_workspace`` before writing.
 
     PII scanner runs on body_md and references_jsonb. A block-level hit raises
     422 and the entry is NOT stored. A warn-level hit stores the entry and
@@ -586,8 +591,10 @@ async def list_entries(
 ) -> dict[str, Any]:
     """List active entries in a workspace.
 
-    Access is gated by workspace visibility — the caller must own the workspace
-    or hold an active share. The service raises 403/404 before returning entries.
+    Access is gated by workspace visibility — the caller must be the
+    workspace owner (the calling actor for ``owner_kind='actor'``; any
+    actor in the owning tenant for ``owner_kind='tenant'``). The service
+    raises 403/404 before returning entries.
 
     Excludes soft-deleted entries. Entries past their expires_at are still
     returned; the expiry worker invalidates them in a background run.
@@ -725,9 +732,10 @@ async def _update_entry_handler(
 ) -> dict[str, Any]:
     """Update a workspace entry's body, reference_ids, or references_jsonb.
 
-    Authorization: the caller must own the workspace or hold an active
-    contributor share. The service enforces this via workspace visibility before
-    writing.
+    Authorization: the caller must be the workspace owner (the calling
+    actor for ``owner_kind='actor'`` workspaces; any actor in the owning
+    tenant for ``owner_kind='tenant'``). The service enforces this via
+    workspace visibility before writing.
 
     PII scanner runs on any provided body_md or references_jsonb. A block hit
     returns 422 and the entry is NOT updated. A warn hit updates the entry and

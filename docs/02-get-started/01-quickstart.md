@@ -127,6 +127,6 @@ docker compose down -v     # stop containers AND wipe the database
 |---|---|
 | Understand tenants, entities, visibility | [overview/vocabulary.md](../01-overview/03-vocabulary.md) |
 | Set up OIDC or production tokens | [overview/authentication.md](../01-overview/04-authentication.md) |
-| Understand role grants, tenant selection, RSAM mode | [overview/authorization.md](../01-overview/05-authorization.md) |
+| Understand role grants, tenant selection, entitlements | [overview/authorization.md](../01-overview/05-authorization.md) |
 | Configure env vars | [reference/configuration.md](../05-reference/03-configuration.md) |
 | Call from an AI agent via MCP | [reference/mcp-tools.md](../05-reference/02-mcp-tools.md) |

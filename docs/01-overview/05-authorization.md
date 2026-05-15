@@ -11,7 +11,7 @@ Validated claim set (sub, iss, aud, …)
         │
         ▼
 Claim resolver               → entitlement service round-trip
-  (oidc | rsam — AUTH_MODE)         (with cache + single-flight)
+                                    (with cache + single-flight)
         │
         ▼
 Tenant grants                → 403 if empty
@@ -28,7 +28,7 @@ JIT actor upsert             → idempotent (oidc_subject, tenant_id) → actor_
 TenantContext (tenant_id + actor_id + role)
 ```
 
-Authorization is single-mode at the registry's edge: every request fans into the resolver factory, which picks the live resolver based on `AUTH_MODE`. The default resolver (`oidc`) calls an external entitlement service; the alternative (`rsam`) resolves grants from an internal directory authority. Both produce the same `TenantContext` shape, so route handlers don't branch on auth mode.
+The grant resolver runs once per request and produces the `TenantContext` route handlers receive. The default and only live resolver calls an external entitlement service over HTTP and parses the response into a list of `(tenant_slug, role)` grants — see [Default `oidc` mode](#default-oidc-mode--entitlement-service) below.
 
 ---
 
@@ -130,37 +130,8 @@ If the resolver receives an entitlement for a tenant that an operator has disabl
 
 ---
 
-## RSAM mode — internal directory authority
+<!-- Reserved for future alternative resolvers. The entitlement-service path is the only live grant-resolution strategy today. -->
 
-Some enterprise deployments authenticate callers via an internal directory authority (IDA) and resolve tenant-scope grants from an external entitlement reference API (RSAM), rather than embedding tenant claims in the JWT and routing through an entitlement service. Enable it:
-
-```
-AUTH_MODE=rsam
-AUTH_CLAIM_SOURCE_URL=https://entitlements.internal.example.com
-```
-
-The JWT validation step is unchanged (see [Authentication](04-authentication.md#claim-contract)) — only grant resolution differs:
-
-1. The `tenant_id`/`tid` claim check is **skipped** because IDA tokens carry the caller's employee subject in `sub` but no tenant claim.
-2. The resolver calls the claim source's authority endpoint for the subject, parses the returned authority strings, and JIT-materialises tenant rows for each SEAL the caller holds authority over.
-
-RSAM tokens may resolve to multiple tenants — call `GET /v1/whoami` to confirm scope before issuing scoped writes.
-
-### Env vars
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `AUTH_MODE` | `oidc` | `oidc` (default) or `rsam`. Selects the grant-resolution strategy. |
-| `AUTH_CLAIM_SOURCE_URL` | — | Base URL of the external claim source. Required when `AUTH_MODE=rsam`. |
-| `AUTH_CLAIM_CACHE_TTL_SECONDS` | `300` | TTL (seconds) for the grant cache. `0` disables caching. |
-| `AUTH_STALE_CEILING_SECONDS` | `86400` | Max staleness tolerated when the claim source is unreachable and stale-on-failure is on. |
-| `AUTH_SERVE_STALE_ON_FAILURE` | `false` | Serve cached grants when the external claim source is unreachable. Default is fail-closed. |
-| `AUTH_TENANT_ID_HEADER` | `X-Tenant-ID` | Header the upstream gateway sends to identify the requesting tenant. |
-| `AUTH_SEAL_ID_HEADER_ALIAS` | `X-SEAL-ID` | Optional legacy-header alias accepted alongside `AUTH_TENANT_ID_HEADER`. Set empty to disable. |
-
-### Live status
-
-The actual HTTP call to the entitlement reference API is stubbed. Production code that reaches the `fetch_authorities` path without an injected callable raises `NotImplementedError` — an unambiguous signal that the path is not ready, rather than silently returning empty grants. `AUTH_MODE=rsam` is not suitable for production deployments until the upstream-contract validation (endpoint URL, response schema, caller-auth mechanism) closes.
 
 ---
 
@@ -187,14 +158,14 @@ Cache MUST NOT be consulted on auth errors — the resolver enforces this. Auth 
 
 ## Local development
 
-`make dev-token` (see [Authentication → Local development](04-authentication.md#local-development)) seeds entitlements in the mock entitlement service for the same `sub` value the JWT will carry (`registry-dev` under the client_credentials grant). The seeded entitlement is `111205_REGISTRY_ADMIN`, which parses to `(tenant_slug=111205, role=admin)` under the default mapping.
+`make dev-token` (see [Authentication → Local development](04-authentication.md#local-development)) seeds entitlements in the mock entitlement service for the same `sub` the JWT will carry (`registry-dev` under the client_credentials grant). The seeded entitlement is `dev_REGISTRY_ADMIN`, which parses to `(tenant_slug=dev, role=admin)` under the default mapping.
 
 To exercise multi-tenant grants locally, PUT additional entitlements directly to the mock entitlement service:
 
 ```bash
 curl -X PUT http://localhost:8091/admin/entitlements/registry-dev \
   -H "Content-Type: application/json" \
-  -d '{"scenario":"success_multi_tenant","entitlements":["111205_REGISTRY_ADMIN","999_REGISTRY_CONSUMER"]}'
+  -d '{"scenario":"success_multi_tenant","entitlements":["dev_REGISTRY_ADMIN","acme_REGISTRY_CONSUMER"]}'
 ```
 
 The next request from `registry-dev` resolves to two tenant grants — `X-Tenant-ID` then becomes mandatory.

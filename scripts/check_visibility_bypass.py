@@ -8,8 +8,10 @@ callers must be audited and kept to a minimum.
 Permitted callers (registry/registry/ subtree only; migrations and dev scripts
 are excluded from this gate because they run under operator supervision):
 
-    registry/registry/auth/rsam/tenant_store.py  — JIT materialization of
-        RSAM SEAL tenants; inserts on first-sight with ON CONFLICT DO NOTHING.
+    registry/registry/auth/entitlements/actor_store.py — JIT materialization
+        of tenants on first successful entitlement resolution; inserts on
+        first-sight with ON CONFLICT DO NOTHING and emits a tenant audit
+        event in the same transaction.
 
     registry/registry/storage/migrations/versions/ — Alembic migrations may
         insert seed rows as part of schema bootstrapping; excluded from the
@@ -71,12 +73,13 @@ _INSERT_TENANTS: re.Pattern[str] = re.compile(
 # Modules (relative to repo root) that are allowed to INSERT INTO tenants.
 # Each entry must include a brief justification comment.
 #
-# tenant_store.py — JIT tenant materialization for RSAM SEAL IDs. Inserts
-#   on first sight with ON CONFLICT DO NOTHING; emits tenant.jit_created
-#   in the same transaction so tenant creation is always audited atomically.
+# actor_store.py — JIT tenant materialization triggered by entitlement
+#   resolution. Inserts on first sight with ON CONFLICT DO NOTHING and emits
+#   tenant.jit_created in the same transaction so tenant creation is always
+#   audited atomically.
 _ALLOWED_CALLERS: frozenset[str] = frozenset(
     {
-        "registry/registry/auth/rsam/tenant_store.py",
+        "registry/registry/auth/entitlements/actor_store.py",
     }
 )
 

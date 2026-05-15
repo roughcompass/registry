@@ -72,18 +72,33 @@ These have no default. The app raises at startup if they are unset.
 
 ---
 
-## Authentication
+## Authentication — JWT validation
+
+The registry accepts OIDC JWT credentials only. There is no opaque-bearer / API-token path. See [Authentication](../01-overview/04-authentication.md) for the full claim contract.
 
 | Variable | Default | Required when | Description |
 |---|---|---|---|
-| `OIDC_DISCOVERY_URL` | — | OIDC auth | OpenID Connect discovery document URL. Omit to disable OIDC and accept only opaque API tokens. |
-| `AUTH_MODE` | `oidc` | always | `oidc` — tenant scope from token claims (default). `rsam` — tenant scope resolved from external entitlement API. |
-| `AUTH_CLAIM_SOURCE_URL` | — | `AUTH_MODE=rsam` | Base URL of the external claim source. Must be set when `AUTH_MODE` is not `oidc`. |
-| `AUTH_CLAIM_CACHE_TTL_SECONDS` | `300` | external claim mode | TTL (seconds) for the claim-source cache. `0` disables caching. |
-| `AUTH_STALE_CEILING_SECONDS` | `86400` | `AUTH_SERVE_STALE_ON_FAILURE=true` | Maximum staleness (seconds) tolerated when the claim source is unreachable. Hard ceiling — never exceeded even in stale-on-failure mode. |
-| `AUTH_SERVE_STALE_ON_FAILURE` | `false` | external claim mode | Serve stale cached claims when the claim source is unreachable. Default is fail-closed. Enable with care — stale entitlements may allow or deny access incorrectly during an outage. |
-| `AUTH_TENANT_ID_HEADER` | `X-Tenant-ID` | always | HTTP header name carrying the per-request tenant identifier. Must match what the upstream gateway or client sends. |
-| `AUTH_SEAL_ID_HEADER_ALIAS` | `X-SEAL-ID` | optional | Optional alias header accepted alongside `AUTH_TENANT_ID_HEADER`. Leave blank or unset to disable. |
+| `OIDC_DISCOVERY_URL` | — | always (auth enabled) | OpenID Connect discovery document URL. Validator reads `issuer`, `jwks_uri`, and supported algorithms from this doc. |
+| `OIDC_ISSUER_ALLOWLIST` | empty (legacy) | production | Comma-separated list of acceptable `iss` claim values. Tokens with a non-allowlisted issuer are rejected even if the signature validates. Empty = no allowlisting (NOT recommended in production). |
+| `RESOURCE_URI_ALLOWLIST` | empty (legacy) | production | Comma-separated list of acceptable `aud` claim values. ADFS carries the resource URI here; this lists what this deployment will accept. |
+| `OIDC_EXPECTED_AUDIENCE` | — | optional | Legacy single-value `aud` check. Superseded by `RESOURCE_URI_ALLOWLIST`; still honored when the allowlist is empty. |
+| `OIDC_CLIENT_ID_ALLOWLIST` | empty | optional | Comma-separated list of acceptable `azp` / `client_id` values. Empty = check skipped (NOT recommended in production — any token from a trusted JWKS would pass). |
+| `OIDC_MAX_TOKEN_TTL_SECONDS` | `900` | always | Registry-enforced upper bound on token lifetime. Tokens where `exp - iat` exceeds this — or where `iat` is absent — are rejected. Defense-in-depth against IdP misconfiguration issuing long-lived tokens. |
+
+## Authentication — entitlement-service grant resolution
+
+Once the JWT validates, the registry resolves grants by calling an external entitlement service keyed on the JWT's `sub`. See [Authorization](../01-overview/05-authorization.md) for the grant flow.
+
+| Variable | Default | Required when | Description |
+|---|---|---|---|
+| `ENTITLEMENT_SERVICE_URL` | empty | always (auth enabled) | Base URL of the entitlement service. Setting this enables the entitlement-resolution path; the four fields below all become required (`Settings.__post_init__` raises otherwise). |
+| `ENTITLEMENT_SERVICE_ENV` | empty | `ENTITLEMENT_SERVICE_URL` set | `env` query parameter passed to the entitlement service. Typically `PRD`, `NPD`, or `DEV`. |
+| `ENTITLEMENT_SERVICE_DISCRIMINATOR` | empty | `ENTITLEMENT_SERVICE_URL` set | Per-deployment middle token of the entitlement grammar `<tenant_slug>_<DISCRIMINATOR>_<ROLE>`. Multiple registry-shaped services can share one entitlement endpoint with different discriminators (`REGISTRY`, `GRAPHREGISTRY`, …). Must be non-empty with no whitespace. |
+| `ENTITLEMENT_ROLE_MAPPING` | empty dict | `ENTITLEMENT_SERVICE_URL` set | Comma-separated `EXTERNAL:internal` pairs mapping the upstream role suffix to one of `admin / producer / consumer / auditor`. Multiple external suffixes may map to the same internal role (covers LDAP rename rollouts). Example: `ADMIN:admin,PRODUCER:producer,CONSUMER:consumer,AUDITOR:auditor`. |
+| `ENTITLEMENT_CONNECT_TIMEOUT_MS` | `250` | optional | TCP/TLS connect timeout to the entitlement service (milliseconds). Bounded because this call sits in the auth hot path on every cache miss. |
+| `ENTITLEMENT_READ_TIMEOUT_MS` | `1500` | optional | Read timeout for the entitlement-service response (milliseconds). |
+| `ENTITLEMENT_MAX_RETRIES` | `1` | optional | Maximum retries on network failure / 5xx / 429. Must be 0 or 1. |
+| `ENTITLEMENT_CACHE_MAX_ENTRIES` | `10000` | optional | Per-process in-memory cache size for resolved grants. Per-entry TTL is bounded by the JWT's own `exp` claim, not by a separate setting. |
 
 ---
 

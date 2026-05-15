@@ -99,7 +99,22 @@ See [Bi-temporal time travel](#bi-temporal-time-travel) below for the full `?as_
 
 ## Edge
 
-**Edges** record directed relationships between entities. Edge types are drawn from a per-tenant closed vocabulary; common values are `depends_on`, `composes`, and `uses`.
+**Edges** record directed relationships between entities. Edge types are drawn from a per-tenant closed vocabulary (`edge_rel`). The seeded values cover the relationship patterns the registry uses across capabilities, concepts, integrations, and operations:
+
+| Edge type | Direction | Meaning |
+|---|---|---|
+| `depends_on` | A → B | A requires B to function. Drives blast-radius and dependency traversals. |
+| `composes` | A → B | A is built from B; A's surface is partly B's surface. |
+| `concept_of` | A → B | A is a concept attached to B (model, abstraction, vocabulary). |
+| `operation_of` | A → B | A is an operation exposed by B (REST verb, RPC method, CLI command). |
+| `integrates_with` | A ↔ B | A talks to B over an interface; symmetric in intent, directional in storage. |
+| `event_source` | A → B | A emits events that B consumes (Kafka topic, webhook). |
+| `replaced_by` | A → B | A is deprecated; B is its successor. Drives lifecycle ripple. |
+| `instance_of` | A → B | A is a concrete instance of abstract B (deployment of a service, version of an interface). |
+| `conflicts_with` | A ↔ B | A cannot coexist with B in the same dependency tree. |
+| `owned_by` / `product_owned_by` | A → B | A is owned by B (person or team). |
+
+Per-tenant admins extend the vocabulary by `POST /v1/admin/vocabularies/edge_rel`; tenant-scoped closed-vocabulary semantics mean values added by one tenant are not visible to others.
 
 Edges are bi-temporal (same `?as_of=` semantics as attributes). Graph traversal endpoints use edges:
 
@@ -234,11 +249,11 @@ Use the preview before publishing an interface update to assess impact before co
 
 ---
 
-## RSAM auth mode
+## Multi-tenant grants
 
-In the default `oidc` auth mode, the caller's tenant scope is embedded in the JWT claims. In `rsam` mode the service calls an external entitlement reference API to resolve which tenants the caller holds authority over.
+A single JWT may resolve to grants for more than one tenant — for example, a service account with `ADMIN` on tenant `acme` and `CONSUMER` on tenant `beta`. When more than one grant resolves, the caller must specify which tenant the request operates against via the `X-Tenant-ID` header; otherwise the registry returns HTTP 400 listing the available tenants.
 
-For API callers, the practical difference is: in RSAM mode, your token may resolve to multiple tenants. Call `GET /v1/whoami` to confirm the resolved tenant scope before making write calls. See [authorization.md](05-authorization.md#rsam-mode--internal-directory-authority) for configuration details.
+Single-grant tokens auto-select the only tenant. Call `GET /v1/whoami` to confirm the resolved tenant scope before making write calls. See [authorization.md](05-authorization.md#tenant-selection--x-tenant-id-header) for the full selection rules.
 
 ---
 
@@ -263,7 +278,7 @@ The scanner does not run on reads. PII scan policies are configured per tenant v
 |---|---|
 | Run the service locally | [get-started/quickstart.md](../02-get-started/01-quickstart.md) |
 | Understand who's making a request (OIDC, JWT, claims) | [overview/authentication.md](04-authentication.md) |
-| Understand what they can do (entitlements, roles, RSAM) | [overview/authorization.md](05-authorization.md) |
+| Understand what they can do (entitlements, roles, tenant selection) | [overview/authorization.md](05-authorization.md) |
 | Find every API endpoint | [reference/api.md](../05-reference/01-api.md) |
 | Configure the service | [reference/configuration.md](../05-reference/03-configuration.md) |
 | Operate progressions | [operations/progression.md](../06-operations/02-progression.md) |

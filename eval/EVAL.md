@@ -1167,7 +1167,7 @@ Gate command: `make test-hygiene`
 
 **Closed:** 2026-05-14
 **Tasks:** 25 / 25 done
-**Audit query:** see `docs/operator/workspaces.md`
+**Audit query:** see `eval/EVAL.md` archive — the pre-cutover audit query in this phase referenced `workspace_shares` / `workspace_share_acceptances` tables that migration `0020_workspace_rbac` dropped. Post-cutover, workspace access is governed exclusively by tenant + actor visibility, so no per-share audit is meaningful.
 
 Per-workspace shares (`workspace_shares`, `workspace_share_acceptances`)
 removed; access governed exclusively by tenant-wide `actor_roles`

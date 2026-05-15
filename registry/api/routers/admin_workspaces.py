@@ -78,13 +78,11 @@ async def delete_actor_personal_data(
     data. It performs a hard DELETE (not a soft-delete) across:
 
     - workspace_entries created by the actor
-    - actor-owned workspaces that are now empty after entry deletion
-    - active workspace shares granted TO the actor (revoke, not delete)
+    - actor-owned workspaces (cascading their entries) once the actor is gone
 
-    workspace_share_acceptances rows are retained as an audit trail of
-    historical cross-tenant access events. They contain an opaque actor
-    identifier, not authored content, and their retention is consistent with
-    audit-integrity requirements.
+    Workspaces never cross tenant boundaries — there is no separate share
+    revocation step; tenant-owned workspaces in tenants the actor was a
+    member of remain intact and are governed by their tenant's roster.
 
     The operation is idempotent. A second call returns counts of 0.
 

@@ -5,7 +5,7 @@ The registry service exposes an MCP (Model Context Protocol) surface at `/mcp`. 
 - `GET /mcp/sse` — SSE connection endpoint
 - `POST /mcp/messages/` — client-to-server message channel
 
-Authentication uses the same bearer token as the REST API. The token is passed in the `Authorization: Bearer <token>` header of the SSE connection request. The MCP layer validates the token identically to the REST middleware — same hash, same database check, same tenant context.
+Authentication uses the same OIDC JWT as the REST API. Pass the token in the `Authorization: Bearer <JWT>` header on the SSE connection request; the MCP layer extracts it once at connection time and validates each tool call through the same OIDC + entitlement-service pipeline the REST middleware uses (see [authentication.md](../01-overview/04-authentication.md)). The SSE handshake itself is unauthenticated — auth happens per tool call.
 
 **Before calling any tool:** call `whoami` first to confirm which tenant the token resolves to and which roles the caller holds.
 
@@ -225,7 +225,7 @@ Paginated list of capabilities visible to the caller's tenant.
 |---|---|---|---|---|
 | `lifecycle` | string | no | null | Filter by lifecycle label |
 | `entity_type` | string | no | null | Filter by entity type slug |
-| `page` | integer | no | 1 | Page number (1-based) |
+| `cursor` | string | no | null | Opaque cursor from a previous response's `next_cursor`. Null returns the first page. |
 | `page_size` | integer | no | 20 | Items per page (1–200) |
 | `as_of` | string (ISO-8601 UTC) | no | null | Time-travel timestamp |
 
@@ -234,10 +234,11 @@ Paginated list of capabilities visible to the caller's tenant.
 ```json
 {
   "items": [ /* array of capability summary objects */ ],
-  "page": 1,
-  "page_size": 20
+  "next_cursor": "eyJpZCI6Ii4uLiJ9"
 }
 ```
+
+Pass `next_cursor` as `cursor` on the next call to page through results. When `next_cursor` is `null` the page is the last one. Offset pagination is not supported — the registry's REST `GET /v1/capabilities` returns HTTP 422 `page_param_deprecated` if `?page=` is sent, and this tool follows the same convention.
 
 ---
 
@@ -490,14 +491,135 @@ Response:
 
 ---
 
+## create_workspace
+
+Create a private notebook-style container for storing structured Markdown entries scoped to either the calling actor or the calling tenant.
+
+**When to use:** When an agent needs persistent scratch space for design notes, decisions, saved queries, or open questions tied to one or more capabilities — without writing into the global catalog.
+
+**Required role:** any authenticated role
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `name` | string | yes | — | Workspace display name. |
+| `description` | string | no | null | Free-text description. |
+| `owner_kind` | string | no | `actor` | `actor` (personal — visible only to the caller) or `tenant` (team — visible to everyone in the calling tenant). |
+
+**Returns:** JSON object with `workspace_id`, `name`, `description`, `owner_kind`, `owner_actor_id`, `tenant_id`, `created_at`, `updated_at`.
+
+---
+
+## list_workspaces
+
+List workspaces visible to the caller.
+
+**When to use:** Discovery — find existing workspaces before creating a new one, or browse what's already recorded.
+
+**Required role:** any authenticated role
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `cursor` | string | no | null | Cursor from a previous response. |
+| `page_size` | integer | no | 50 | Items per page (1–200). |
+| `owner_kind` | string | no | null | Filter to `actor` or `tenant` only. |
+
+**Returns:** `{items: [...], next_cursor: "..."}`. Visible workspaces are the caller's personal workspaces plus every `tenant`-owned workspace in their tenant.
+
+---
+
+## get_workspace
+
+Retrieve a single workspace by ID.
+
+**Required role:** any authenticated role (caller must be able to see the workspace)
+
+**Inputs:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `workspace_id` | string (UUID) | yes | Workspace ID returned by `create_workspace` or `list_workspaces`. |
+
+**Returns:** Full workspace record. Raises `ToolError: not found` if the workspace is invisible to the caller.
+
+---
+
+## add_workspace_entry
+
+Add a typed Markdown entry to a workspace.
+
+**When to use:** When the agent has produced a note, decision, open question, saved query/view, or private annotation that should persist in a workspace.
+
+**Required role:** workspace owner (the calling actor for `owner_kind=actor` workspaces; any actor in the owning tenant for `owner_kind=tenant`)
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `workspace_id` | string (UUID) | yes | — | Target workspace. |
+| `kind` | string | yes | — | One of: `note`, `decision`, `open_question`, `saved_query`, `saved_view`, `private_annotation`. |
+| `body_md` | string | yes | — | Entry body in Markdown. PII-scanned before write — block-level matches raise `ToolError: pii_detected`. |
+| `reference_ids` | array of string (UUID) | no | null | Optional list of capability UUIDs this entry refers to. |
+| `expires_at` | string (ISO-8601 UTC) | no | null | Optional auto-expiry timestamp. The expiry worker soft-invalidates the entry after this. |
+
+**Returns:** Created entry record with `entry_id`, `workspace_id`, `kind`, `body_md`, `reference_ids`, `expires_at`, `created_at`, `updated_at`, `created_by_actor_id`.
+
+---
+
+## update_workspace_entry
+
+Update an existing workspace entry's title, body, or capability references.
+
+**Required role:** workspace owner
+
+**Inputs:**
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `entry_id` | string (UUID) | yes | Entry to update. |
+| `body_md` | string | no | New body. PII-scanned. |
+| `reference_ids` | array of string (UUID) | no | Replacement list of referenced capability UUIDs (replaces; does not append). |
+| `expires_at` | string (ISO-8601 UTC) | no | New auto-expiry timestamp. Pass null explicitly to clear. |
+
+**Returns:** Updated entry record.
+
+---
+
+## search_workspace_entries
+
+Full-text + semantic search across entries in workspaces visible to the caller.
+
+**When to use:** When the agent needs to find a past note, decision, or saved query without remembering which workspace it lives in.
+
+**Required role:** any authenticated role
+
+**Inputs:**
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `q` | string | yes | — | Free-text query. Matches against entry bodies via the GIN index. |
+| `kind` | string | no | null | Optional filter to a single entry kind (e.g. `decision`, `saved_query`). |
+| `workspace_id` | string (UUID) | no | null | Optional scope to a single workspace. |
+| `cursor` | string | no | null | Pagination cursor. |
+| `page_size` | integer | no | 50 | Items per page (1–200). |
+
+**Returns:** `{items: [...], next_cursor: "..."}`. Each item carries the parent `workspace_id` so the caller knows where the result lives.
+
+---
+
 ## Error handling
 
 All tools raise a `ToolError` on failure. The error message is a human-readable string. Common conditions:
 
 | Message pattern | Cause | Action |
 |---|---|---|
-| `not found` | No entity with that ID/name in caller's tenant | Check the UUID or name; verify tenant scope with `whoami` |
+| `not found` | No entity with that ID/name in caller's tenant, or workspace is invisible to the caller | Check the UUID or name; verify tenant scope with `whoami` |
 | `forbidden` | Token lacks required role | Check roles in `whoami`; contact tenant admin |
+| `authentication required` | Bearer token missing, expired, or rejected by the entitlement service | Refresh the JWT (`make dev-jwt` locally) and reconnect |
+| `pii_detected` | Annotation body or workspace entry body triggered a block-level PII policy | Remove or redact the sensitive content before retrying |
 | `top_k must be between 1 and 100` | Parameter out of range | Clamp the value |
 | `depth must be between 1 and 5` | Parameter out of range | Clamp the value |
 | `direction must be 'forward' or 'reverse'` | Invalid enum value | Use exact string |

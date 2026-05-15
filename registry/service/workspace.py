@@ -1489,9 +1489,11 @@ class WorkspaceService:
     ) -> tuple[list[WorkspaceEntryRef], str | None]:
         """List active entries in a workspace.
 
-        Access is gated by get_workspace — the caller must own the workspace or
-        hold an active share. Entries past their expires_at are still returned;
-        the expiry worker soft-deletes them in a background run. list_entries does
+        Access is gated by get_workspace — the caller must be the
+        workspace owner (the calling actor for ``owner_kind='actor'``;
+        any actor in the owning tenant for ``owner_kind='tenant'``).
+        Entries past their expires_at are still returned; the expiry
+        worker soft-deletes them in a background run. list_entries does
         not filter on expiry.
 
         Cursor is keyset on entry_id (ascending UUID natural order). Kind filter
@@ -1596,13 +1598,11 @@ class WorkspaceService:
         Visibility scope (content-leak boundary — enforced unconditionally):
           A row is included when the entry's workspace satisfies at least one of:
             - owner_kind='actor' AND workspace.owner_actor_id = ctx.actor_id, OR
-            - workspace.tenant_id = ctx.tenant_id (covers tenant-owned workspaces and
-              same-tenant personal workspaces), OR
-            - an active workspace_shares row exists where
-              grantee_actor_id = ctx.actor_id AND revoked_at IS NULL.
+            - owner_kind='tenant' AND workspace.tenant_id = ctx.tenant_id.
           Entries from workspaces the actor cannot access are excluded.
           This scope is NOT equivalent to get_workspace (which operates on a single
-          workspace ID) but enforces the same three-path rule across all workspaces.
+          workspace ID) but enforces the same two-path visibility rule across all
+          workspaces. Workspaces never cross tenant boundaries.
 
         FTS (when q is provided): to_tsvector('english', body_md) @@ to_tsquery('english', q)
         against the idx_we_body_fts GIN index. No ILIKE fallback.

@@ -138,7 +138,8 @@ Capabilities are the primary entities. The `capability` resource shape is the ri
 | `GET` | `/v1/capabilities/{entity_id}` | `consumer` | Retrieve a single capability by UUID or slug name. Supports `?as_of=` and `?include=`. |
 | `PATCH` | `/v1/capabilities/{entity_id}` | `producer` | Partial update (name, description, lifecycle, attributes). |
 | `DELETE` | `/v1/capabilities/{entity_id}` | `producer` | Soft-delete (sets `t_valid_to = now()`). |
-| `PATCH` | `/v1/capabilities/{entity_id}/visibility` | `producer` or `admin` | Set visibility (`private`, `tenant-shared`, `public`). |
+| `PATCH` | `/v1/capabilities/{entity_id}/visibility` | `producer` or `admin` | Set visibility (`private`, `tenant-shared`, `public`, `regulated`). |
+| `PATCH` | `/v1/capabilities/{entity_id}/lifecycle` | `producer` or `admin` | Transition lifecycle state. Subject to the active progression definition's gates. Returns HTTP 422 with `gate_failed` on validation failure unless a progression override is present. |
 
 **Composite retrieval (`?include=`):** The `GET /v1/capabilities/{entity_id}` endpoint accepts `?include=` with a comma-separated list of sub-resources to expand inline. Expansions are capped at 50 items each; overflow is signalled with `truncated: true` and a `next` URL.
 
@@ -156,9 +157,12 @@ Capabilities are the primary entities. The `capability` resource shape is the ri
 | Method | Path | Role required | Description |
 |---|---|---|---|
 | `GET` | `/v1/search` | `consumer` | Hybrid semantic + lexical + graph search. Parameters: `q` (required), `top_k` (default 10, max 100), `entity_type`, `lifecycle`, `as_of`. |
-| `GET` | `/v1/graph/{entity_id}/dependencies` | `consumer` | k-hop forward traversal (entities this one depends on). Parameters: `depth` (1–5, default 2), `as_of`. |
-| `GET` | `/v1/graph/{entity_id}/dependents` | `consumer` | k-hop reverse traversal (entities that depend on this one). Parameters: `depth` (1–5), `edge_types`, `as_of`. |
-| `GET` | `/v1/graph/{entity_id}/blast-radius` | `consumer` | Full transitive closure, backed by `closure_cache`. Falls back to recursive CTE if cache is cold or `as_of` is older than 90 days. Parameters: `direction` (`forward`\|`reverse`, default `reverse`), `edge_types`, `depth` (1–5, default 5), `as_of`. |
+| `GET` | `/v1/capabilities/{entity_id}/dependencies` | `consumer` | k-hop forward traversal (entities this capability depends on). Parameters: `depth` (1–5, default 2), `as_of`. |
+| `GET` | `/v1/capabilities/{entity_id}/dependents` | `consumer` | k-hop reverse traversal (entities that depend on this one). Parameters: `depth` (1–5), `edge_types`, `as_of`. |
+| `GET` | `/v1/capabilities/{entity_id}/blast-radius` | `consumer` | Full transitive closure, backed by `closure_cache`. Falls back to recursive CTE if cache is cold or `as_of` is older than 90 days. Parameters: `direction` (`forward`\|`reverse`, default `reverse`), `edge_types`, `depth` (1–5, default 5), `as_of`. |
+| `GET` | `/v1/graph/consumer` | `consumer` | List capabilities the caller's tenant consumes (resolved through adoption rows). Parameters: `?cursor`, `?page_size`. |
+| `GET` | `/v1/graph/provider` | `consumer` | List capabilities the caller's tenant produces. Parameters: `?cursor`, `?page_size`. |
+| `GET` | `/v1/integrations` | `consumer` | List integration entities for the caller's tenant. Cursor-paginated. |
 
 ---
 
@@ -172,13 +176,13 @@ Capabilities are the primary entities. The `capability` resource shape is the ri
 
 ### Adoptions
 
-Tracks which tenants consume which capabilities.
+Tracks which consumer tenants depend on which provider capabilities. Adoption is **capability-scoped** — every adoption is recorded against a specific provider capability.
 
 | Method | Path | Role required | Description |
 |---|---|---|---|
-| `GET` | `/v1/adoptions` | `consumer` | List adoptions for the caller's tenant. |
-| `POST` | `/v1/adoptions` | `producer` | Record an adoption. |
-| `DELETE` | `/v1/adoptions/{adoption_id}` | `producer` | Remove an adoption. |
+| `GET` | `/v1/capabilities/{provider_cap_id}/adoptions` | `consumer` (provider tenant) or `consumer` (consumer tenant) | List adoptions of a provider capability. The provider sees every consumer; a consumer sees only their own adoption row. |
+| `POST` | `/v1/capabilities/{provider_cap_id}/adoptions` | `consumer` or `producer` | Declare an adoption from the caller's tenant. Idempotent on `(provider_cap_id, consumer_tenant_id)`. |
+| `DELETE` | `/v1/capabilities/{provider_cap_id}/adoptions/{adoption_id}` | `consumer` or `producer` | Soft-delete an adoption. Idempotent. |
 
 ---
 
@@ -374,11 +378,20 @@ Webhook delivery semantics are documented in [overview/vocabulary.md](../01-over
 
 ### External IDs
 
+External-ID mappings live under the entity they belong to. Upstream identifiers (npm package name, GitHub repo slug, Maven coordinate, …) attach to entities via `(external_system, external_id)` pairs registered through the admin `external-systems` endpoint.
+
 | Method | Path | Role required | Description |
 |---|---|---|---|
-| `GET` | `/v1/external-ids` | `consumer` | List external-ID mappings for the caller's tenant. |
-| `POST` | `/v1/external-ids` | `producer` | Register an external-system identifier for an entity. |
-| `DELETE` | `/v1/external-ids/{mapping_id}` | `producer` | Remove a mapping. |
+| `GET` | `/v1/entities/{entity_id}/external-ids` | `consumer` | List external-ID mappings for an entity. |
+| `POST` | `/v1/entities/{entity_id}/external-ids` | `producer` | Register an external-system identifier. Body: `{external_system, external_id}`. |
+| `PATCH` | `/v1/entities/{entity_id}/external-ids/{external_id_pk}` | `producer` | Update an existing mapping. |
+| `DELETE` | `/v1/entities/{entity_id}/external-ids/{external_id_pk}` | `producer` | Remove a mapping. Idempotent. |
+
+To resolve an entity from an upstream identifier, use the generic entity endpoint:
+
+```
+GET /v1/entities?external_system=npm&external_id=@salt-ds/core
+```
 
 ---
 
@@ -441,21 +454,130 @@ The interface endpoint (`GET /v1/capabilities/{capability_id}/interface`) also a
 
 ### Admin endpoints
 
-Admin endpoints are under `/v1/admin/`. They require the `admin` role unless noted.
+Admin endpoints live under `/v1/admin/`. They require the `admin` role unless noted. Tenant scope comes from the auth context (the JWT's resolved tenant); most admin routes are NOT tenant-scoped in their URL — `/v1/admin/vocabularies/{kind}` operates on the caller's tenant. The exceptions are progression definitions and overrides, which carry an explicit `{tenant_id}` so the route can also be used by cross-tenant operator tooling.
 
-| Path prefix | What it manages |
-|---|---|
-| `/v1/admin/tenants` | Tenant CRUD |
-| `/v1/admin/tenants/{tenant_id}/actors` | Actor (user/service account) management |
-| `/v1/admin/tenants/{tenant_id}/tokens` | API token mint + revoke |
-| `/v1/admin/tenants/{tenant_id}/roles` | Role assignment |
-| `/v1/admin/tenants/{tenant_id}/vocabulary` | Closed-vocabulary management |
-| `/v1/admin/tenants/{tenant_id}/sync-sources` | External-source connector configuration |
-| `/v1/admin/tenants/{tenant_id}/pii-policies` | PII scanning policies |
-| `/v1/admin/tenants/{tenant_id}/progression-definitions` | Progression state-machine management |
-| `/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides` | Single-use gate bypass |
-| `/v1/admin/audit` | Audit log query |
-| `/v1/admin/lifecycle` | Lifecycle management |
+There is **no tenant-management endpoint family** — tenants are JIT-materialized by the entitlement-service auth flow on first successful grant resolution. Similarly there are no actor / token / role admin endpoints; identity and grants come from the upstream IdP and entitlement service.
+
+#### Vocabulary
+
+Manages closed-vocabulary kinds: `entity_type`, `edge_rel`, `lifecycle_state`, `visibility`, `fact_category`, `annotation_category`, `annotation_status`, `notification_event_kind`, `pii_category`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/vocabularies/{kind}` | List active vocabulary values for a kind in the caller's tenant. |
+| `POST` | `/v1/admin/vocabularies/{kind}` | Add a value. Body: `{value, description?}`. |
+| `PATCH` | `/v1/admin/vocabularies/{kind}/{value}` | Update a value's metadata (description). |
+| `DELETE` | `/v1/admin/vocabularies/{kind}/{value}` | Soft-delete a value. Idempotent. |
+
+#### Capability types
+
+Per-tenant schemas that constrain capability attribute keys and types.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/capability-types` | List capability-type schemas. |
+| `POST` | `/v1/admin/capability-types` | Register a new capability-type schema. |
+| `GET` | `/v1/admin/capability-types/{type_name}` | Read a single schema. |
+| `PATCH` | `/v1/admin/capability-types/{type_name}` | Update a schema (additive — breaking changes require a new type). |
+
+#### Edge property schemas
+
+Per-tenant schemas that constrain edge property bags by `edge_rel`.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/edge-property-schemas` | List edge-property schemas. |
+| `POST` | `/v1/admin/edge-property-schemas` | Register a new edge-property schema. |
+| `PATCH` | `/v1/admin/edge-property-schemas/{schema_id}` | Update a schema. |
+
+#### External systems
+
+Registry of upstream systems whose IDs are mapped onto entities via the external-ID endpoints.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/external-systems` | List registered external systems for the tenant. |
+| `POST` | `/v1/admin/external-systems` | Register an external system. Body: `{slug, display_name, url_template?}`. |
+| `DELETE` | `/v1/admin/external-systems/{slug}` | Remove an external system. Existing mappings remain but the slug is no longer usable for new mappings. |
+
+#### Sync sources + runs
+
+External-data connector configuration. See [`guides/sync-connectors.md`](../04-guides/03-sync-connectors.md) for the full workflow.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/sync-sources` | List configured sync sources for the tenant. |
+| `POST` | `/v1/admin/sync-sources` | Register a sync source. Body: `{external_system, display_name, config?}`. |
+| `GET` | `/v1/admin/sync-sources/{source_id}` | Retrieve a single source. |
+| `PATCH` | `/v1/admin/sync-sources/{source_id}` | Update a source's display name or config. |
+| `DELETE` | `/v1/admin/sync-sources/{source_id}` | Remove a source. |
+| `POST` | `/v1/admin/sync-sources/{source_id}/trigger` | Trigger a connector run on demand. |
+| `GET` | `/v1/admin/sync-runs` | List recent sync runs across all sources. Cursor-paginated. |
+| `GET` | `/v1/admin/sync-runs/{sync_run_id}` | Retrieve a single run. |
+| `GET` | `/v1/admin/sync-runs/{sync_run_id}/superseded` | List facts and attributes this run superseded. |
+
+#### PII patterns + field policies
+
+Two endpoint families control the PII scanner. See [`guides/pii-policies.md`](../04-guides/04-pii-policies.md).
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/pii-patterns` | List built-in plus custom PII patterns. |
+| `POST` | `/v1/admin/pii-patterns` | Register a custom regex pattern. Body: `{name, category, regex, policy_override?, is_enabled}`. |
+| `PATCH` | `/v1/admin/pii-patterns/{pattern_id}` | Update a custom pattern. |
+| `DELETE` | `/v1/admin/pii-patterns/{pattern_id}` | Remove a custom pattern. |
+| `GET` | `/v1/admin/pii-field-policies` | List per-field-type policies. |
+| `POST` | `/v1/admin/pii-field-policies` | Create a field-type → pattern → policy override. Body: `{field_type, pattern_id, policy}`. |
+| `DELETE` | `/v1/admin/pii-field-policies/{policy_id}` | Remove a field policy. |
+
+#### Progression definitions
+
+Lifecycle state machines plus per-entity overrides. **These routes are tenant-scoped in the URL.** See [`operations/progression.md`](../06-operations/02-progression.md) for the operator runbook.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/tenants/{tenant_id}/progression-definitions` | List progression definitions for the tenant. |
+| `POST` | `/v1/admin/tenants/{tenant_id}/progression-definitions` | Publish a new definition. Body: `{name, states, gates, is_advisory}`. |
+| `GET` | `/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}` | Retrieve a definition. |
+| `PUT` | `/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}` | Replace a definition. Supports `?dry_run=true`, `?force=true`, and a `migration_plan` body for migrating existing entities. |
+| `DELETE` | `/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}` | Soft-delete a definition. |
+| `GET` | `/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides` | List overrides on an entity. |
+| `POST` | `/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides` | Record a single-use gate bypass. Audit is written BEFORE the override row. |
+
+#### Audit + personal data
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/v1/admin/audit` | Query the audit log. Accepts filters by actor, resource kind, action, time range. `auditor` role can call this read-only. |
+| `DELETE` | `/v1/admin/actors/{actor_id}/personal-data` | RTBF — purge personally identifiable values associated with an actor while preserving immutable audit references. |
+
+---
+
+### Workspaces
+
+Workspaces are private notebook-style containers — typed Markdown entries (`note`, `decision`, `open_question`, `saved_query`, `saved_view`, `private_annotation`) scoped to either a single actor or a tenant team. PII-scanned at write. See [`use-cases/workspaces.md`](../03-use-cases/09-workspaces.md) for the full scenario.
+
+| Method | Path | Role required | Description |
+|---|---|---|---|
+| `POST` | `/v1/workspaces` | any authenticated | Create a workspace. Body: `{name, description?, owner_kind: "actor"\|"tenant"}`. `actor` ties the workspace to the calling actor; `tenant` is visible to every actor in the calling tenant. |
+| `GET` | `/v1/workspaces` | any authenticated | List visible workspaces for the caller (their personal workspaces + any tenant workspaces in their tenant). Cursor-paginated. |
+| `GET` | `/v1/workspaces/search` | any authenticated | Cross-workspace entry search over visible workspaces. Parameters: `?q`, `?entry_type`, `?cursor`, `?page_size`. |
+| `GET` | `/v1/workspaces/{workspace_id}` | any authenticated | Retrieve a single workspace. 404 if not visible. |
+| `PATCH` | `/v1/workspaces/{workspace_id}` | workspace owner | Update name, description, or archive state. |
+| `DELETE` | `/v1/workspaces/{workspace_id}` | workspace owner | Soft-delete a workspace. |
+| `GET` | `/v1/workspaces/{workspace_id}/entries` | any authenticated | List entries in a workspace. Parameters: `?entry_type`, `?cursor`, `?page_size`. |
+| `POST` | `/v1/workspaces/{workspace_id}/entries` | workspace owner | Add an entry. Body: `{kind, body_md, reference_ids?, expires_at?}`. PII-scanned. |
+| `PATCH` | `/v1/workspaces/{workspace_id}/entries/{entry_id}` | workspace owner | Update an entry's body or reference list. PII-scanned. Respects `If-Match`. |
+| `DELETE` | `/v1/workspaces/{workspace_id}/entries/{entry_id}` | workspace owner | Soft-delete an entry. Idempotent. |
+
+Entry `kind` values: `note`, `decision`, `open_question`, `saved_query`, `saved_view`, `private_annotation`. `reference_ids` is a list of capability UUIDs the entry refers to. `expires_at` is an optional ISO-8601 timestamp after which the background expiry worker soft-invalidates the entry.
+
+Visibility model:
+
+- `owner_kind=actor` workspaces are visible only to the `owner_actor_id`.
+- `owner_kind=tenant` workspaces are visible to every actor in the owning tenant.
+
+There is no cross-tenant or cross-actor share mechanism — workspaces never cross tenant boundaries through implicit grants.
 
 ---
 

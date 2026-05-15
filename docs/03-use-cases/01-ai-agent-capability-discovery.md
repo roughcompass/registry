@@ -105,7 +105,7 @@ The response enumerates directed edge objects across the subgraph, letting the a
 
 ### Declare an adoption via REST
 
-There is no `adopt_capability` MCP tool. Adoptions are recorded through the REST API: `POST /v1/adoptions`. An adoption creates a durable record that the calling tenant depends on the capability. It appears in the producer's impact list and can trigger automatic subscription to lifecycle events on that capability.
+There is no `adopt_capability` MCP tool. Adoptions are recorded through the REST API: `POST /v1/capabilities/{provider_cap_id}/adoptions`. Adoption is capability-scoped — the URL identifies the provider capability the consumer tenant is declaring a dependency on. The adoption row appears in the producer's impact list and can trigger automatic subscription to lifecycle events on that capability.
 
 An agent that has completed its discovery session and decided to depend on a capability should use the REST endpoint to record the adoption. See [vocabulary.md — Adoption](../01-overview/03-vocabulary.md#adoption) for the full contract.
 

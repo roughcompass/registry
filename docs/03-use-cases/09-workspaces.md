@@ -13,7 +13,7 @@ For a human, that means a private scratchpad — evaluation notes, saved inciden
 
 For an agent, it means persistent cross-session memory — decisions written at the end of one session and retrieved at the start of the next, so reasoning does not have to be reconstructed from scratch each time.
 
-It is the same primitive. A workspace is a container of typed, Markdown-bodied entries — `note`, `decision`, `open_question`, `saved_query`, `saved_view`, or `private_annotation` — with optional references to capability UUIDs. Entries are visible only to the owning actor or tenant, plus anyone explicitly granted a share. Nothing in a workspace flows into the catalog or becomes visible to other tenants through normal registry queries.
+It is the same primitive. A workspace is a container of typed, Markdown-bodied entries — `note`, `decision`, `open_question`, `saved_query`, `saved_view`, or `private_annotation` — with optional references to capability UUIDs. Visibility is determined by `owner_kind`: an `actor`-owned workspace is visible only to that actor; a `tenant`-owned workspace is visible to every actor in the owning tenant. Workspaces never cross tenant boundaries — there is no cross-tenant share mechanism.
 
 **Before calling any workspace endpoint:** the [tenant](../01-overview/03-vocabulary.md#tenant) must be provisioned and a valid bearer token must be available. Any authenticated `consumer`, `producer`, or `admin` role can create and manage workspaces. See [authentication.md](../01-overview/04-authentication.md) for how to obtain a token.
 
@@ -60,22 +60,22 @@ curl "https://registry.example.com/v1/workspaces/search?kind=decision&reference_
   -H "Authorization: Bearer <token>"
 ```
 
-The search returns every `decision` entry that references the target capability UUID, across all workspaces the agent owns or holds a share on. The agent reconstructs its prior reasoning without re-evaluating the catalog.
+The search returns every `decision` entry that references the target capability UUID, across the agent's personal workspaces and any tenant-owned workspaces in its tenant. The agent reconstructs its prior reasoning without re-evaluating the catalog.
 
-**Two agents sharing a memory store.** When two agents with separate actor identities need a common memory — a copilot pair, a planner and an executor — one creates a tenant-owned workspace and grants the other `contributor` access:
+**Two agents sharing a memory store.** When two agents with separate actor identities but the same tenant need a common memory — a copilot pair, a planner and an executor — one creates a tenant-owned workspace instead of an actor-owned one:
 
 ```bash
-curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/shares \
+curl -X POST https://registry.example.com/v1/workspaces \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "grantee_actor_id": "<second-agent-actor-uuid>",
-    "grantee_tenant_id": "<tenant-uuid>",
-    "role": "contributor"
+    "name": "copilot-pair-shared-memory",
+    "owner_kind": "tenant",
+    "description": "Shared decisions + open questions across paired agents"
   }'
 ```
 
-Both agents can now write and read from the same workspace. Reads from either actor are subject to the same visibility gate — nothing leaks to unrelated actors or tenants.
+Any actor in the owning tenant — both agents in this case — can read and write to the workspace automatically. No grant step is required, because tenant-owned workspaces inherit their visibility from tenant membership.
 
 **Expiry caveat.** Entries without an `expires_at` persist indefinitely. An agent using workspaces for long-lived memory should omit `expires_at` when writing. If `expires_at` is set, the background expiry worker soft-invalidates the entry after that timestamp — it disappears from list and search results and is no longer useful as a memory store. Use `expires_at` only for intentionally short-lived notes, not for decisions the agent will need to recall in future sessions.
 
@@ -151,24 +151,16 @@ When the incident is resolved, the team lead adds a `decision` entry summarising
 
 ---
 
-## Sharing across tenants
+## Visibility model
 
-A tenant-owned workspace can be shared with actors in other tenants. An actor-owned workspace can only be shared within the same tenant.
+Workspaces have exactly two owner kinds. Choose at creation time; it cannot be changed afterwards.
 
-To grant another team's engineer read access to a workspace:
+| `owner_kind` | Visible to | Typical use |
+|---|---|---|
+| `actor` | Only the calling actor (`owner_actor_id` = the creator) | Personal scratchpads, agent memory across sessions, individual evaluation notes. |
+| `tenant` | Every actor in the owning tenant | Team incident scratchpads, paired-agent shared memory, shared decision logs. |
 
-```bash
-curl -X POST https://registry.example.com/v1/workspaces/<workspace_id>/shares \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "grantee_actor_id": "<actor-uuid>",
-    "grantee_tenant_id": "<their-tenant-uuid>",
-    "role": "reader"
-  }'
-```
-
-`role` must be `reader` (read-only access to entries) or `contributor` (can add and edit entries). The workspace owner or an admin can revoke a share at any time with `DELETE /v1/workspaces/<workspace_id>/shares/<share_id>`.
+A workspace never crosses tenant boundaries. There is no cross-tenant share grant — if a workspace's content needs to be visible to another tenant, the right primitive is a capability annotation (see [consumer-feedback-and-requests.md](05-consumer-feedback-and-requests.md)), an external publication of the relevant entries, or a tenant-shared workspace owned by a parent tenant that both teams belong to.
 
 ---
 
@@ -193,7 +185,7 @@ A background worker runs on a schedule and soft-invalidates entries whose `expir
 
 ## Searching across workspaces
 
-The search endpoint returns entries from all workspaces the caller owns or holds an active share on. It accepts a full-text `q` string, a `kind` filter, and `reference_ids` to find all entries that mention a specific capability:
+The search endpoint returns entries from every workspace visible to the caller (their personal `actor`-owned workspaces plus every `tenant`-owned workspace in their tenant). It accepts a full-text `q` string, a `kind` filter, and `reference_ids` to find all entries that mention a specific capability:
 
 ```bash
 # Find all decision entries that reference a specific capability
@@ -207,7 +199,7 @@ Results are cursor-paginated. Entries from workspaces the caller cannot access a
 
 ## What workspaces are not
 
-**Not a shared annotation channel.** Annotations on capabilities (`POST /v1/capabilities/{id}/annotations`) are cross-tenant signals from consumers to producers. They are visible to the capability owner and are part of the auditable record of that capability. Workspace entries are visible only to the workspace owner and explicit share holders — they do not reach the capability owner. Use `private_annotation` entry kind when you want annotation-shaped content that stays in your workspace; use `submit_annotation` when you want to signal the producer.
+**Not a shared annotation channel.** Annotations on capabilities (`POST /v1/capabilities/{id}/annotations`) are cross-tenant signals from consumers to producers. They are visible to the capability owner and are part of the auditable record of that capability. Workspace entries are visible only within the owning actor or tenant scope — they do not reach the capability owner. Use the `private_annotation` entry kind when you want annotation-shaped content that stays in your workspace; use `submit_annotation` when you want to signal the producer.
 
 **Not versioned or immutable.** Entry bodies are mutable with `PATCH`. Workspaces do not version history of edits. If immutable record-keeping is required, the audit log (accessible to operators) captures workspace mutation events, but workspace entries themselves are not a substitute for an immutable audit trail.
 
@@ -221,13 +213,13 @@ Results are cursor-paginated. Entries from workspaces the caller cannot access a
 
 - [Consumer feedback and feature requests](05-consumer-feedback-and-requests.md) — when a gap you noted in a private workspace needs to be escalated to a capability producer, `submit_annotation` is the cross-tenant channel.
 - [AI agent capability discovery](01-ai-agent-capability-discovery.md) — an agent evaluating capabilities during discovery can record its reasoning in a workspace before committing to an adoption.
-- [Compliance and audit](08-compliance-and-audit.md) — workspace mutation events (create, update, delete, share grant/revoke, expiry) are emitted to the audit log.
+- [Compliance and audit](08-compliance-and-audit.md) — workspace mutation events (create, update, delete, expiry) are emitted to the audit log.
 
 ---
 
 ## Read next
 
-- [API reference](../05-reference/01-api.md) — endpoint contracts for `POST`, `GET`, `PATCH`, `DELETE` on workspaces, entries, and shares
+- [API reference](../05-reference/01-api.md#workspaces) — endpoint contracts for `POST`, `GET`, `PATCH`, `DELETE` on workspaces and entries
 - [Authentication](../01-overview/04-authentication.md) — how to obtain a bearer token
 - [Authorization](../01-overview/05-authorization.md) — how role grants and tenant selection scope the token
 - [PII policies guide](../04-guides/04-pii-policies.md) — workspace entry bodies are PII-scanned on write; this guide explains how policies are configured

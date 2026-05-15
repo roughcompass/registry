@@ -502,13 +502,13 @@ Not all migrations have a downgrade path — check the migration file before ass
 When you change the embedding model (`EMBEDDING_MODEL`) or when bulk-imported entities are missing embeddings, run the backfill script:
 
 ```bash
-python registry/scripts/backfill_embeddings.py
+python scripts/backfill_embeddings.py
 ```
 
 To reindex all existing embeddings with the current model (destructive — drops and rebuilds):
 
 ```bash
-python registry/scripts/reindex_embeddings.py
+python scripts/reindex_embeddings.py
 ```
 
 Both scripts use `BACKFILL_BATCH_SIZE` (default 64) to control page size and require `DATABASE_URL`. They are safe to run while the service is live — they use the same outbox pattern as the online drain.
@@ -728,26 +728,26 @@ Record drill results in the team incident log with the tag `dr-drill-YYYY-QN` (e
 
 ---
 
-## Appendix A — Dev database rename (`fabric` → `catalog`)
+## Appendix A — Resetting the dev database
 
-The dev compose stack renamed the Postgres database from `fabric` to `catalog`. If you have a dev instance with data worth preserving, do this before wiping the volume:
+The dev compose stack's Postgres database is named `registry` (matching `POSTGRES_DB` in `docker-compose.yml`). If you need to reset local dev state from a clean migration head, follow this sequence:
 
 ```bash
-# 1. Dump the existing fabric database before bringing the stack down.
-docker compose exec postgres pg_dump -U postgres fabric > /tmp/registry_backup.sql
+# 1. (optional) Dump existing dev data before wiping.
+docker compose exec postgres pg_dump -U postgres registry > /tmp/registry_backup.sql
 
 # 2. Destroy the dev volume and recreate the stack.
-#    POSTGRES_DB=catalog now, so Postgres initializes the new database on startup.
 docker compose down -v
 docker compose up -d
 
-# 3. Wait for Postgres to become healthy, then restore your dump.
-docker compose exec -T postgres psql -U postgres catalog < /tmp/registry_backup.sql
+# 3. (optional) Restore the dump if you kept one.
+docker compose exec -T postgres psql -U postgres registry < /tmp/registry_backup.sql
 
-# 4. Apply any new migrations on top of the restored data.
-docker compose exec api alembic upgrade head
+# 4. Apply migrations on top of the (empty or restored) database.
+make migrate
+
+# 5. Re-bootstrap the dev tenant + mock-IDP entitlement seed.
+make dev-token
 ```
-
-If you have no data worth preserving, skip steps 1 and 3 and run `docker compose down -v && docker compose up -d`. The api container applies `alembic upgrade head` on its first start.
 
 Production environments are out of scope for this appendix. Never run `docker compose down -v` against a production volume.

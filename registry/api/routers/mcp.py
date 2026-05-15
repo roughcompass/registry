@@ -728,50 +728,59 @@ def create_registry_mcp_server(
     async def list_capabilities(
         lifecycle: str | None = None,
         entity_type: str | None = None,
-        page: int = 1,
+        cursor: str | None = None,
         page_size: int = 20,
         as_of: str | None = None,
     ) -> str:
-        """Paginated list of capabilities visible to the caller's tenant.
+        """Cursor-paginated list of capabilities visible to the caller's tenant.
 
         Args:
             lifecycle: Filter by lifecycle label (optional).
             entity_type: Filter by entity type slug (optional).
-            page: Page number, 1-based (default 1).
+            cursor: Opaque cursor from a previous response's ``next_cursor``.
+                Pass ``null`` (or omit) for the first page.
             page_size: Items per page (1–200, default 20).
             as_of: ISO-8601 UTC datetime for bi-temporal time-travel (optional).
 
         Returns:
-            JSON object with items array, page, and page_size.
+            JSON object ``{items: [...], next_cursor: "..."}``. Pass
+            ``next_cursor`` back as ``cursor`` on the next call. When
+            ``next_cursor`` is ``null`` the page is the last one.
         """
         ctx = await _resolve_tenant(session_factory, _clock)
-        if page < 1:
-            raise ToolError("page must be >= 1")
         if not 1 <= page_size <= 200:
             raise ToolError("page_size must be between 1 and 200")
         temporal_filter = _parse_as_of(as_of)
         # RetrievalService.list_capabilities is cursor-paginated. The MCP
-        # tool exposes a 1-based `page` knob for client convenience but the
-        # service has no offset support, so `page` collapses to "first page
-        # only" and clients must use list_my_annotations / search_capabilities
-        # for deeper traversal. Passing an empty cursor dict requests the
-        # first page.
+        # tool surfaces the cursor directly — offset/page parameters are
+        # not supported here because the REST equivalent rejects them
+        # with HTTP 422 (page_param_deprecated).
+        decoded_cursor: dict[str, Any] = {}
+        if cursor:
+            try:
+                decoded_cursor = json.loads(cursor)
+                if not isinstance(decoded_cursor, dict):
+                    raise ToolError("cursor must decode to a JSON object")
+            except json.JSONDecodeError as exc:
+                raise ToolError(f"invalid cursor: {exc}") from exc
         try:
-            entity_refs, _next_cursor = await retrieval.list_capabilities(
+            entity_refs, next_cursor = await retrieval.list_capabilities(
                 ctx,
                 lifecycle=lifecycle,
                 entity_type=entity_type,
-                cursor={},
+                cursor=decoded_cursor,
                 page_size=page_size,
                 temporal_filter=temporal_filter,
             )
         except CatalogError as exc:
             raise _map_catalog_error(exc) from exc
+        next_cursor_str = (
+            json.dumps(next_cursor) if next_cursor else None
+        )
         return json.dumps(
             {
                 "items": _serialize(entity_refs),
-                "page": page,
-                "page_size": page_size,
+                "next_cursor": next_cursor_str,
             }
         )
 
