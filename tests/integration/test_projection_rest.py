@@ -1,6 +1,6 @@
 """Integration tests for projection REST endpoints.
 
-Headline scenario from tasks.md §T10:
+Headline scenario:
 
   Tenant A publishes PaymentAPI (tenant-shared, ACL=[B]).
   Tenant B adopts it.
@@ -17,8 +17,8 @@ provides_to edge.
 from __future__ import annotations
 
 import datetime
-import secrets
 import uuid
+from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -26,69 +26,40 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.service.visibility import (
     VISIBILITY_PRIVATE,
     VISIBILITY_PUBLIC,
     VISIBILITY_TENANT_SHARED,
+)
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
 )
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
-# Seed helpers (mirror test_adoption_rest.py — same pattern, scoped here)
+# Seed helpers
 # ---------------------------------------------------------------------------
 
 
-async def _seed_tenant_with_token(
-    pg_url: str,
-    *,
-    slug: str,
-    roles: list[str] | None = None,
-) -> tuple[uuid.UUID, uuid.UUID, str]:
+async def _get_tenant_id(pg_url: str, slug: str) -> uuid.UUID:
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    role_list = roles or ["producer", "consumer", "admin"]
     try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, "
-                    "created_at, is_active) VALUES "
-                    "(:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, "
-                    "created_at) VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": role_list,
-                    "now": _NOW,
-                },
-            )
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT tenant_id FROM tenants WHERE slug = :slug"), {"slug": slug}
+                )
+            ).first()
+            assert row is not None, f"tenant {slug} not materialised"
+            return uuid.UUID(str(row[0]))
     finally:
         await engine.dispose()
-    return tenant_id, actor_id, raw_token
 
 
 async def _seed_capability(
@@ -99,11 +70,11 @@ async def _seed_capability(
     visibility: str = VISIBILITY_PUBLIC,
     shared_with_tenants: list[uuid.UUID] | None = None,
 ) -> uuid.UUID:
+    import json as _json  # noqa: PLC0415
+
     cap_id = uuid.uuid4()
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    import json as _json
-
     try:
         async with factory() as session, session.begin():
             await session.execute(
@@ -145,24 +116,31 @@ async def _seed_capability(
     return cap_id
 
 
+async def _make_persona(
+    h: EntitlementAuthHarness, pg_url: str, *, slug: str, roles: list[str]
+) -> TenantPersona:
+    """Materialise tenant + actor via /v1/whoami."""
+    persona = h.add_persona(slug, roles=roles)
+    h.configure_fetcher_for(persona)
+    transport = ASGITransport(app=h.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return persona
+
+
 # ---------------------------------------------------------------------------
-# App fixture
+# Fixture
 # ---------------------------------------------------------------------------
 
 
 @pytest_asyncio.fixture
-async def app_client(pg_container: str):  # type: ignore[type-arg]
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client, settings
+async def app_client(pg_container: str) -> AsyncIterator[tuple[AsyncClient, EntitlementAuthHarness]]:
+    async with EntitlementAuthHarness(pg_container) as harness:
+        transport = ASGITransport(app=harness.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client, harness
 
 
 # ---------------------------------------------------------------------------
@@ -171,14 +149,22 @@ async def app_client(pg_container: str):  # type: ignore[type-arg]
 
 
 @pytest.mark.asyncio
-async def test_provider_projection_returns_own_caps_and_provides_to_edge(pg_container: str, app_client) -> None:
+async def test_provider_projection_returns_own_caps_and_provides_to_edge(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
     """Tenant A publishes PaymentAPI (tenant-shared, ACL=[B]); Tenant B
     adopts; Tenant A's provider projection contains the provides_to edge.
     """
-    client, _ = app_client
+    client, harness = app_client
 
-    a_tid, _, a_token = await _seed_tenant_with_token(pg_container, slug="proj-rest-prov-a")
-    b_tid, _, b_token = await _seed_tenant_with_token(pg_container, slug="proj-rest-prov-b")
+    slug_a = f"proj-rest-prov-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"proj-rest-prov-b-{uuid.uuid4().hex[:6]}"
+    persona_a = await _make_persona(harness, pg_container, slug=slug_a, roles=["producer", "consumer", "admin"])
+    persona_b = await _make_persona(harness, pg_container, slug=slug_b, roles=["producer", "consumer", "admin"])
+
+    a_tid = await _get_tenant_id(pg_container, slug_a)
+    b_tid = await _get_tenant_id(pg_container, slug_b)
+
     cap_id = await _seed_capability(
         pg_container,
         tenant_id=a_tid,
@@ -187,34 +173,53 @@ async def test_provider_projection_returns_own_caps_and_provides_to_edge(pg_cont
         shared_with_tenants=[b_tid],
     )
 
-    # Tenant B adopts
-    b_headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.post(f"/v1/capabilities/{cap_id}/adoptions", headers=b_headers, json={})
+    # Tenant B adopts.
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            json={},
+        )
     assert resp.status_code == 201, resp.text
 
-    # Tenant A's provider projection
-    a_headers = {"Authorization": f"Bearer {a_token}"}
-    resp = await client.get("/v1/graph/provider", headers=a_headers)
+    # Tenant A's provider projection.
+    harness.configure_fetcher_for(persona_a)
+    with patch_validator_for_actor(persona_a):
+        resp = await client.get(
+            "/v1/graph/provider",
+            headers=bearer_headers(tenant_slug=persona_a.slug),
+        )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     node_ids = {n["entity_id"] for n in body["nodes"]}
     assert str(cap_id) in node_ids
     assert len(body["nodes"]) >= 1
 
-    # provides_to edge with src=PaymentAPI present
-    provides = [e for e in body["edges"] if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)]
+    provides = [
+        e for e in body["edges"]
+        if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)
+    ]
     assert len(provides) >= 1, body["edges"]
 
 
 @pytest.mark.asyncio
-async def test_consumer_projection_includes_adopted_provider_cap(pg_container: str, app_client) -> None:
+async def test_consumer_projection_includes_adopted_provider_cap(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
     """Tenant B's consumer projection includes PaymentAPI as a node and the
     cross-tenant provides_to edge from it.
     """
-    client, _ = app_client
+    client, harness = app_client
 
-    a_tid, _, _ = await _seed_tenant_with_token(pg_container, slug="proj-rest-cons-a")
-    b_tid, _, b_token = await _seed_tenant_with_token(pg_container, slug="proj-rest-cons-b")
+    slug_a = f"proj-rest-cons-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"proj-rest-cons-b-{uuid.uuid4().hex[:6]}"
+    _persona_a = await _make_persona(harness, pg_container, slug=slug_a, roles=["producer", "consumer"])
+    persona_b = await _make_persona(harness, pg_container, slug=slug_b, roles=["producer", "consumer"])
+
+    a_tid = await _get_tenant_id(pg_container, slug_a)
+    b_tid = await _get_tenant_id(pg_container, slug_b)
+
     cap_id = await _seed_capability(
         pg_container,
         tenant_id=a_tid,
@@ -223,39 +228,56 @@ async def test_consumer_projection_includes_adopted_provider_cap(pg_container: s
         shared_with_tenants=[b_tid],
     )
 
-    b_headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.post(f"/v1/capabilities/{cap_id}/adoptions", headers=b_headers, json={})
-    assert resp.status_code == 201, resp.text
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.post(
+            f"/v1/capabilities/{cap_id}/adoptions",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+            json={},
+        )
+        assert resp.status_code == 201, resp.text
 
-    resp = await client.get("/v1/graph/consumer", headers=b_headers)
+        resp = await client.get(
+            "/v1/graph/consumer",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
     assert resp.status_code == 200, resp.text
     body = resp.json()
 
     node_ids = {n["entity_id"] for n in body["nodes"]}
-    # B has no own entities seeded — only the adopted PaymentAPI.
     assert str(cap_id) in node_ids, body
     assert len(body["nodes"]) >= 1
 
-    # provides_to edge from PaymentAPI is exposed to the consumer.
-    provides = [e for e in body["edges"] if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)]
+    provides = [
+        e for e in body["edges"]
+        if e["rel"] == "provides_to" and e["src_entity_id"] == str(cap_id)
+    ]
     assert len(provides) >= 1, body["edges"]
 
 
 @pytest.mark.asyncio
-async def test_consumer_projection_excludes_private_adopted_caps(pg_container: str, app_client) -> None:
+async def test_consumer_projection_excludes_private_adopted_caps(
+    pg_container: str, app_client: tuple[AsyncClient, EntitlementAuthHarness]
+) -> None:
     """A private cap from another tenant cannot show up in the consumer
-    projection even if an adoption_events row exists for some reason — the
-    visibility chokepoint filters it out.
+    projection even if an adoption_events row exists — the visibility
+    chokepoint filters it out.
 
     We bypass the adoption REST authz check by inserting an adoption_events
     row directly (the REST endpoint would reject this with 403 because of
     the visibility precondition; this test exercises projection-side
     defense-in-depth).
     """
-    client, _ = app_client
+    client, harness = app_client
 
-    a_tid, a_actor, _ = await _seed_tenant_with_token(pg_container, slug="proj-rest-priv-a")
-    b_tid, _, b_token = await _seed_tenant_with_token(pg_container, slug="proj-rest-priv-b")
+    slug_a = f"proj-rest-priv-a-{uuid.uuid4().hex[:6]}"
+    slug_b = f"proj-rest-priv-b-{uuid.uuid4().hex[:6]}"
+    _persona_a = await _make_persona(harness, pg_container, slug=slug_a, roles=["producer"])
+    persona_b = await _make_persona(harness, pg_container, slug=slug_b, roles=["consumer"])
+
+    a_tid = await _get_tenant_id(pg_container, slug_a)
+    b_tid = await _get_tenant_id(pg_container, slug_b)
+
     cap_id = await _seed_capability(
         pg_container,
         tenant_id=a_tid,
@@ -267,6 +289,16 @@ async def test_consumer_projection_excludes_private_adopted_caps(pg_container: s
     engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
+        # Get an actor_id for tenant A to use as the actor field.
+        async with factory() as session:
+            row = (
+                await session.execute(
+                    text("SELECT actor_id FROM actors WHERE tenant_id = :tid LIMIT 1"),
+                    {"tid": a_tid},
+                )
+            ).first()
+            assert row is not None
+            a_actor = row[0]
         async with factory() as session, session.begin():
             await session.execute(
                 text(
@@ -288,8 +320,12 @@ async def test_consumer_projection_excludes_private_adopted_caps(pg_container: s
     finally:
         await engine.dispose()
 
-    b_headers = {"Authorization": f"Bearer {b_token}"}
-    resp = await client.get("/v1/graph/consumer", headers=b_headers)
+    harness.configure_fetcher_for(persona_b)
+    with patch_validator_for_actor(persona_b):
+        resp = await client.get(
+            "/v1/graph/consumer",
+            headers=bearer_headers(tenant_slug=persona_b.slug),
+        )
     assert resp.status_code == 200, resp.text
     node_ids = {n["entity_id"] for n in resp.json()["nodes"]}
     assert str(cap_id) not in node_ids
