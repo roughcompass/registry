@@ -15,12 +15,56 @@ import numpy.typing as npt
 
 
 @dataclass(frozen=True)
+class TenantMembership:
+    """One tenant grant the caller holds.
+
+    Carries the resolved tenant identity (catalog UUID + external slug)
+    plus the role set the caller has for that tenant. The middleware
+    builds one of these per tuple returned by the entitlement service.
+    """
+
+    tenant_id: uuid.UUID
+    tenant_slug: str
+    roles: frozenset[str]
+
+
+@dataclass(frozen=True)
 class TenantContext:
-    """Injected by auth middleware into every request. Never constructed by service code."""
+    """Injected by auth middleware into every request. Never constructed by service code.
+
+    The legacy three-field shape (``tenant_id`` + ``actor_id`` + ``roles``)
+    is preserved as concrete fields so existing call sites continue to
+    work unchanged. The new fields (``oidc_subject``,
+    ``tenant_memberships``, ``selected_tenant_id``) carry the
+    multi-tenant entitlement-service-resolved view; the middleware
+    populates them for entitlement-mode deployments. ``selected_tenant_id``
+    is a forward alias for ``tenant_id`` — new code can use whichever
+    name is more semantically meaningful.
+
+    The new fields default to safe empty values so old constructors of
+    the form ``TenantContext(tenant_id=X, actor_id=Y, roles=[Z])``
+    continue to work without modification across the 140+ existing call
+    sites — the canonical reshape (where ``tenant_id`` becomes a
+    property over ``selected_tenant_id``) happens as a follow-up after
+    the auth-consolidation phase ships.
+    """
 
     tenant_id: uuid.UUID
     actor_id: uuid.UUID
     roles: list[str]
+    # New fields — defaults preserve every existing constructor.
+    oidc_subject: str = ""
+    tenant_memberships: list[TenantMembership] = field(default_factory=list)
+
+    @property
+    def selected_tenant_id(self) -> uuid.UUID:
+        """Forward alias for ``tenant_id``.
+
+        New code that wants to be explicit about which membership the
+        current request applies to may use this name. It returns the
+        same value as ``tenant_id``.
+        """
+        return self.tenant_id
 
 
 @dataclass
