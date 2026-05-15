@@ -36,6 +36,7 @@ from __future__ import annotations
 import datetime
 import secrets
 import uuid
+from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,12 +45,19 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from registry.api.auth.tokens import hash_token
-from registry.config import Settings
-from registry.main import create_app
 from registry.storage.models import ProgressionDefinition, ProgressionOverride
+from tests.helpers.auth_harness import (
+    EntitlementAuthHarness,
+    TenantPersona,
+    bearer_headers,
+    patch_validator_for_actor,
+)
 
 _NOW = datetime.datetime(2026, 1, 1, 12, 0, 0, tzinfo=datetime.UTC)
+
+type _ProgressionClients = tuple[
+    AsyncClient, AsyncClient, uuid.UUID, str, TenantPersona, TenantPersona
+]
 
 # ---------------------------------------------------------------------------
 # A minimal valid progression definition JSONB body (passes meta-schema).
@@ -73,55 +81,22 @@ _INVALID_DEFINITION = {
 
 
 # ---------------------------------------------------------------------------
-# Seed helpers
+# Harness helpers
 # ---------------------------------------------------------------------------
 
 
-async def _seed_tenant(
-    pg_url: str,
-    *,
-    slug: str,
-    roles: list[str],
-) -> tuple[uuid.UUID, uuid.UUID, str]:
-    """Create a tenant + actor + api_token. Returns (tenant_id, actor_id, raw_token)."""
-    engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    tenant_id = uuid.uuid4()
-    actor_id = uuid.uuid4()
-    raw_token = secrets.token_urlsafe(24)
-    try:
-        async with factory() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO tenants (tenant_id, slug, display_name, created_at, is_active) "
-                    "VALUES (:tid, :slug, :slug, :now, TRUE)"
-                ),
-                {"tid": tenant_id, "slug": slug, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, :dn, :now)"
-                ),
-                {"aid": actor_id, "tid": tenant_id, "dn": f"actor-{slug}", "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": actor_id,
-                    "th": hash_token(raw_token),
-                    "roles": roles,
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-    return tenant_id, actor_id, raw_token
+async def _make_persona(
+    h: EntitlementAuthHarness, pg_url: str, *, slug: str, roles: list[str]
+) -> TenantPersona:
+    """Add a persona, materialise the tenant via a no-op call."""
+    persona = h.add_persona(slug, roles=roles)
+    h.configure_fetcher_for(persona)
+    transport = ASGITransport(app=h.app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        with patch_validator_for_actor(persona):
+            resp = await client.get("/v1/whoami", headers=bearer_headers(tenant_slug=slug))
+            assert resp.status_code == 200, resp.text
+    return persona
 
 
 # ---------------------------------------------------------------------------
@@ -130,62 +105,52 @@ async def _seed_tenant(
 
 
 @pytest_asyncio.fixture
-async def progression_clients(pg_container: str):
+async def harness(pg_container: str) -> AsyncIterator[EntitlementAuthHarness]:
+    """Bring up a registry app + mocked entitlement fetcher."""
+    async with EntitlementAuthHarness(pg_container) as h:
+        yield h
+
+
+@pytest_asyncio.fixture
+async def progression_clients(
+    pg_container: str,
+) -> AsyncIterator[_ProgressionClients]:
     """Yield (admin_client, consumer_client, tenant_id, pg_url) for progression tests.
 
-    admin_client   — carries ['admin'] role for the test tenant.
+    admin_client    — carries ['admin'] role for the test tenant.
     consumer_client — carries ['consumer'] role only (must be rejected by RBAC).
     """
-    slug_a = f"prog-admin-{secrets.token_hex(4)}"
+    slug = f"prog-admin-{secrets.token_hex(4)}"
+    async with EntitlementAuthHarness(pg_container) as h:
+        admin_persona = await _make_persona(h, pg_container, slug=slug, roles=["admin"])
+        # Consumer is a separate actor in the same tenant (different persona slug prefix
+        # so the harness doesn't collide, but same tenant row via add_persona overload).
+        # We register a second actor inside the same tenant slug.
+        consumer_persona = h.add_persona(slug, roles=["consumer"], actor_id=uuid.uuid4())
+        h.configure_fetcher_for(consumer_persona)
 
-    tenant_id, _, admin_token = await _seed_tenant(pg_container, slug=slug_a, roles=["admin"])
+        transport = ASGITransport(app=h.app)
+        async with (
+            AsyncClient(transport=transport, base_url="http://test") as admin_client,
+            AsyncClient(transport=transport, base_url="http://test") as consumer_client,
+        ):
+            # Look up the materialised tenant_id from the DB.
+            engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
+            factory = async_sessionmaker(engine, expire_on_commit=False)
+            try:
+                async with factory() as session:
+                    row = (
+                        await session.execute(
+                            text("SELECT tenant_id FROM tenants WHERE slug = :slug"),
+                            {"slug": slug},
+                        )
+                    ).first()
+                    assert row is not None, f"tenant {slug!r} not materialised"
+                    tenant_id: uuid.UUID = row[0]
+            finally:
+                await engine.dispose()
 
-    # Consumer token re-seeded under the same tenant so cross-tenant rejection
-    # is not the source of the 403 — it is purely the role check.
-    engine = create_async_engine(pg_container, connect_args={"prepared_statement_cache_size": 0})
-    factory_e = async_sessionmaker(engine, expire_on_commit=False)
-    consumer_actor_id = uuid.uuid4()
-    consumer_raw = secrets.token_urlsafe(24)
-    try:
-        async with factory_e() as session, session.begin():
-            await session.execute(
-                text(
-                    "INSERT INTO actors (actor_id, tenant_id, display_name, created_at) "
-                    "VALUES (:aid, :tid, 'consumer-actor', :now)"
-                ),
-                {"aid": consumer_actor_id, "tid": tenant_id, "now": _NOW},
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO api_tokens "
-                    "(token_id, tenant_id, actor_id, token_hash, roles, created_at) "
-                    "VALUES (gen_random_uuid(), :tid, :aid, :th, :roles, :now)"
-                ),
-                {
-                    "tid": tenant_id,
-                    "aid": consumer_actor_id,
-                    "th": hash_token(consumer_raw),
-                    "roles": ["consumer"],
-                    "now": _NOW,
-                },
-            )
-    finally:
-        await engine.dispose()
-
-    settings = Settings(
-        database_url=pg_container,
-        pgbouncer_url=pg_container,
-        scheduler_jobstore_url=pg_container,
-        scheduler_use_memory_jobstore=True,
-        embedding_model="stub",
-    )
-    app = create_app(settings)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as admin_client:
-        async with AsyncClient(transport=transport, base_url="http://test") as consumer_client:
-            admin_client.headers.update({"Authorization": f"Bearer {admin_token}"})
-            consumer_client.headers.update({"Authorization": f"Bearer {consumer_raw}"})
-            yield admin_client, consumer_client, tenant_id, pg_container
+            yield admin_client, consumer_client, tenant_id, pg_container, admin_persona, consumer_persona
 
 
 # ---------------------------------------------------------------------------
@@ -194,17 +159,19 @@ async def progression_clients(pg_container: str):
 
 
 @pytest.mark.asyncio
-async def test_post_progression_definition_happy_path(progression_clients) -> None:
+async def test_post_progression_definition_happy_path(progression_clients: _ProgressionClients) -> None:
     """POST with valid definition returns 201 and includes progression_id in body."""
-    admin_client, _, tenant_id, _ = progression_clients
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": "capability",
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
+    admin_client, _, tenant_id, _, admin_persona, _ = progression_clients
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": "capability",
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert "progression_id" in body
@@ -214,17 +181,21 @@ async def test_post_progression_definition_happy_path(progression_clients) -> No
 
 
 @pytest.mark.asyncio
-async def test_post_progression_definition_audit_emitted(progression_clients, pg_container: str) -> None:
+async def test_post_progression_definition_audit_emitted(
+    progression_clients: _ProgressionClients, pg_container: str
+) -> None:
     """POST emits a progression.definition.published audit event."""
-    admin_client, _, tenant_id, pg_url = progression_clients
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": "concept",
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": "concept",
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 201, resp.text
     progression_id = resp.json()["progression_id"]
 
@@ -255,21 +226,20 @@ async def test_post_progression_definition_audit_emitted(progression_clients, pg
 
 
 @pytest.mark.asyncio
-async def test_post_progression_definition_invalid_schema(progression_clients) -> None:
+async def test_post_progression_definition_invalid_schema(progression_clients: _ProgressionClients) -> None:
     """POST with invalid definition (forward='explicit-graph') returns 422."""
-    admin_client, _, tenant_id, _ = progression_clients
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": "capability",
-            "definition": _INVALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
+    admin_client, _, tenant_id, _, admin_persona, _ = progression_clients
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": "capability",
+                "definition": _INVALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 422, f"expected 422, got {resp.status_code}: {resp.text}"
-    # The detail field may be a string (from our HTTPException) or a list
-    # (from FastAPI's Pydantic validation layer). Either way, the response text
-    # must contain evidence of the schema violation.
     body_text = resp.text
     assert (
         "meta-schema" in body_text or "forward" in body_text or "explicit-graph" in body_text or "enum" in body_text
@@ -282,17 +252,19 @@ async def test_post_progression_definition_invalid_schema(progression_clients) -
 
 
 @pytest.mark.asyncio
-async def test_post_progression_definition_consumer_forbidden(progression_clients) -> None:
-    """POST with consumer-only token returns 403."""
-    _, consumer_client, tenant_id, _ = progression_clients
-    resp = await consumer_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": "capability",
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
+async def test_post_progression_definition_consumer_forbidden(progression_clients: _ProgressionClients) -> None:
+    """POST with consumer-only role returns 403."""
+    _, consumer_client, tenant_id, _, _, consumer_persona = progression_clients
+    with patch_validator_for_actor(consumer_persona):
+        resp = await consumer_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": "capability",
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=consumer_persona.slug),
+        )
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"
 
 
@@ -302,23 +274,28 @@ async def test_post_progression_definition_consumer_forbidden(progression_client
 
 
 @pytest.mark.asyncio
-async def test_list_progression_definitions_includes_created(progression_clients) -> None:
+async def test_list_progression_definitions_includes_created(progression_clients: _ProgressionClients) -> None:
     """GET list returns the active definition after POST."""
-    admin_client, _, tenant_id, _ = progression_clients
+    admin_client, _, tenant_id, _, admin_persona, _ = progression_clients
     entity_type = f"et-list-{secrets.token_hex(4)}"
 
-    post_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
-    assert post_resp.status_code == 201, post_resp.text
-    created_id = post_resp.json()["progression_id"]
+    with patch_validator_for_actor(admin_persona):
+        post_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert post_resp.status_code == 201, post_resp.text
+        created_id = post_resp.json()["progression_id"]
 
-    list_resp = await admin_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions")
+        list_resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert list_resp.status_code == 200, list_resp.text
     items = list_resp.json()
     ids = [i["progression_id"] for i in items]
@@ -331,23 +308,28 @@ async def test_list_progression_definitions_includes_created(progression_clients
 
 
 @pytest.mark.asyncio
-async def test_get_progression_definition_by_id(progression_clients) -> None:
+async def test_get_progression_definition_by_id(progression_clients: _ProgressionClients) -> None:
     """GET one returns the specific definition."""
-    admin_client, _, tenant_id, _ = progression_clients
+    admin_client, _, tenant_id, _, admin_persona, _ = progression_clients
     entity_type = f"et-get-{secrets.token_hex(4)}"
 
-    post_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _VALID_DEFINITION,
-            "is_advisory": False,
-        },
-    )
-    assert post_resp.status_code == 201, post_resp.text
-    progression_id = post_resp.json()["progression_id"]
+    with patch_validator_for_actor(admin_persona):
+        post_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _VALID_DEFINITION,
+                "is_advisory": False,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert post_resp.status_code == 201, post_resp.text
+        progression_id = post_resp.json()["progression_id"]
 
-    get_resp = await admin_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
+        get_resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert get_resp.status_code == 200, get_resp.text
     body = get_resp.json()
     assert body["progression_id"] == progression_id
@@ -356,11 +338,15 @@ async def test_get_progression_definition_by_id(progression_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_progression_definition_not_found(progression_clients) -> None:
+async def test_get_progression_definition_not_found(progression_clients: _ProgressionClients) -> None:
     """GET one returns 404 for a non-existent progression_id."""
-    admin_client, _, tenant_id, _ = progression_clients
+    admin_client, _, tenant_id, _, admin_persona, _ = progression_clients
     unknown_id = str(uuid.uuid4())
-    resp = await admin_client.get(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{unknown_id}")
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{unknown_id}",
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 404, f"expected 404, got {resp.status_code}: {resp.text}"
 
 
@@ -370,36 +356,39 @@ async def test_get_progression_definition_not_found(progression_clients) -> None
 
 
 @pytest.mark.asyncio
-async def test_put_supersession_inserts_new_row_and_closes_old(progression_clients, pg_container: str) -> None:
+async def test_put_supersession_inserts_new_row_and_closes_old(
+    progression_clients: _ProgressionClients, pg_container: str
+) -> None:
     """PUT inserts a new row and sets t_valid_to on the active row."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-sup-{secrets.token_hex(4)}"
 
-    # Create initial definition.
-    post_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
-    assert post_resp.status_code == 201, post_resp.text
-    original_id = post_resp.json()["progression_id"]
+    with patch_validator_for_actor(admin_persona):
+        post_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert post_resp.status_code == 201, post_resp.text
+        original_id = post_resp.json()["progression_id"]
 
-    updated_definition = {
-        "states": [
-            {"id": "draft", "name": "Draft"},
-            {"id": "published", "name": "Published"},
-        ],
-        "transitions": {"forward": "sequential"},
-    }
+        updated_definition = {
+            "states": [
+                {"id": "draft", "name": "Draft"},
+                {"id": "published", "name": "Published"},
+            ],
+            "transitions": {"forward": "sequential"},
+        }
 
-    # Supersede.
-    put_resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{original_id}",
-        json={"definition": updated_definition, "is_advisory": False},
-    )
+        put_resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{original_id}",
+            json={"definition": updated_definition, "is_advisory": False},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert put_resp.status_code == 200, f"expected 200, got {put_resp.status_code}: {put_resp.text}"
     new_body = put_resp.json()
     new_id = new_body["progression_id"]
@@ -428,26 +417,30 @@ async def test_put_supersession_inserts_new_row_and_closes_old(progression_clien
 
 
 @pytest.mark.asyncio
-async def test_delete_soft_deletes_row(progression_clients, pg_container: str) -> None:
+async def test_delete_soft_deletes_row(progression_clients: _ProgressionClients, pg_container: str) -> None:
     """DELETE sets t_valid_to on the row without inserting a successor."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-del-{secrets.token_hex(4)}"
 
-    post_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
-    assert post_resp.status_code == 201, post_resp.text
-    progression_id = post_resp.json()["progression_id"]
+    with patch_validator_for_actor(admin_persona):
+        post_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert post_resp.status_code == 201, post_resp.text
+        progression_id = post_resp.json()["progression_id"]
 
-    del_resp = await admin_client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
+        del_resp = await admin_client.delete(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert del_resp.status_code == 204, f"expected 204, got {del_resp.status_code}: {del_resp.text}"
 
-    # Verify t_valid_to is set, t_invalidated_at remains NULL.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -480,23 +473,28 @@ async def test_delete_soft_deletes_row(progression_clients, pg_container: str) -
 
 
 @pytest.mark.asyncio
-async def test_delete_soft_delete_audit_emitted(progression_clients, pg_container: str) -> None:
+async def test_delete_soft_delete_audit_emitted(progression_clients: _ProgressionClients, pg_container: str) -> None:
     """DELETE emits a progression.definition.soft_deleted audit event."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-delaudit-{secrets.token_hex(4)}"
 
-    post_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _VALID_DEFINITION,
-            "is_advisory": True,
-        },
-    )
-    assert post_resp.status_code == 201, post_resp.text
-    progression_id = post_resp.json()["progression_id"]
+    with patch_validator_for_actor(admin_persona):
+        post_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _VALID_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert post_resp.status_code == 201, post_resp.text
+        progression_id = post_resp.json()["progression_id"]
 
-    del_resp = await admin_client.delete(f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}")
+        del_resp = await admin_client.delete(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert del_resp.status_code == 204, del_resp.text
 
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
@@ -560,15 +558,17 @@ _OVERRIDE_PAYLOAD = {
 
 
 @pytest.mark.asyncio
-async def test_override_creation_happy_path(progression_clients) -> None:
+async def test_override_creation_happy_path(progression_clients: _ProgressionClients) -> None:
     """POST override with valid payload returns 201 with override_id; row and audit row exist."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
 
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json=_OVERRIDE_PAYLOAD,
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json=_OVERRIDE_PAYLOAD,
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert "override_id" in body
@@ -617,9 +617,9 @@ async def test_override_creation_happy_path(progression_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_creation_audit_before_commit_failure(progression_clients) -> None:
+async def test_override_creation_audit_before_commit_failure(progression_clients: _ProgressionClients) -> None:
     """When the audit write raises, the override row is NOT created and HTTP 500 is returned."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
 
     with patch(
@@ -627,10 +627,12 @@ async def test_override_creation_audit_before_commit_failure(progression_clients
         new_callable=AsyncMock,
         side_effect=Exception("simulated audit write failure"),
     ):
-        resp = await admin_client.post(
-            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-            json=_OVERRIDE_PAYLOAD,
-        )
+        with patch_validator_for_actor(admin_persona):
+            resp = await admin_client.post(
+                f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+                json=_OVERRIDE_PAYLOAD,
+                headers=bearer_headers(tenant_slug=admin_persona.slug),
+            )
 
     assert resp.status_code == 500, f"expected 500, got {resp.status_code}: {resp.text}"
 
@@ -657,20 +659,20 @@ async def test_override_creation_audit_before_commit_failure(progression_clients
 
 
 async def _fetch_admin_actor_id(pg_url: str, tenant_id: uuid.UUID) -> uuid.UUID:
-    """Return the actor_id for any actor seeded under tenant_id with the admin role."""
+    """Return any actor_id seeded under tenant_id."""
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             result = await session.execute(
-                text("SELECT actor_id FROM api_tokens " "WHERE tenant_id = :tid AND :role = ANY(roles) LIMIT 1"),
-                {"tid": tenant_id, "role": "admin"},
+                text("SELECT actor_id FROM actors WHERE tenant_id = :tid LIMIT 1"),
+                {"tid": tenant_id},
             )
             row = result.fetchone()
     finally:
         await engine.dispose()
-    assert row is not None, "expected at least one admin actor for tenant"
-    return row[0]
+    assert row is not None, "expected at least one actor for tenant"
+    return uuid.UUID(str(row[0]))
 
 
 async def _seed_override_row(
@@ -733,19 +735,20 @@ async def _seed_override_row(
 
 
 @pytest.mark.asyncio
-async def test_override_list_filter_active(progression_clients) -> None:
+async def test_override_list_filter_active(progression_clients: _ProgressionClients) -> None:
     """GET with consumed=false&expired=false returns only the unconsumed, unexpired override."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
     actor_id = await _fetch_admin_actor_id(pg_url, tenant_id)
 
     now = datetime.datetime.now(tz=datetime.UTC)
 
-    # Create active override via the API endpoint.
-    active_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json={**_OVERRIDE_PAYLOAD, "t_valid_to": "2099-12-31T23:59:59Z", "gate_id": "active-gate"},
-    )
+    with patch_validator_for_actor(admin_persona):
+        active_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json={**_OVERRIDE_PAYLOAD, "t_valid_to": "2099-12-31T23:59:59Z", "gate_id": "active-gate"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert active_resp.status_code == 201, active_resp.text
     active_id = active_resp.json()["override_id"]
 
@@ -773,10 +776,12 @@ async def test_override_list_filter_active(progression_clients) -> None:
         now=now,
     )
 
-    list_resp = await admin_client.get(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        params={"consumed": "false", "expired": "false"},
-    )
+    with patch_validator_for_actor(admin_persona):
+        list_resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            params={"consumed": "false", "expired": "false"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert list_resp.status_code == 200, list_resp.text
     items = list_resp.json()
     ids = [i["override_id"] for i in items]
@@ -791,22 +796,22 @@ async def test_override_list_filter_active(progression_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_list_filter_expired(progression_clients) -> None:
+async def test_override_list_filter_expired(progression_clients: _ProgressionClients) -> None:
     """GET with expired=true returns only overrides where t_valid_to < now."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
     actor_id = await _fetch_admin_actor_id(pg_url, tenant_id)
 
     now = datetime.datetime.now(tz=datetime.UTC)
 
-    # Active override via API.
-    active_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json={**_OVERRIDE_PAYLOAD, "t_valid_to": "2099-12-31T23:59:59Z", "gate_id": "not-expired"},
-    )
+    with patch_validator_for_actor(admin_persona):
+        active_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json={**_OVERRIDE_PAYLOAD, "t_valid_to": "2099-12-31T23:59:59Z", "gate_id": "not-expired"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert active_resp.status_code == 201, active_resp.text
 
-    # Expired override — insert directly with t_valid_to in the past.
     expired_id = await _seed_override_row(
         pg_url,
         tenant_id=tenant_id,
@@ -818,15 +823,16 @@ async def test_override_list_filter_expired(progression_clients) -> None:
         now=now,
     )
 
-    list_resp = await admin_client.get(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        params={"expired": "true"},
-    )
+    with patch_validator_for_actor(admin_persona):
+        list_resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            params={"expired": "true"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert list_resp.status_code == 200, list_resp.text
     items = list_resp.json()
     ids = [i["override_id"] for i in items]
     assert str(expired_id) in ids, f"expired override must appear: {ids}"
-    # Active override must not appear.
     assert all(
         i["override_id"] != active_resp.json()["override_id"] for i in items
     ), "active (unexpired) override must not appear in expired=true results"
@@ -838,29 +844,33 @@ async def test_override_list_filter_expired(progression_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_list_filter_by_state(progression_clients) -> None:
+async def test_override_list_filter_by_state(progression_clients: _ProgressionClients) -> None:
     """GET with from_state=3&to_state=5 returns only matching overrides."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
 
-    match_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json={**_OVERRIDE_PAYLOAD, "from_state": "3", "to_state": "5", "gate_id": "match-gate"},
-    )
-    assert match_resp.status_code == 201, match_resp.text
-    match_id = match_resp.json()["override_id"]
+    with patch_validator_for_actor(admin_persona):
+        match_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json={**_OVERRIDE_PAYLOAD, "from_state": "3", "to_state": "5", "gate_id": "match-gate"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert match_resp.status_code == 201, match_resp.text
+        match_id = match_resp.json()["override_id"]
 
-    other_resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json={**_OVERRIDE_PAYLOAD, "from_state": "1", "to_state": "2", "gate_id": "other-gate"},
-    )
-    assert other_resp.status_code == 201, other_resp.text
-    other_id = other_resp.json()["override_id"]
+        other_resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json={**_OVERRIDE_PAYLOAD, "from_state": "1", "to_state": "2", "gate_id": "other-gate"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
+        assert other_resp.status_code == 201, other_resp.text
+        other_id = other_resp.json()["override_id"]
 
-    list_resp = await admin_client.get(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        params={"from_state": "3", "to_state": "5"},
-    )
+        list_resp = await admin_client.get(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            params={"from_state": "3", "to_state": "5"},
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert list_resp.status_code == 200, list_resp.text
     items = list_resp.json()
     ids = [i["override_id"] for i in items]
@@ -874,15 +884,17 @@ async def test_override_list_filter_by_state(progression_clients) -> None:
 
 
 @pytest.mark.asyncio
-async def test_override_creation_non_admin_role_rejected(progression_clients) -> None:
-    """POST override with consumer-only token returns 403."""
-    _, consumer_client, tenant_id, pg_url = progression_clients
+async def test_override_creation_non_admin_role_rejected(progression_clients: _ProgressionClients) -> None:
+    """POST override with consumer-only role returns 403."""
+    _, consumer_client, tenant_id, pg_url, _, consumer_persona = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
 
-    resp = await consumer_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json=_OVERRIDE_PAYLOAD,
-    )
+    with patch_validator_for_actor(consumer_persona):
+        resp = await consumer_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json=_OVERRIDE_PAYLOAD,
+            headers=bearer_headers(tenant_slug=consumer_persona.slug),
+        )
     assert resp.status_code == 403, f"expected 403, got {resp.status_code}: {resp.text}"
 
 
@@ -892,17 +904,19 @@ async def test_override_creation_non_admin_role_rejected(progression_clients) ->
 
 
 @pytest.mark.asyncio
-async def test_override_default_ttl_one_hour(progression_clients) -> None:
+async def test_override_default_ttl_one_hour(progression_clients: _ProgressionClients) -> None:
     """POST without t_valid_to stores t_valid_to within 5 seconds of now + 1 hour."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_id = await _seed_entity(pg_url, tenant_id=tenant_id)
 
     before = datetime.datetime.now(tz=datetime.UTC)
     payload = {k: v for k, v in _OVERRIDE_PAYLOAD.items() if k != "t_valid_to"}
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
-        json=payload,
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/entities/{entity_id}/progression-overrides",
+            json=payload,
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     after = datetime.datetime.now(tz=datetime.UTC)
     assert resp.status_code == 201, f"expected 201, got {resp.status_code}: {resp.text}"
     override_id = resp.json()["override_id"]
@@ -968,7 +982,6 @@ async def _seed_entity_with_stage(
     return entity_id
 
 
-# Definition with three states (no gates) — used across pre-flight tests.
 _ADVISORY_DEFINITION = {
     "states": [
         {"id": "draft", "name": "Draft"},
@@ -978,8 +991,6 @@ _ADVISORY_DEFINITION = {
     "transitions": {"forward": "sequential"},
 }
 
-# A stricter enforcing definition that only has two states — "review" is removed.
-# Any entity currently in "review" will be an offender under this definition.
 _ENFORCING_DEFINITION = {
     "states": [
         {"id": "draft", "name": "Draft"},
@@ -993,18 +1004,21 @@ async def _create_advisory_definition(
     admin_client: AsyncClient,
     tenant_id: uuid.UUID,
     entity_type: str,
+    admin_persona: TenantPersona,
 ) -> str:
     """POST an advisory definition; return its progression_id."""
-    resp = await admin_client.post(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions",
-        json={
-            "entity_type": entity_type,
-            "definition": _ADVISORY_DEFINITION,
-            "is_advisory": True,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.post(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions",
+            json={
+                "entity_type": entity_type,
+                "definition": _ADVISORY_DEFINITION,
+                "is_advisory": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 201, resp.text
-    return resp.json()["progression_id"]
+    return str(resp.json()["progression_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -1013,31 +1027,29 @@ async def _create_advisory_definition(
 
 
 @pytest.mark.asyncio
-async def test_preflight_dry_run_returns_offenders_no_write(
-    progression_clients,
-) -> None:
+async def test_preflight_dry_run_returns_offenders_no_write(progression_clients: _ProgressionClients) -> None:
     """PUT with dry_run=true returns 200 + offender list; no new definition row written."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-drrun-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    # Two entities in valid states (draft, published); one offender in "review"
-    # which is absent from the proposed enforcing definition.
     await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft")
     await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="published")
     offender_id = await _seed_entity_with_stage(
         pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review"
     )
 
-    resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-        json={
-            "definition": _ENFORCING_DEFINITION,
-            "is_advisory": False,
-            "dry_run": True,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            json={
+                "definition": _ENFORCING_DEFINITION,
+                "is_advisory": False,
+                "dry_run": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
     body = resp.json()
     assert body.get("dry_run") is True, f"expected dry_run=true in body: {body}"
@@ -1046,7 +1058,6 @@ async def test_preflight_dry_run_returns_offenders_no_write(
     assert offenders[0]["entity_id"] == str(offender_id)
     assert offenders[0]["current_state"] == "review"
 
-    # Confirm no new definition row was written.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -1070,42 +1081,39 @@ async def test_preflight_dry_run_returns_offenders_no_write(
 
 
 @pytest.mark.asyncio
-async def test_preflight_timeout_returns_partial(
-    progression_clients,
-) -> None:
+async def test_preflight_timeout_returns_partial(progression_clients: _ProgressionClients) -> None:
     """PUT with force_timeout_seconds=1 and a slow scan returns 409 preflight_timeout."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-tmout-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    # Seed five entities so the scan has entities to process.
     for _ in range(5):
-        await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft")
+        await _seed_entity_with_stage(
+            pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft"
+        )
 
-    # Patch asyncio.wait_for to always raise TimeoutError, simulating a slow scan.
     async def _slow_wait_for(coro, timeout):  # type: ignore[no-untyped-def]
         coro.close()
         raise TimeoutError
 
     with patch("registry.api.routers.admin_progression.asyncio.wait_for", side_effect=_slow_wait_for):
-        resp = await admin_client.put(
-            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-            json={
-                "definition": _ENFORCING_DEFINITION,
-                "is_advisory": False,
-                "force_timeout_seconds": 1,
-            },
-        )
+        with patch_validator_for_actor(admin_persona):
+            resp = await admin_client.put(
+                f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+                json={
+                    "definition": _ENFORCING_DEFINITION,
+                    "is_advisory": False,
+                    "force_timeout_seconds": 1,
+                },
+                headers=bearer_headers(tenant_slug=admin_persona.slug),
+            )
 
     assert resp.status_code == 409, f"expected 409, got {resp.status_code}: {resp.text}"
     body = resp.json()
-    # The app error handler wraps detail into {"errors": [{code, message, path}]}.
-    # The code field carries the machine-readable error slug.
     error_item = body.get("errors", [{}])[0]
     assert error_item.get("code") == "preflight_timeout", f"unexpected body: {body}"
 
-    # Confirm no new definition row was written.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -1129,38 +1137,35 @@ async def test_preflight_timeout_returns_partial(
 
 
 @pytest.mark.asyncio
-async def test_preflight_force_with_migration_plan_bypasses_scan(
-    progression_clients,
-) -> None:
+async def test_preflight_force_with_migration_plan_bypasses_scan(progression_clients: _ProgressionClients) -> None:
     """PUT with force=true and migration_plan writes definition and records plan in audit."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-force-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    # Seed an entity that would be an offender under the enforcing definition.
     await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review")
 
     migration_plan_text = "Approved exception 2026-05-12 by CTO"
-    resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-        json={
-            "definition": _ENFORCING_DEFINITION,
-            "is_advisory": False,
-            "force": True,
-            "migration_plan": migration_plan_text,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            json={
+                "definition": _ENFORCING_DEFINITION,
+                "is_advisory": False,
+                "force": True,
+                "migration_plan": migration_plan_text,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
     new_id = resp.json()["progression_id"]
 
-    # Confirm new definition row exists and is enforcing.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with factory() as session:
             new_row = await session.get(ProgressionDefinition, uuid.UUID(new_id))
-            # Check audit event contains migration_plan.
             result = await session.execute(
                 text(
                     "SELECT after_jsonb FROM audit_log "
@@ -1189,26 +1194,25 @@ async def test_preflight_force_with_migration_plan_bypasses_scan(
 
 
 @pytest.mark.asyncio
-async def test_preflight_force_without_migration_plan_rejected(
-    progression_clients,
-) -> None:
+async def test_preflight_force_without_migration_plan_rejected(progression_clients: _ProgressionClients) -> None:
     """PUT with force=true but no migration_plan returns 400 migration_plan_required."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-nomig-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-        json={
-            "definition": _ENFORCING_DEFINITION,
-            "is_advisory": False,
-            "force": True,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            json={
+                "definition": _ENFORCING_DEFINITION,
+                "is_advisory": False,
+                "force": True,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 400, f"expected 400, got {resp.status_code}: {resp.text}"
     body = resp.json()
-    # The app error handler normalises detail into {"errors": [{code, message, path}]}.
     error_item = body.get("errors", [{}])[0]
     assert error_item.get("code") == "migration_plan_required", f"unexpected body: {body}"
 
@@ -1219,32 +1223,30 @@ async def test_preflight_force_without_migration_plan_rejected(
 
 
 @pytest.mark.asyncio
-async def test_preflight_clean_graduation_writes_definition(
-    progression_clients,
-) -> None:
+async def test_preflight_clean_graduation_writes_definition(progression_clients: _ProgressionClients) -> None:
     """Zero offenders with dry_run=false, force=false results in definition being written."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-clean-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    # Only seed entities with states present in the enforcing definition.
     await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="draft")
     await _seed_entity_with_stage(pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="published")
 
-    resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-        json={
-            "definition": _ENFORCING_DEFINITION,
-            "is_advisory": False,
-            "dry_run": False,
-            "force": False,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            json={
+                "definition": _ENFORCING_DEFINITION,
+                "is_advisory": False,
+                "dry_run": False,
+                "force": False,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 200, f"expected 200, got {resp.status_code}: {resp.text}"
     new_id = resp.json()["progression_id"]
 
-    # Confirm new enforcing definition row exists.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
@@ -1262,16 +1264,13 @@ async def test_preflight_clean_graduation_writes_definition(
 
 
 @pytest.mark.asyncio
-async def test_preflight_offenders_present_force_false_rejected(
-    progression_clients,
-) -> None:
+async def test_preflight_offenders_present_force_false_rejected(progression_clients: _ProgressionClients) -> None:
     """Two offenders + force=false returns 409 preflight_offenders_present with offender list."""
-    admin_client, _, tenant_id, pg_url = progression_clients
+    admin_client, _, tenant_id, pg_url, admin_persona, _ = progression_clients
     entity_type = f"et-offend-{secrets.token_hex(4)}"
 
-    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type)
+    progression_id = await _create_advisory_definition(admin_client, tenant_id, entity_type, admin_persona)
 
-    # Two entities in "review" which is absent from the enforcing definition.
     offender1 = await _seed_entity_with_stage(
         pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review"
     )
@@ -1279,18 +1278,18 @@ async def test_preflight_offenders_present_force_false_rejected(
         pg_url, tenant_id=tenant_id, entity_type=entity_type, stage_progression="review"
     )
 
-    resp = await admin_client.put(
-        f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
-        json={
-            "definition": _ENFORCING_DEFINITION,
-            "is_advisory": False,
-            "force": False,
-        },
-    )
+    with patch_validator_for_actor(admin_persona):
+        resp = await admin_client.put(
+            f"/v1/admin/tenants/{tenant_id}/progression-definitions/{progression_id}",
+            json={
+                "definition": _ENFORCING_DEFINITION,
+                "is_advisory": False,
+                "force": False,
+            },
+            headers=bearer_headers(tenant_slug=admin_persona.slug),
+        )
     assert resp.status_code == 409, f"expected 409, got {resp.status_code}: {resp.text}"
     body = resp.json()
-    # The app error handler normalises detail into {"errors": [{code, message, path}]}.
-    # Offender details are JSON-encoded in the message field.
     error_item = body.get("errors", [{}])[0]
     assert error_item.get("code") == "preflight_offenders_present", f"unexpected body: {body}"
     import json as _json  # noqa: PLC0415
@@ -1303,7 +1302,6 @@ async def test_preflight_offenders_present_force_false_rejected(
     assert str(offender2) in offender_ids
     assert "hint" in message_payload, "hint must be present in 409 message payload"
 
-    # Confirm no new definition row was written.
     engine = create_async_engine(pg_url, connect_args={"prepared_statement_cache_size": 0})
     factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
